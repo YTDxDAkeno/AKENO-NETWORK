@@ -41,9 +41,14 @@ export function UserRow({
           name
         )}
         <span className="block truncate text-xs text-muted">
-          {secondary ?? (presence ? presenceDescription(presence) : null)}
-          {presence?.activity && !secondary ? (
-            <span className="text-subtle"> · {presence.activity} <span className="italic">(self-reported)</span></span>
+          {presence ? <span data-testid="presence-text">{presenceDescription(presence)}</span> : null}
+          {presence && secondary ? <span aria-hidden> · </span> : null}
+          {secondary}
+          {presence?.activity ? (
+            <span className="text-subtle">
+              {' '}
+              · {presence.activity} <span className="italic">(self-reported)</span>
+            </span>
           ) : null}
         </span>
       </div>

@@ -15,7 +15,7 @@
     "lint": "eslint .",
     "typecheck": "pnpm -r run typecheck",
     "test": "pnpm -r run test",
-    "test:e2e": "pnpm --filter @akeno/web run test:e2e",
+    "test:e2e": "pnpm build && pnpm --filter @akeno/web run test:e2e",
     "db:generate": "pnpm --filter @akeno/server run db:generate",
     "db:migrate": "pnpm --filter @akeno/server run db:migrate",
     "db:seed": "pnpm --filter @akeno/server run db:seed",
