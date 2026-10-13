@@ -13,6 +13,7 @@ import { registerErrorHandling } from '../middleware/error-handler.js';
 import { registerOriginCheck } from '../middleware/origin.js';
 import { administrationRoutes } from '../modules/administration/routes.js';
 import { authRoutes } from '../modules/auth/routes.js';
+import { devicesRoutes } from '../modules/devices/routes.js';
 import { friendsRoutes } from '../modules/friends/routes.js';
 import { gameSessionsRoutes } from '../modules/game-sessions/routes.js';
 import { groupsRoutes } from '../modules/groups/routes.js';
@@ -125,6 +126,7 @@ export async function buildApp(options: BuildAppOptions): Promise<BuiltApp> {
   await app.register(
     async (api) => {
       await api.register(authRoutes(ctx));
+      await api.register(devicesRoutes(ctx));
       await api.register(usersRoutes(ctx));
       await api.register(friendsRoutes(ctx));
       await api.register(messagesRoutes(ctx));
@@ -153,6 +155,7 @@ export async function buildApp(options: BuildAppOptions): Promise<BuiltApp> {
   const housekeeping = setInterval(() => {
     void Promise.all([
       ctx.auth.deleteExpiredSessions(),
+      ctx.devices.deleteExpired(),
       ctx.invitations.expireStale(),
       ctx.notifications.prune(),
     ])

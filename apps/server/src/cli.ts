@@ -173,9 +173,10 @@ async function main(): Promise<void> {
         await database.db.transaction(async (tx) => {
           await tx.update(users).set({ passwordHash, passwordChangedAt: new Date() }).where(eq(users.id, user.id));
           await tx.delete(authSessions).where(eq(authSessions.userId, user.id));
+          await ctx.devices.revokeAllForUser(tx, user.id);
           await ctx.audit.record({ actorId: null, action: 'cli.password_reset', targetType: 'user', targetId: user.id }, tx);
         });
-        console.log(`Password for "${user.onlineId}" was reset and all sessions were signed out.`);
+        console.log(`Password for "${user.onlineId}" was reset; all sessions were signed out and all devices unpaired.`);
         break;
       }
 

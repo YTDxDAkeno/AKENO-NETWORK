@@ -45,6 +45,10 @@ const envSchema = z
     /** "auto" derives the Secure flag from PUBLIC_ORIGIN (https => secure). */
     COOKIE_SECURE: z.enum(['auto', 'true', 'false']).default('auto'),
 
+    /** Paired-device tokens: absolute lifetime and idle timeout. */
+    DEVICE_TOKEN_TTL_DAYS: z.coerce.number().int().min(1).max(365).default(180),
+    DEVICE_TOKEN_IDLE_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+
     ARGON2_MEMORY_KIB: z.coerce.number().int().min(1024).max(1_048_576).default(19_456),
     ARGON2_TIME_COST: z.coerce.number().int().min(1).max(10).default(2),
     ARGON2_PARALLELISM: z.coerce.number().int().min(1).max(8).default(1),
@@ -97,6 +101,10 @@ export interface AppConfig {
     /** Minimum interval between last_used_at updates for an active session. */
     touchIntervalMs: number;
     maxPerUser: number;
+  };
+  devices: {
+    ttlMs: number;
+    idleTimeoutMs: number;
   };
   argon2: {
     memoryCost: number;
@@ -160,6 +168,10 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
       cookieSecure,
       touchIntervalMs: 5 * 60 * 1000,
       maxPerUser: 20,
+    },
+    devices: {
+      ttlMs: env.DEVICE_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000,
+      idleTimeoutMs: env.DEVICE_TOKEN_IDLE_DAYS * 24 * 60 * 60 * 1000,
     },
     argon2: {
       memoryCost: env.ARGON2_MEMORY_KIB,

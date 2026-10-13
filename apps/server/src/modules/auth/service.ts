@@ -2,6 +2,7 @@ import { and, desc, eq, lt, ne, notInArray, or, sql } from 'drizzle-orm';
 import {
   type AuthSessionDto,
   type ChangePasswordInput,
+  type DeviceScope,
   type LoginInput,
   RESERVED_ONLINE_IDS,
   checkPasswordQuality,
@@ -24,12 +25,18 @@ export interface RequestMeta {
 
 /** Identity attached to an authenticated request or WebSocket connection. */
 export interface AuthContextData {
+  /** "session": browser cookie session. "device": paired-device bearer token. */
+  credential: 'session' | 'device';
   userId: string;
   onlineId: string;
   role: 'user' | 'admin';
+  /** Web session ID, or the device ID for paired devices. */
   sessionId: string;
   sessionExpiresAt: Date;
+  /** Empty for devices: bearer tokens are not ambient credentials and need no CSRF token. */
   csrfToken: string;
+  /** Granted device scopes; null for web sessions, which are not scope-limited. */
+  scopes: ReadonlySet<DeviceScope> | null;
 }
 
 export interface IssuedSession {
@@ -272,12 +279,14 @@ export class AuthService {
       await this.touchSession(row.sessionId);
     }
     return {
+      credential: 'session',
       userId: row.userId,
       onlineId: row.onlineId,
       role: row.role,
       sessionId: row.sessionId,
       sessionExpiresAt: row.expiresAt,
       csrfToken: this.csrfTokenFor(rawToken),
+      scopes: null,
     };
   }
 
@@ -384,10 +393,11 @@ export class AuthService {
         .update(users)
         .set({ passwordHash, passwordChangedAt: new Date(), updatedAt: new Date() })
         .where(eq(users.id, auth.userId));
-      // A password change signs out every other device.
+      // A password change signs out every other browser session and unpairs every device.
       await tx
         .delete(authSessions)
         .where(and(eq(authSessions.userId, auth.userId), ne(authSessions.id, auth.sessionId)));
+      await this.ctx.devices.revokeAllForUser(tx, auth.userId);
       await this.ctx.audit.record(
         { actorId: auth.userId, action: 'auth.password_changed', targetType: 'user', targetId: auth.userId, ipAddress: meta.ip },
         tx,

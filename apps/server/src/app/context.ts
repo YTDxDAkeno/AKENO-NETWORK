@@ -4,6 +4,7 @@ import type { Database } from '../database/client.js';
 import { AccountService } from '../modules/accounts/service.js';
 import { AdminService } from '../modules/administration/service.js';
 import { AuthService } from '../modules/auth/service.js';
+import { DevicesService } from '../modules/devices/service.js';
 import { FriendsService } from '../modules/friends/service.js';
 import { GameSessionsService } from '../modules/game-sessions/service.js';
 import { GroupsService } from '../modules/groups/service.js';
@@ -34,6 +35,7 @@ export interface AppContext {
   users: UsersService;
   notifications: NotificationsService;
   auth: AuthService;
+  devices: DevicesService;
   friends: FriendsService;
   messages: MessagesService;
   groups: GroupsService;
@@ -54,6 +56,7 @@ export function createContext(config: AppConfig, db: Database, log: FastifyBaseL
   ctx.users = new UsersService(ctx);
   ctx.notifications = new NotificationsService(ctx);
   ctx.auth = new AuthService(ctx);
+  ctx.devices = new DevicesService(ctx);
   ctx.friends = new FriendsService(ctx);
   ctx.messages = new MessagesService(ctx);
   ctx.groups = new GroupsService(ctx);

@@ -131,5 +131,6 @@ export class AccountService {
     await tx.delete(notifications).where(eq(notifications.userId, userId));
     await tx.delete(conversationReadStates).where(eq(conversationReadStates.userId, userId));
     await tx.delete(authSessions).where(eq(authSessions.userId, userId));
+    await this.ctx.devices.revokeAllForUser(tx, userId);
   }
 }

@@ -215,3 +215,58 @@ export const REALTIME_STALE_TIMEOUT_MS = 70_000;
 
 /** Header used to carry the per-session CSRF token on state-changing requests. */
 export const CSRF_HEADER = 'x-csrf-token';
+
+/**
+ * Permissions a paired device (for example a console homebrew client) may request.
+ * A device token can only call the API routes mapped to the scopes the user granted; account,
+ * security, privacy, device-management and administration routes are never available to devices.
+ */
+export const DEVICE_SCOPES = [
+  'profile:read',
+  'presence:write',
+  'friends:read',
+  'friends:write',
+  'messages:read',
+  'messages:write',
+  'parties:read',
+  'parties:write',
+  'sessions:read',
+  'sessions:write',
+  'invitations:read',
+  'invitations:write',
+  'realtime',
+] as const;
+export type DeviceScope = (typeof DEVICE_SCOPES)[number];
+
+export const DEVICE_SCOPE_LABELS: Record<DeviceScope, string> = {
+  'profile:read': 'See your profile and search for members',
+  'presence:write': 'Change your online status',
+  'friends:read': 'See your friends and friend requests',
+  'friends:write': 'Send, accept and decline friend requests',
+  'messages:read': 'Read your direct, group and party messages',
+  'messages:write': 'Send messages as you',
+  'parties:read': 'See parties',
+  'parties:write': 'Create, join and leave parties and invite friends',
+  'sessions:read': 'See game sessions',
+  'sessions:write': 'Join, leave and host game sessions and invite friends',
+  'invitations:read': 'See your invitations and notifications',
+  'invitations:write': 'Accept and decline invitations',
+  'realtime': 'Receive live updates and appear online while connected',
+};
+
+export const DEVICE_LIMITS = {
+  nameMax: 48,
+  platformMax: 48,
+  clientVersionMax: 32,
+  /** Pairing requests expire after this many seconds. */
+  pairingTtlSeconds: 600,
+  /** Minimum polling interval for the token endpoint. */
+  pairingPollIntervalSeconds: 5,
+  /** Paired devices per user; the least recently used device is unpaired beyond this. */
+  maxPerUser: 10,
+} as const;
+
+/** Prefix of opaque device access tokens ("akd_" + 43 base64url characters). */
+export const DEVICE_TOKEN_PREFIX = 'akd_';
+/** Prefix of the secret device code used only to poll for pairing completion. */
+export const DEVICE_CODE_PREFIX = 'akp_';

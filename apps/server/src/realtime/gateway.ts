@@ -15,9 +15,12 @@ import { ClientConnection } from './hub.js';
 /**
  * Authenticated WebSocket gateway.
  *
- * The handshake must carry a valid session cookie and an allowed Origin header; otherwise the
- * upgrade is rejected with an HTTP error before any socket is created. The identity is always
- * taken from the server-side session, never from client-supplied data.
+ * Browsers must present a valid session cookie and an allowed Origin header. Paired devices
+ * present `Authorization: Bearer <device token>` instead (browsers cannot set that header on
+ * WebSockets, so the Origin check does not apply) and need the "realtime" scope, which the
+ * device scope hook enforces. Otherwise the upgrade is rejected with an HTTP error before any
+ * socket is created. The identity is always taken from server-side state, never from
+ * client-supplied data.
  */
 export function realtimeGateway(ctx: AppContext): FastifyPluginAsync {
   return async (app) => {
@@ -27,7 +30,7 @@ export function realtimeGateway(ctx: AppContext): FastifyPluginAsync {
         websocket: true,
         config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
         preValidation: async (request) => {
-          if (!isAllowedOrigin(request, ctx.config.allowedOrigins)) {
+          if (!request.usesBearer && !isAllowedOrigin(request, ctx.config.allowedOrigins)) {
             throw new AppError(403, 'ORIGIN_REJECTED', 'WebSocket connections are only accepted from the AKENO NETWORK app.');
           }
           if (!request.auth) throw Errors.unauthenticated();
@@ -35,7 +38,14 @@ export function realtimeGateway(ctx: AppContext): FastifyPluginAsync {
       },
       (socket, request) => {
         const auth = request.auth!;
-        const connection = new ClientConnection(socket, auth.userId, auth.sessionId, auth.sessionExpiresAt);
+        const connection = new ClientConnection(
+          socket,
+          auth.userId,
+          auth.sessionId,
+          auth.sessionExpiresAt,
+          auth.credential,
+        );
+        const canType = auth.scopes === null || auth.scopes.has('messages:write');
         ctx.hub.add(connection);
         connection.send({
           type: 'hello',
@@ -83,7 +93,7 @@ export function realtimeGateway(ctx: AppContext): FastifyPluginAsync {
               });
               break;
             case 'typing':
-              if (connection.allowTyping()) {
+              if (canType && connection.allowTyping()) {
                 ctx.messages.relayTyping(auth.userId, message.data.conversationId).catch(() => {
                   // Unauthorized or unknown conversations are ignored without feedback.
                 });
@@ -136,12 +146,17 @@ export function startRealtimeMaintenance(ctx: AppContext): () => void {
 
   const sessions = setInterval(() => {
     void (async () => {
-      const sessionIds = new Set(ctx.hub.allConnections().map((connection) => connection.sessionId));
-      for (const sessionId of sessionIds) {
-        if (await ctx.auth.isSessionValid(sessionId)) {
-          await ctx.auth.touchSession(sessionId);
+      const credentials = new Map(
+        ctx.hub.allConnections().map((connection) => [connection.sessionId, connection.credential] as const),
+      );
+      for (const [id, kind] of credentials) {
+        const valid = kind === 'device' ? await ctx.devices.isValid(id) : await ctx.auth.isSessionValid(id);
+        if (!valid) {
+          ctx.hub.disconnectSession(id, 'Your session is no longer valid.', REALTIME_CLOSE_CODES.sessionRevoked);
+        } else if (kind === 'device') {
+          await ctx.devices.touch(id);
         } else {
-          ctx.hub.disconnectSession(sessionId, 'Your session is no longer valid.', REALTIME_CLOSE_CODES.sessionRevoked);
+          await ctx.auth.touchSession(id);
         }
       }
       await ctx.presence.flushLastSeen();

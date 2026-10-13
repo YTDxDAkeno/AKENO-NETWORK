@@ -8,3 +8,4 @@ export * from './parties.js';
 export * from './game-sessions.js';
 export * from './invitations.js';
 export * from './system.js';
+export * from './devices.js';

@@ -152,6 +152,7 @@ export class AdminService {
         .where(eq(users.id, userId));
       if (input.status === 'suspended') {
         await tx.delete(authSessions).where(eq(authSessions.userId, userId));
+        await this.ctx.devices.revokeAllForUser(tx, userId);
       }
       await this.ctx.audit.record(
         { actorId, action: 'admin.user_updated', targetType: 'user', targetId: userId, metadata: { ...input }, ipAddress },

@@ -15,8 +15,10 @@ export class ClientConnection {
   constructor(
     readonly socket: WebSocket,
     readonly userId: string,
+    /** Web session ID, or the device ID for paired devices. */
     readonly sessionId: string,
     readonly sessionExpiresAt: Date,
+    readonly credential: 'session' | 'device' = 'session',
   ) {}
 
   send(event: ServerEvent): void {

@@ -13,7 +13,7 @@ import {
   authOf,
   clearSessionCookie,
   requestMeta,
-  requireAuth,
+  requireSession,
   setSessionCookie,
 } from '../../middleware/auth.js';
 import { Errors } from '../../utils/errors.js';
@@ -22,7 +22,8 @@ import type { IssuedSession } from './service.js';
 
 export function authRoutes(ctx: AppContext): FastifyPluginAsync {
   return async (app) => {
-    const auth = requireAuth(ctx);
+    // Session management is only available to browser sessions, never to paired devices.
+    const auth = requireSession(ctx);
 
     const sessionResponse = async (session: IssuedSession): Promise<AuthSessionResponse> => ({
       user: await ctx.users.getCurrentUser(session.userId),
