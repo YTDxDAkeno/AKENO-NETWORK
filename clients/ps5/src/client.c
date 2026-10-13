@@ -292,7 +292,11 @@ static akeno_status map_http_status(int status) {
 akeno_status akeno_request_raw(akeno_client *client, const char *method, const char *path, const char *json_body,
                                int with_token, akeno_response *response) {
     akeno_response_init(response);
-    if (!safe_path(path) || !method) return AKENO_ERR_ARGUMENT;
+    /* Only the methods the API uses; the method token is written into the request line. */
+    if (!client || !safe_path(path) || !method ||
+        (strcmp(method, "GET") != 0 && strcmp(method, "POST") != 0 && strcmp(method, "PUT") != 0 &&
+         strcmp(method, "PATCH") != 0 && strcmp(method, "DELETE") != 0))
+        return AKENO_ERR_ARGUMENT;
     if (with_token && !client->paired) return AKENO_ERR_NOT_PAIRED;
 
     char host[300];

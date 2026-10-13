@@ -174,11 +174,17 @@ function createCertificates() {
     'subjectAltName=IP:127.0.0.1\nbasicConstraints=CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n');
   openssl(['x509', '-req', '-in', 'server.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-out', 'server.pem',
     '-days', '2', '-extfile', 'ext.cnf']);
+  // A second certificate that names the server by DNS name only.
+  openssl(['req', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'dns.key', '-out', 'dns.csr', '-subj', '/CN=localhost']);
+  writeFileSync(join(work, 'dns.cnf'),
+    'subjectAltName=DNS:localhost\nbasicConstraints=CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n');
+  openssl(['x509', '-req', '-in', 'dns.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-out', 'dns.pem',
+    '-days', '2', '-extfile', 'dns.cnf']);
 }
 
-async function startTlsProxy(port) {
+async function startTlsProxy(port, name = 'server') {
   const server = tls.createServer(
-    { key: readFileSync(join(work, 'server.key')), cert: readFileSync(join(work, 'server.pem')) },
+    { key: readFileSync(join(work, `${name}.key`)), cert: readFileSync(join(work, `${name}.pem`)) },
     (socket) => {
       const upstream = net.connect(backendPort, '127.0.0.1');
       socket.pipe(upstream).pipe(socket);
@@ -318,6 +324,20 @@ await step('refuses certificates issued for a different host name', async () => 
     timeoutMs: 20_000,
   });
   assert.equal(result.code, 6, result.stderr);
+});
+
+await step('accepts a certificate issued for the DNS name of the server', async () => {
+  const dnsPort = await freePort();
+  await startTlsProxy(dnsPort, 'dns');
+  const dnsArgs = ['--server', `https://localhost:${dnsPort}`, '--ca-file', caFile, '--credentials', join(work, 'dns.json')];
+  const run = startCli([...dnsArgs, '--name', 'DNS check', 'pair']);
+  await waitFor(() => /enter the code: [A-Z0-9]{4}-[A-Z0-9]{4}/.test(run.stdout), 'a pairing code over a DNS-named certificate');
+  run.child.kill('SIGTERM');
+  assert.equal((await run.exited).code, 0, run.stderr);
+  const wrongName = await runCli(['--server', `https://127.0.0.1:${dnsPort}`, '--ca-file', caFile, '--credentials', join(work, 'dns.json'), 'pair'], {
+    timeoutMs: 20_000,
+  });
+  assert.equal(wrongName.code, 6, wrongName.stderr);
 });
 
 await step('commands fail cleanly before pairing', async () => {

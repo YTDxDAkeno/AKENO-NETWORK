@@ -13,6 +13,7 @@
 #include "crypto_util.h"
 #include "http.h"
 #include "test.h"
+#include "transport.h"
 #include "url.h"
 #include "ws.h"
 
@@ -272,7 +273,49 @@ static void test_redaction(void) {
     CHECK(strlen(red) < sizeof(red));
 }
 
+static void test_request_validation(void) {
+    /* Rejected before any connection is attempted (port 1 would refuse anyway). */
+    akeno_config config = { 0 };
+    config.base_url = "http://127.0.0.1:1";
+    config.credential_path = "/nonexistent-akeno-dir/device.json";
+    akeno_client *client = NULL;
+    CHECK(akeno_client_create(&config, &client) == AKENO_OK);
+    CHECK(!akeno_client_is_paired(client));
+    akeno_response response;
+    const char *bad_methods[] = { "TRACE", "get", "GET /x HTTP/1.1\r\nX-Injected: 1\r\n\r\nGET", "", "CONNECT" };
+    for (size_t i = 0; i < sizeof(bad_methods) / sizeof(bad_methods[0]); i++) {
+        CHECK(akeno_request_raw(client, bad_methods[i], "/users/me", NULL, 0, &response) == AKENO_ERR_ARGUMENT);
+        akeno_response_free(&response);
+    }
+    const char *bad_paths[] = { "users/me", "/users/me\r\nX: 1", "/users me", "/users/\x7f" };
+    for (size_t i = 0; i < sizeof(bad_paths) / sizeof(bad_paths[0]); i++) {
+        CHECK(akeno_request_raw(client, "GET", bad_paths[i], NULL, 0, &response) == AKENO_ERR_ARGUMENT);
+        akeno_response_free(&response);
+    }
+    CHECK(akeno_request_raw(NULL, "GET", "/users/me", NULL, 0, &response) == AKENO_ERR_ARGUMENT);
+    CHECK(akeno_request(client, "GET", "/users/me", NULL, &response) == AKENO_ERR_NOT_PAIRED);
+    akeno_response_free(&response);
+    akeno_client_destroy(client);
+}
+
+static void test_transport(void) {
+    CHECK(akeno_global_init() == AKENO_OK);
+    unsigned char a[32] = { 0 }, b[32] = { 0 }, zero[32] = { 0 };
+    CHECK(akeno_random_bytes(a, sizeof(a)) == 0);
+    CHECK(akeno_random_bytes(b, sizeof(b)) == 0);
+    CHECK(memcmp(a, b, sizeof(a)) != 0 && memcmp(a, zero, sizeof(a)) != 0);
+    akeno_transport_info info;
+    akeno_transport_get_info(&info);
+    CHECK(info.backend && info.backend[0] && info.trust_store && info.entropy);
+    char text[64];
+    akeno_conn_describe(NULL, text, sizeof(text));
+    CHECK_STR(text, "plain TCP");
+    akeno_global_cleanup();
+}
+
 void run_core_tests(void) {
+    test_transport();
+    test_request_validation();
     test_json_valid();
     test_json_invalid();
     test_buf_limits_and_escaping();
