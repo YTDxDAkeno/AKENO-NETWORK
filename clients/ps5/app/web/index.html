@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>AKENO NETWORK</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <svg class="mark" viewBox="0 0 64 64" aria-hidden="true">
+      <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4f7cff"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient></defs>
+      <rect width="64" height="64" rx="16" fill="#151c2e"/>
+      <path d="M32 10 L52 52 H42 L32 30 L22 52 H12 Z" fill="url(#g)"/>
+      <circle cx="32" cy="44" r="4" fill="#e9edf8"/>
+    </svg>
+    <div class="wordmark">AKENO<span>NETWORK</span></div>
+    <span class="badge alpha">Alpha 0.1</span>
+  </div>
+  <div class="who" id="who" hidden>
+    <span class="dot" id="self-dot"></span>
+    <span id="self-name"></span>
+    <select id="presence" aria-label="Your status">
+      <option value="online">Online</option>
+      <option value="away">Away</option>
+      <option value="dnd">Do not disturb</option>
+      <option value="invisible">Invisible</option>
+    </select>
+  </div>
+  <div class="live" id="live" title="Live updates"><span class="dot"></span><span id="live-text">Starting</span></div>
+  <button class="btn ghost" id="exit-btn" type="button">Exit AKENO</button>
+</header>
+
+<nav class="tabs" id="tabs" hidden>
+  <button type="button" data-view="friends" class="tab">Friends <span class="count" id="count-friends"></span></button>
+  <button type="button" data-view="messages" class="tab">Messages <span class="count" id="count-messages"></span></button>
+  <button type="button" data-view="invitations" class="tab">Invitations <span class="count" id="count-invitations"></span></button>
+  <button type="button" data-view="party" class="tab">Party</button>
+  <button type="button" data-view="sessions" class="tab">Game sessions</button>
+  <button type="button" data-view="diagnostics" class="tab">Diagnostics</button>
+  <button type="button" data-view="settings" class="tab">Settings</button>
+</nav>
+
+<main id="main" tabindex="-1">
+  <section class="panel center" id="boot"><p class="muted">Connecting to the AKENO console app...</p></section>
+</main>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+<footer class="hint">D-pad or arrow keys: move &middot; <kbd>&#x2715;</kbd> select &middot; <kbd>&#x25EF;</kbd> back &middot; AKENO NETWORK is independent and not affiliated with Sony.</footer>
+<script src="/app.js"></script>
+</body>
+</html>

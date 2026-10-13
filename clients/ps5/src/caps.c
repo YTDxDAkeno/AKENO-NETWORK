@@ -30,7 +30,7 @@ static const struct {
     int major, minor;
     const char *note;
 } FIRMWARE_TABLE[] = {
-    { 12, 20, "Priority target. Not yet tested on hardware." },
+    { 12, 20, "Priority target. A toolchain diagnostic (notification) ran on hardware; the client is not yet tested on hardware." },
     { 13, 60, "Priority target. Not yet tested on hardware." },
 };
 
@@ -94,8 +94,13 @@ void akeno_caps_evaluate(const akeno_platform_facts *facts, akeno_capability_rep
     set(out, AKENO_FEATURE_NATIVE_PARTY, AKENO_CAP_UNSUPPORTED, native);
     set(out, AKENO_FEATURE_NATIVE_PARTY_VOICE, AKENO_CAP_UNSUPPORTED, native);
     set(out, AKENO_FEATURE_NATIVE_GAME_INVITES, AKENO_CAP_UNSUPPORTED, native);
-    set(out, AKENO_FEATURE_SYSTEM_NOTIFICATIONS, facts->platform == AKENO_PLATFORM_PS5 ? AKENO_CAP_DISABLED : AKENO_CAP_UNSUPPORTED,
-        facts->platform == AKENO_PLATFORM_PS5
-            ? "Not implemented: needs a verified notification interface tested on this firmware."
-            : "Not applicable on a host computer.");
+    if (facts->platform != AKENO_PLATFORM_PS5) {
+        set(out, AKENO_FEATURE_SYSTEM_NOTIFICATIONS, AKENO_CAP_UNSUPPORTED, "Not applicable on a host computer.");
+    } else if (facts->has_notifications) {
+        set(out, AKENO_FEATURE_SYSTEM_NOTIFICATIONS, AKENO_CAP_ENABLED,
+            "sceKernelSendNotificationRequest as in the payload SDK sample; the call was confirmed on a PS5 with "
+            "firmware 12.20. Notifications show plain text only.");
+    } else {
+        set(out, AKENO_FEATURE_SYSTEM_NOTIFICATIONS, AKENO_CAP_DISABLED, "This build has no reviewed notification call.");
+    }
 }

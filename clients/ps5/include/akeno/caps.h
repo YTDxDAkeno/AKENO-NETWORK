@@ -2,8 +2,9 @@
  * Capability policy. Detection produces facts; this module turns facts into explicit
  * enabled / disabled / unsupported decisions with an English reason. Nothing is ever enabled
  * because of a firmware version alone, and no firmware-specific offsets or patches exist in
- * this project. Native PS5 system features are reported as unsupported because no documented
- * interface for them has been identified (see docs/PS5_GAMEBASE_RESEARCH.md).
+ * this project. Native PS5 system features (friends list, parties, ...) are reported as
+ * unsupported because no documented interface for them has been identified (see
+ * docs/PS5_GAMEBASE_RESEARCH.md). System notifications depend on a platform fact, not on firmware.
  */
 #ifndef AKENO_CAPS_H
 #define AKENO_CAPS_H
@@ -21,6 +22,7 @@ typedef struct {
     int has_sockets;             /* BSD sockets usable from this process */
     int has_tls;                 /* A verifying TLS backend is linked */
     int has_storage;             /* The credential directory is writable */
+    int has_notifications;       /* A reviewed system notification call is available */
 } akeno_platform_facts;
 
 typedef enum {

@@ -222,33 +222,44 @@ static void test_capabilities(void) {
     for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) CHECK(akeno_firmware_parse(bad[i], &major, &minor) != 0);
 
     akeno_capability_report r;
-    akeno_platform_facts ps5 = { AKENO_PLATFORM_PS5, "PlayStation 5", "12.20", 1, 1, 1 };
+    akeno_platform_facts ps5 = { AKENO_PLATFORM_PS5, "PlayStation 5", "12.20", 1, 1, 1, 0 };
     akeno_caps_evaluate(&ps5, &r);
     CHECK(r.firmware.known && !r.firmware.hardware_tested);
     CHECK(r.features[AKENO_FEATURE_REST_API].state == AKENO_CAP_ENABLED);
     CHECK(r.features[AKENO_FEATURE_DEVICE_PAIRING].state == AKENO_CAP_ENABLED);
-    CHECK(r.features[AKENO_FEATURE_SYSTEM_NOTIFICATIONS].state == AKENO_CAP_DISABLED);
+    CHECK(r.features[AKENO_FEATURE_SYSTEM_NOTIFICATIONS].state == AKENO_CAP_DISABLED); /* No reviewed call declared. */
+    akeno_platform_facts with_notify = { AKENO_PLATFORM_PS5, "PlayStation 5", "12.20", 1, 1, 1, 1 };
+    akeno_caps_evaluate(&with_notify, &r);
+    CHECK(r.features[AKENO_FEATURE_SYSTEM_NOTIFICATIONS].state == AKENO_CAP_ENABLED);
     for (int f = AKENO_FEATURE_NATIVE_FRIENDS_LIST; f <= AKENO_FEATURE_NATIVE_GAME_INVITES; f++)
         CHECK(r.features[f].state == AKENO_CAP_UNSUPPORTED);
 
     /* Unknown, unlisted and malformed firmware never enable firmware-specific features. */
     const char *firmwares[] = { "13.60", "99.99", "garbage", NULL };
     for (size_t i = 0; i < 4; i++) {
-        akeno_platform_facts facts = { AKENO_PLATFORM_PS5, "PlayStation 5", firmwares[i], 1, 1, 1 };
+        akeno_platform_facts facts = { AKENO_PLATFORM_PS5, "PlayStation 5", firmwares[i], 1, 1, 1, 0 };
         akeno_caps_evaluate(&facts, &r);
         CHECK(r.features[AKENO_FEATURE_SYSTEM_NOTIFICATIONS].state != AKENO_CAP_ENABLED);
+        /* The firmware value never changes a decision. */
+        akeno_platform_facts notify = facts;
+        notify.has_notifications = 1;
+        akeno_capability_report r2;
+        akeno_caps_evaluate(&notify, &r2);
+        CHECK(r2.features[AKENO_FEATURE_SYSTEM_NOTIFICATIONS].state == AKENO_CAP_ENABLED);
+        for (int f = 0; f < AKENO_FEATURE_COUNT; f++)
+            if (f != AKENO_FEATURE_SYSTEM_NOTIFICATIONS) CHECK(r2.features[f].state == r.features[f].state);
         CHECK(r.features[AKENO_FEATURE_NATIVE_PARTY].state == AKENO_CAP_UNSUPPORTED);
         CHECK(r.firmware.hardware_tested == 0);
         CHECK(r.firmware.known == (i == 0));
     }
 
-    akeno_platform_facts no_tls = { AKENO_PLATFORM_PS5, "PlayStation 5", "13.60", 1, 0, 1 };
+    akeno_platform_facts no_tls = { AKENO_PLATFORM_PS5, "PlayStation 5", "13.60", 1, 0, 1, 0 };
     akeno_caps_evaluate(&no_tls, &r);
     CHECK(r.features[AKENO_FEATURE_REST_API].state == AKENO_CAP_DISABLED);
     CHECK(r.features[AKENO_FEATURE_REALTIME].state == AKENO_CAP_DISABLED);
     CHECK(r.features[AKENO_FEATURE_DEVICE_PAIRING].state == AKENO_CAP_DISABLED);
 
-    akeno_platform_facts no_storage = { AKENO_PLATFORM_HOST, "Linux", NULL, 1, 1, 0 };
+    akeno_platform_facts no_storage = { AKENO_PLATFORM_HOST, "Linux", NULL, 1, 1, 0, 0 };
     akeno_caps_evaluate(&no_storage, &r);
     CHECK(r.features[AKENO_FEATURE_CREDENTIAL_STORAGE].state == AKENO_CAP_DISABLED);
     CHECK(r.features[AKENO_FEATURE_DEVICE_PAIRING].state == AKENO_CAP_DISABLED);

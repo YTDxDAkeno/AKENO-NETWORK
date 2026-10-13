@@ -32,7 +32,7 @@ endif()
 
 # Platform-neutral core (no sockets, no TLS).
 add_library(akeno_core STATIC
-  src/buf.c src/json.c src/crypto_util.c src/url.c src/backoff.c src/caps.c src/http.c src/ws.c)
+  src/buf.c src/json.c src/json_write.c src/crypto_util.c src/url.c src/backoff.c src/caps.c src/http.c src/ws.c)
 target_include_directories(akeno_core PUBLIC include PRIVATE src)
 target_compile_options(akeno_core PRIVATE ${AKENO_WARNINGS} ${AKENO_HARDENING})
 target_link_libraries(akeno_core PUBLIC m)
@@ -78,17 +78,34 @@ if(AKENO_HAVE_MBEDTLS)
   add_executable(akeno-cli-mbedtls cli/main.c)
   target_compile_options(akeno-cli-mbedtls PRIVATE ${AKENO_WARNINGS} ${AKENO_HARDENING})
   target_link_libraries(akeno-cli-mbedtls PRIVATE akeno_client_mbedtls)
+
+  # The console app, built for Linux with the console transport (the PS5 build uses ps5/Makefile).
+  execute_process(COMMAND git rev-parse --short=12 HEAD WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                  OUTPUT_VARIABLE AKENO_GIT_COMMIT OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+  if(NOT AKENO_GIT_COMMIT)
+    set(AKENO_GIT_COMMIT "dev")
+  endif()
+  set(AKENO_APP_SOURCES app/app.c app/app_routes.c app/ui_server.c app/ui_http.c app/ui_assets.c)
+  add_executable(akeno-app app/main.c app/platform_host.c ${AKENO_APP_SOURCES})
+  target_include_directories(akeno-app PRIVATE src app)
+  target_compile_options(akeno-app PRIVATE ${AKENO_WARNINGS} ${AKENO_HARDENING})
+  target_compile_definitions(akeno-app PRIVATE
+    "AKENO_UI_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/app/web\""
+    "AKENO_BUILD_ID=\"${AKENO_GIT_COMMIT}-linux\"")
+  set_source_files_properties(app/ui_assets.c PROPERTIES OBJECT_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/app/web/index.html;${CMAKE_CURRENT_SOURCE_DIR}/app/web/app.js;${CMAKE_CURRENT_SOURCE_DIR}/app/web/app.css")
+  target_link_libraries(akeno-app PRIVATE akeno_client_mbedtls)
 endif()
 
 enable_testing()
-add_executable(akeno_unit_tests tests/unit/test_main.c tests/unit/test_core.c)
-target_include_directories(akeno_unit_tests PRIVATE src)
+add_executable(akeno_unit_tests tests/unit/test_main.c tests/unit/test_core.c tests/unit/test_app.c app/ui_http.c)
+target_include_directories(akeno_unit_tests PRIVATE src app)
 target_compile_options(akeno_unit_tests PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(akeno_unit_tests PRIVATE akeno_client)
 add_test(NAME unit COMMAND akeno_unit_tests)
 if(AKENO_HAVE_MBEDTLS)
-  add_executable(akeno_unit_tests_mbedtls tests/unit/test_main.c tests/unit/test_core.c)
-  target_include_directories(akeno_unit_tests_mbedtls PRIVATE src)
+  add_executable(akeno_unit_tests_mbedtls tests/unit/test_main.c tests/unit/test_core.c tests/unit/test_app.c app/ui_http.c)
+  target_include_directories(akeno_unit_tests_mbedtls PRIVATE src app)
   target_compile_options(akeno_unit_tests_mbedtls PRIVATE -Wall -Wextra -Werror)
   target_link_libraries(akeno_unit_tests_mbedtls PRIVATE akeno_client_mbedtls)
   add_test(NAME unit-mbedtls COMMAND akeno_unit_tests_mbedtls)
