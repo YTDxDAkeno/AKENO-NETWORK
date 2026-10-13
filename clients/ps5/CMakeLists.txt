@@ -32,7 +32,7 @@ target_compile_options(akeno_core PRIVATE ${AKENO_WARNINGS} ${AKENO_HARDENING})
 target_link_libraries(akeno_core PUBLIC m)
 
 # Client with the POSIX + OpenSSL transport.
-add_library(akeno_client STATIC src/client.c src/realtime.c src/transport_openssl.c)
+add_library(akeno_client STATIC src/client.c src/realtime.c src/httpclient_posix.c src/transport_openssl.c)
 target_include_directories(akeno_client PUBLIC include PRIVATE src)
 target_compile_options(akeno_client PRIVATE ${AKENO_WARNINGS} ${AKENO_HARDENING})
 target_link_libraries(akeno_client PUBLIC akeno_core OpenSSL::SSL OpenSSL::Crypto)

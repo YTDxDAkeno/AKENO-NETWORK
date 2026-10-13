@@ -10,7 +10,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "http.h"
+#include "httpclient.h"
 #include "transport.h"
 
 #define CREDENTIAL_MAX_BYTES 8192
@@ -292,57 +292,28 @@ static akeno_status map_http_status(int status) {
 akeno_status akeno_request_raw(akeno_client *client, const char *method, const char *path, const char *json_body,
                                int with_token, akeno_response *response) {
     akeno_response_init(response);
-    if (!safe_path(path) || !method) return AKENO_ERR_ARGUMENT;
+    if (!client || !safe_path(path) || !method ||
+        (strcmp(method, "GET") != 0 && strcmp(method, "POST") != 0 && strcmp(method, "PUT") != 0 &&
+         strcmp(method, "PATCH") != 0 && strcmp(method, "DELETE") != 0)) return AKENO_ERR_ARGUMENT;
     if (with_token && !client->paired) return AKENO_ERR_NOT_PAIRED;
 
-    char host[300];
-    if (akeno_build_host_header(client, host, sizeof(host)) != 0) return AKENO_ERR_ARGUMENT;
-    int has_body = json_body != NULL || strcmp(method, "POST") == 0 || strcmp(method, "PUT") == 0 || strcmp(method, "PATCH") == 0;
-    const char *body = json_body ? json_body : "{}";
-
-    akeno_buf request;
-    akeno_buf_init(&request, 128 * 1024);
-    int rc = akeno_buf_printf(&request,
-                              "%s %s/api/v1%s HTTP/1.1\r\nHost: %s\r\nUser-Agent: akeno-device-client/" AKENO_CLIENT_VERSION
-                              "\r\nAccept: application/json\r\nConnection: close\r\n",
-                              method, client->url.base_path, path, host);
-    if (rc == 0 && with_token) rc = akeno_buf_printf(&request, "Authorization: Bearer %s\r\n", client->token);
-    if (rc == 0 && has_body)
-        rc = akeno_buf_printf(&request, "Content-Type: application/json\r\nContent-Length: %zu\r\n", strlen(body));
-    if (rc == 0) rc = akeno_buf_append_str(&request, "\r\n");
-    if (rc == 0 && has_body) rc = akeno_buf_append_str(&request, body);
-    if (rc != 0) {
-        akeno_buf_free(&request);
-        return AKENO_ERR_TOO_LARGE;
-    }
-
-    char err[256] = "";
-    akeno_conn *conn = NULL;
-    akeno_status status = akeno_conn_open(&client->url, client->ca_file, client->connect_timeout_ms, &conn, err, sizeof(err));
-    if (status != AKENO_OK) {
-        akeno_log(client, AKENO_LOG_WARN, "http.connect_failed", "%s", err);
-        akeno_buf_free(&request);
-        return status;
-    }
-    akeno_http_head head;
     akeno_buf body_out;
     akeno_buf_init(&body_out, client->max_response_bytes);
-    status = akeno_http_exchange(conn, &request, client->io_timeout_ms, &head, &body_out);
-    akeno_conn_close(conn);
-    akeno_buf_free(&request);
+    int http_status = 0;
+    akeno_status status = akeno_http_backend_exchange(client, method, path, json_body, with_token,
+                                                     &http_status, &body_out);
     if (status != AKENO_OK) {
-        akeno_log(client, AKENO_LOG_WARN, "http.exchange_failed", "%s %s failed: %s", method, path, akeno_status_name(status));
         akeno_buf_free(&body_out);
         return status;
     }
 
-    response->http_status = head.status;
+    response->http_status = http_status;
     if (body_out.len > 0) {
         char perr[96];
         response->doc = akeno_json_parse(body_out.data, body_out.len, perr, sizeof(perr));
         if (!response->doc) {
             akeno_log(client, AKENO_LOG_WARN, "http.invalid_json", "%s %s returned HTTP %d with an invalid JSON body (%s).",
-                      method, path, head.status, perr);
+                      method, path, http_status, perr);
             akeno_buf_free(&body_out);
             return AKENO_ERR_PROTOCOL;
         }
@@ -352,9 +323,9 @@ akeno_status akeno_request_raw(akeno_client *client, const char *method, const c
     const akeno_json *error = akeno_json_get(akeno_response_json(response), "error");
     copy_bounded(response->error_code, sizeof(response->error_code), akeno_json_get_string(error, "code", ""));
     copy_bounded(response->error_message, sizeof(response->error_message), akeno_json_get_string(error, "message", ""));
-    status = map_http_status(head.status);
+    status = map_http_status(http_status);
     akeno_log(client, status == AKENO_OK ? AKENO_LOG_DEBUG : AKENO_LOG_INFO, "http.response", "%s %s -> %d%s%s", method, path,
-              head.status, response->error_code[0] ? " " : "", response->error_code);
+              http_status, response->error_code[0] ? " " : "", response->error_code);
     return status;
 }
 
