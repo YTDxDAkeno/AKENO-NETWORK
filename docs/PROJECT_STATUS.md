@@ -88,6 +88,16 @@ Branches: `claude/adoring-johnson-6re0yl` (this session; based on `claude/epic-b
 | E2E, `akeno-cli-mbedtls` + console app `akeno-app` (incl. two Chromium runs, keyboard only, browser-launch failure fallback) | 39/39 |
 | PS5 build with SDK `f5d40f0`, `-Werror` | builds; 1.1 MB stripped PIE; import gate passes (negative test verified) |
 
+GitHub Actions on commit `592c23a`: **CI run 38485099581 green** (lint, typecheck, tests, web E2E,
+C client + console app E2E with Chromium, Valgrind, Docker) and **PS5 console build run
+38485099391 green**. Its artifact `akeno-network-ps5-alpha-0.1` (expires 2026-11-12) contains:
+
+| File | SHA-256 |
+| --- | --- |
+| `akeno-network-ps5.elf` | `35f393c64213410585b40262ce203423ec5c1ad66dda97e5919b9b31948b6b65` |
+| `akeno-network-ps5.debug.elf` | `d501ebc2989580453999c1a806796550fd3389050c914d5be908f0a78bb6afa7` |
+| `akeno-ps5-diagnostic.elf` | `9ddfc23a425261b30d316eb0c7078d760aa3d7fc9e8f53793b3f937057255cfe` |
+
 Not executed: anything on PS5 hardware; the PS5 browser; firmware 13.60; the production server.
 
 ### Open questions that only hardware can answer (see the test plan in PS5_CLIENT.md)
