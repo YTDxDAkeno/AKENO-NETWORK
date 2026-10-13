@@ -1,0 +1,99 @@
+import type {
+  AccountStatus,
+  FriendRequestPrivacy,
+  MessagePrivacy,
+  PresencePreference,
+  PresenceVisibility,
+  ProfileVisibility,
+  SelfPresenceStatus,
+  UserRole,
+  VisiblePresenceStatus,
+} from '../constants.js';
+
+/** Minimal public identity of a user. Safe to show to any authenticated, non-blocked viewer. */
+export interface UserSummary {
+  id: string;
+  onlineId: string;
+  displayName: string;
+  avatar: string;
+  /** True for tombstoned (deleted) accounts that still appear as message authors. */
+  deleted: boolean;
+}
+
+/** Presence as observed by a specific viewer after privacy rules are applied. */
+export interface PresenceView {
+  status: VisiblePresenceStatus;
+  /** ISO timestamp; null when hidden by privacy settings, unknown, or the user is currently visible online. */
+  lastSeenAt: string | null;
+  /** Self-reported activity text (for example "Playing a racing game"). Never verified by the server. */
+  activity: string | null;
+}
+
+export interface UserWithPresence extends UserSummary {
+  presence: PresenceView;
+}
+
+export interface PrivacySettings {
+  profileVisibility: ProfileVisibility;
+  presenceVisibility: PresenceVisibility;
+  lastSeenVisibility: PresenceVisibility;
+  messagePrivacy: MessagePrivacy;
+  friendRequestPrivacy: FriendRequestPrivacy;
+}
+
+export interface OwnProfile {
+  displayName: string;
+  avatar: string;
+  bio: string;
+  statusMessage: string;
+  favoriteGames: string[];
+  activity: string | null;
+  activityUpdatedAt: string | null;
+}
+
+/** The authenticated user's own account, including private settings. */
+export interface CurrentUser {
+  id: string;
+  onlineId: string;
+  role: UserRole;
+  status: AccountStatus;
+  createdAt: string;
+  profile: OwnProfile;
+  privacy: PrivacySettings;
+  presencePreference: PresencePreference;
+  /** The user's own effective presence as currently computed by the server. */
+  presence: SelfPresenceStatus;
+}
+
+export type RelationshipState =
+  | 'self'
+  | 'none'
+  | 'friend'
+  | 'request_sent'
+  | 'request_received'
+  | 'blocked';
+
+export interface Relationship {
+  state: RelationshipState;
+  /** Pending friend request ID when state is request_sent or request_received. */
+  friendRequestId: string | null;
+  canMessage: boolean;
+  canSendFriendRequest: boolean;
+}
+
+export interface PublicProfile {
+  user: UserSummary;
+  presence: PresenceView;
+  joinedAt: string;
+  /** True when profile details are hidden by the owner's privacy settings. */
+  restricted: boolean;
+  bio: string | null;
+  statusMessage: string | null;
+  favoriteGames: string[];
+  relationship: Relationship;
+  mutualFriendCount: number;
+}
+
+export interface UserSearchResult extends UserSummary {
+  relationship: RelationshipState;
+}

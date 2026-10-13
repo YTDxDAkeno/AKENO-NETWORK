@@ -1,0 +1,35 @@
+{
+  "name": "akeno-network",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AKENO NETWORK - a private, self-hosted gaming community platform.",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --stream -r run dev",
+    "build": "pnpm -r run build",
+    "lint": "eslint .",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "pnpm -r run test",
+    "test:e2e": "pnpm --filter @akeno/web run test:e2e",
+    "db:generate": "pnpm --filter @akeno/server run db:generate",
+    "db:migrate": "pnpm --filter @akeno/server run db:migrate",
+    "db:seed": "pnpm --filter @akeno/server run db:seed",
+    "admin:create": "pnpm --filter @akeno/server run cli create-admin",
+    "invite:create": "pnpm --filter @akeno/server run cli create-invitation",
+    "perf": "node infrastructure/scripts/load-test.mjs",
+    "check": "pnpm lint && pnpm typecheck && pnpm test"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.12.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "globals": "17.13.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.71.2"
+  }
+}

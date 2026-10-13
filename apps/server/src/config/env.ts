@@ -1,0 +1,178 @@
+import { z } from 'zod';
+
+/**
+ * Server configuration, read once from environment variables and validated at startup.
+ * Invalid or missing settings stop the process with an English error message instead of
+ * starting in an insecure or half-configured state.
+ */
+
+const booleanString = z
+  .enum(['true', 'false', '1', '0', 'yes', 'no'])
+  .transform((value) => value === 'true' || value === '1' || value === 'yes');
+
+const envSchema = z
+  .object({
+    NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+    HOST: z.string().default('127.0.0.1'),
+    PORT: z.coerce.number().int().min(0).max(65535).default(3000),
+    LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
+    LOG_PRETTY: booleanString.optional(),
+
+    DATABASE_URL: z.string().min(1, 'DATABASE_URL is required (for example postgres://user:password@host:5432/db).'),
+    DB_POOL_MAX: z.coerce.number().int().min(1).max(100).default(10),
+
+    /** Canonical public origin of the web client, e.g. https://akeno.example.com */
+    PUBLIC_ORIGIN: z.url('PUBLIC_ORIGIN must be a full URL such as https://akeno.example.com'),
+    /** Optional comma-separated list of additional allowed origins (e.g. LAN addresses). */
+    ADDITIONAL_ORIGINS: z.string().default(''),
+    /**
+     * Which reverse proxies may set X-Forwarded-For: "false", or a comma-separated list of proxy
+     * IPs/CIDRs or proxy-addr names such as "loopback,uniquelocal". Hop counts are not supported
+     * because Fastify treats them as untrusted.
+     */
+    TRUST_PROXY: z
+      .string()
+      .default('false')
+      .refine((value) => !/^\s*\d+\s*$/.test(value) || value.trim() === '0', {
+        message: 'TRUST_PROXY hop counts are not supported. Use proxy IP ranges such as "loopback,uniquelocal".',
+      }),
+
+    REGISTRATION_MODE: z.enum(['invite', 'open']).default('invite'),
+    ALLOW_OPEN_REGISTRATION_IN_PRODUCTION: booleanString.default(false),
+
+    SESSION_TTL_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+    SESSION_IDLE_TIMEOUT_DAYS: z.coerce.number().int().min(1).max(365).default(7),
+    /** "auto" derives the Secure flag from PUBLIC_ORIGIN (https => secure). */
+    COOKIE_SECURE: z.enum(['auto', 'true', 'false']).default('auto'),
+
+    ARGON2_MEMORY_KIB: z.coerce.number().int().min(1024).max(1_048_576).default(19_456),
+    ARGON2_TIME_COST: z.coerce.number().int().min(1).max(10).default(2),
+    ARGON2_PARALLELISM: z.coerce.number().int().min(1).max(8).default(1),
+    ARGON2_MAX_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
+
+    RATE_LIMIT_ENABLED: booleanString.default(true),
+    RATE_LIMIT_MAX_PER_MINUTE: z.coerce.number().int().min(10).max(100_000).default(300),
+
+    /** Directory containing the built web client (apps/web/dist). Empty disables static hosting. */
+    WEB_DIST_DIR: z.string().default(''),
+    MIGRATE_ON_START: booleanString.default(false),
+    MIGRATIONS_DIR: z.string().default(''),
+  })
+  .superRefine((env, ctx) => {
+    if (env.NODE_ENV === 'production' && env.REGISTRATION_MODE === 'open' && !env.ALLOW_OPEN_REGISTRATION_IN_PRODUCTION) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['REGISTRATION_MODE'],
+        message:
+          'Open registration is disabled in production. Use REGISTRATION_MODE=invite or explicitly set ALLOW_OPEN_REGISTRATION_IN_PRODUCTION=true.',
+      });
+    }
+    if (env.NODE_ENV === 'production' && env.COOKIE_SECURE === 'false') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['COOKIE_SECURE'],
+        message: 'COOKIE_SECURE=false is not allowed in production. Serve AKENO NETWORK over HTTPS.',
+      });
+    }
+  });
+
+export interface AppConfig {
+  env: 'development' | 'test' | 'production';
+  isProduction: boolean;
+  host: string;
+  port: number;
+  logLevel: string;
+  logPretty: boolean;
+  databaseUrl: string;
+  dbPoolMax: number;
+  publicOrigin: string;
+  allowedOrigins: string[];
+  trustProxy: boolean | string;
+  registrationMode: 'invite' | 'open';
+  session: {
+    ttlMs: number;
+    idleTimeoutMs: number;
+    cookieName: string;
+    cookieSecure: boolean;
+    /** Minimum interval between last_used_at updates for an active session. */
+    touchIntervalMs: number;
+    maxPerUser: number;
+  };
+  argon2: {
+    memoryCost: number;
+    timeCost: number;
+    parallelism: number;
+    maxConcurrency: number;
+  };
+  rateLimit: {
+    enabled: boolean;
+    maxPerMinute: number;
+  };
+  webDistDir: string | null;
+  migrateOnStart: boolean;
+  migrationsDir: string | null;
+}
+
+function normalizeOrigin(value: string): string {
+  const url = new URL(value.trim());
+  return url.origin;
+}
+
+function parseTrustProxy(value: string): boolean | string {
+  const trimmed = value.trim();
+  if (trimmed === '' || trimmed === 'false' || trimmed === '0') return false;
+  if (trimmed === 'true') return true;
+  return trimmed;
+}
+
+export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
+  const parsed = envSchema.safeParse(source);
+  if (!parsed.success) {
+    const details = parsed.error.issues.map((issue) => `  - ${issue.path.join('.') || 'config'}: ${issue.message}`).join('\n');
+    throw new Error(`Invalid AKENO NETWORK configuration:\n${details}`);
+  }
+  const env = parsed.data;
+  const publicOrigin = normalizeOrigin(env.PUBLIC_ORIGIN);
+  const additional = env.ADDITIONAL_ORIGINS.split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map(normalizeOrigin);
+  const cookieSecure = env.COOKIE_SECURE === 'auto' ? publicOrigin.startsWith('https://') : env.COOKIE_SECURE === 'true';
+
+  return {
+    env: env.NODE_ENV,
+    isProduction: env.NODE_ENV === 'production',
+    host: env.HOST,
+    port: env.PORT,
+    logLevel: env.LOG_LEVEL,
+    logPretty: env.LOG_PRETTY ?? env.NODE_ENV === 'development',
+    databaseUrl: env.DATABASE_URL,
+    dbPoolMax: env.DB_POOL_MAX,
+    publicOrigin,
+    allowedOrigins: Array.from(new Set([publicOrigin, ...additional])),
+    trustProxy: parseTrustProxy(env.TRUST_PROXY),
+    registrationMode: env.REGISTRATION_MODE,
+    session: {
+      ttlMs: env.SESSION_TTL_DAYS * 24 * 60 * 60 * 1000,
+      idleTimeoutMs: env.SESSION_IDLE_TIMEOUT_DAYS * 24 * 60 * 60 * 1000,
+      // The __Host- prefix forces Secure, Path=/ and no Domain attribute in browsers.
+      cookieName: cookieSecure ? '__Host-akeno_session' : 'akeno_session',
+      cookieSecure,
+      touchIntervalMs: 5 * 60 * 1000,
+      maxPerUser: 20,
+    },
+    argon2: {
+      memoryCost: env.ARGON2_MEMORY_KIB,
+      timeCost: env.ARGON2_TIME_COST,
+      parallelism: env.ARGON2_PARALLELISM,
+      maxConcurrency: env.ARGON2_MAX_CONCURRENCY,
+    },
+    rateLimit: {
+      enabled: env.RATE_LIMIT_ENABLED,
+      maxPerMinute: env.RATE_LIMIT_MAX_PER_MINUTE,
+    },
+    webDistDir: env.WEB_DIST_DIR.trim() || null,
+    migrateOnStart: env.MIGRATE_ON_START,
+    migrationsDir: env.MIGRATIONS_DIR.trim() || null,
+  };
+}
