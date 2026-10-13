@@ -4,6 +4,7 @@ import type {
   AdminUserDto,
   AuditEventDto,
   AuthSessionDto,
+  DeviceDto,
   BlockedUserDto,
   CurrentPartyResponse,
   DirectConversationDto,
@@ -180,6 +181,14 @@ export function useAuthSessions() {
     queryKey: queryKeys.authSessions,
     queryFn: () => api.get<{ sessions: AuthSessionDto[] }>('/auth/sessions'),
     select: (data) => data.sessions,
+  });
+}
+
+export function useDevices() {
+  return useQuery({
+    queryKey: queryKeys.devices,
+    queryFn: () => api.get<{ devices: DeviceDto[] }>('/devices'),
+    select: (data) => data.devices,
   });
 }
 

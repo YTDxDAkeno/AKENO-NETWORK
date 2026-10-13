@@ -26,6 +26,7 @@ export const queryKeys = {
   invitations: ['invitations'] as const,
   notifications: ['notifications'] as const,
   authSessions: ['auth', 'sessions'] as const,
+  devices: ['devices'] as const,
   admin: {
     invitations: ['admin', 'invitations'] as const,
     users: (q: string) => ['admin', 'users', q] as const,

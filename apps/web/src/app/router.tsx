@@ -4,6 +4,7 @@ import { RedirectIfAuthenticated, RequireAdmin, RequireAuth } from '../features/
 import { LoginPage } from '../features/auth/LoginPage';
 import { RegisterPage } from '../features/auth/RegisterPage';
 import { HomePage } from '../features/dashboard/HomePage';
+import { PairDevicePage } from '../features/devices/PairDevicePage';
 import { DiscoverPage } from '../features/discover/DiscoverPage';
 import { FriendsPage } from '../features/friends/FriendsPage';
 import { GroupDetailPage } from '../features/groups/GroupDetailPage';
@@ -52,6 +53,7 @@ export const router = createBrowserRouter([
           { path: 'discover', element: <DiscoverPage /> },
           { path: 'u/:handle', element: <ProfilePage /> },
           { path: 'settings', element: <SettingsPage /> },
+          { path: 'pair', element: <PairDevicePage /> },
           { path: 'admin', element: <RequireAdmin><AdminPage /></RequireAdmin> },
           { path: '*', element: <NotFoundPage /> },
         ],

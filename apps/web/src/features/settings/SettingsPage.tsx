@@ -29,6 +29,7 @@ import { getControllerNavigation, getTheme, setControllerNavigation, setTheme, t
 import { useAuthSessions } from '../../lib/queries';
 import { queryKeys } from '../../lib/query-keys';
 import { useAuth, useCurrentUser } from '../auth/AuthProvider';
+import { PairedDevicesCard } from '../devices/PairedDevicesCard';
 
 type Tab = 'profile' | 'privacy' | 'security' | 'preferences';
 
@@ -477,6 +478,8 @@ function SecuritySettings() {
           </ul>
         )}
       </Card>
+
+      <PairedDevicesCard />
 
       <Card className="border-danger/30">
         <CardHeader title="Delete account" icon={<ShieldAlert className="size-5 text-danger" />} description="Permanently remove your account from this network." />
