@@ -277,10 +277,11 @@ results.measurements.partyJoinUpdateMs = summarize(partyTimes);
 
 console.log('Measuring game session joins …');
 const host = clients[0];
+const maxParticipants = Math.min(64, Math.max(2, USERS));
 const session = (
-  await host.request('POST', '/game-sessions', { gameName: 'Load Test Arena', visibility: 'public', maxParticipants: Math.min(64, Math.max(2, USERS)) })
+  await host.request('POST', '/game-sessions', { gameName: 'Load Test Arena', visibility: 'public', maxParticipants })
 ).data;
-const sessionJoinTimes = await inBatches(clients.slice(1), CONCURRENCY, async (client) =>
+const sessionJoinTimes = await inBatches(clients.slice(1, maxParticipants), CONCURRENCY, async (client) =>
   (await client.request('POST', `/game-sessions/${session.id}/join`, {})).elapsed,
 );
 results.measurements.gameSessionJoinMs = summarize(sessionJoinTimes);

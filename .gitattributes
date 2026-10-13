@@ -1,0 +1,8 @@
+# Normalize line endings so shell scripts, Dockerfiles and the Caddyfile work on every platform,
+# including checkouts on Windows.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff2 binary
+*.dump binary

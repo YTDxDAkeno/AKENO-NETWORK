@@ -1,0 +1,133 @@
+{
+  "target": "http://localhost:3300",
+  "startedAt": "2026-10-13T19:12:55.170Z",
+  "parameters": {
+    "users": 100,
+    "messages": 1000,
+    "concurrency": 10
+  },
+  "environment": {
+    "node": "v22.22.0",
+    "platform": "linux x64"
+  },
+  "measurements": {
+    "registrationMs": {
+      "count": 100,
+      "p50": 73.2,
+      "p95": 121.8,
+      "max": 157.2,
+      "mean": 75.2
+    },
+    "loginMs": {
+      "count": 100,
+      "p50": 56.4,
+      "p95": 72.1,
+      "max": 74.1,
+      "mean": 55.2
+    },
+    "websocketConnectMs": {
+      "count": 100,
+      "p50": 10.2,
+      "p95": 24.4,
+      "max": 27.2,
+      "mean": 12
+    },
+    "profileRetrievalMs": {
+      "count": 100,
+      "p50": 15.6,
+      "p95": 22.9,
+      "max": 24.2,
+      "mean": 16.2
+    },
+    "friendListMs": {
+      "count": 100,
+      "p50": 8.3,
+      "p95": 12,
+      "max": 17.1,
+      "mean": 8.8
+    },
+    "messageSendAckMs": {
+      "count": 1000,
+      "p50": 27.2,
+      "p95": 39.2,
+      "max": 49.6,
+      "mean": 28.1
+    },
+    "messageDeliveryMs": {
+      "count": 1000,
+      "p50": 27.3,
+      "p95": 39.3,
+      "max": 49.8,
+      "mean": 28.2
+    },
+    "partyJoinUpdateMs": {
+      "count": 2,
+      "p50": 14.9,
+      "p95": 15.1,
+      "max": 15.1,
+      "mean": 15
+    },
+    "gameSessionJoinMs": {
+      "count": 63,
+      "p50": 66.3,
+      "p95": 120.6,
+      "max": 131.2,
+      "mean": 70.2
+    }
+  },
+  "server": {
+    "before": {
+      "users": {
+        "total": 21,
+        "active": 21,
+        "suspended": 0
+      },
+      "realtime": {
+        "connectedUsers": 0,
+        "connections": 0
+      },
+      "process": {
+        "uptimeSeconds": 20,
+        "rssBytes": 137342976,
+        "heapUsedBytes": 31055272,
+        "nodeVersion": "v22.22.0"
+      },
+      "database": {
+        "totalConnections": 10,
+        "idleConnections": 10,
+        "waitingRequests": 0
+      }
+    },
+    "processBefore": {
+      "cpuPercent": 23,
+      "rssMb": 131.3
+    },
+    "after": {
+      "users": {
+        "total": 121,
+        "active": 121,
+        "suspended": 0
+      },
+      "realtime": {
+        "connectedUsers": 100,
+        "connections": 100
+      },
+      "process": {
+        "uptimeSeconds": 28,
+        "rssBytes": 140185600,
+        "heapUsedBytes": 36405616,
+        "nodeVersion": "v22.22.0"
+      },
+      "database": {
+        "totalConnections": 10,
+        "idleConnections": 10,
+        "waitingRequests": 0
+      }
+    },
+    "processAfter": {
+      "cpuPercent": 49.1,
+      "rssMb": 133.9
+    }
+  },
+  "finishedAt": "2026-10-13T19:13:03.287Z"
+}
