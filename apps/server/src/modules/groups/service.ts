@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, gt, inArray, notInArray, sql } from 'drizzle-orm';
-import type { CreateGroupInput, GroupDetailDto, GroupDto, GroupRole, UpdateGroupInput } from '@akeno/shared';
+import type { GroupDetailDto, GroupDto, GroupRole } from '@akeno/shared';
 import type { createGroupSchema, updateGroupSchema } from '@akeno/shared';
 import type { z } from 'zod';
 import type { AppContext } from '../../app/context.js';
@@ -396,12 +396,12 @@ export class GroupsService {
 
   /** The previous owner becomes a moderator. */
   async transferOwnership(actorId: string, groupId: string, newOwnerId: string): Promise<void> {
-    if (actorId === newOwnerId) throw Errors.badRequest('You already own this group.');
     await this.runWithEffects(async (tx, effects) => {
       await this.requireGroup(groupId, tx, true);
       if ((await this.memberRole(groupId, actorId, tx)) !== 'owner') {
         throw Errors.forbidden('Only the owner can transfer ownership.');
       }
+      if (actorId === newOwnerId) throw Errors.badRequest('You already own this group.');
       if (!(await this.memberRole(groupId, newOwnerId, tx))) {
         throw new AppError(404, 'NOT_MEMBER', 'The new owner must be a member of this group.');
       }
@@ -469,4 +469,3 @@ export class GroupsService {
   }
 }
 
-export type { CreateGroupInput, UpdateGroupInput };
