@@ -325,6 +325,21 @@ static int notification_text(const char *self, const char *type, const akeno_jso
     return 1;
 }
 
+/* ---- Worker threads ----------------------------------------------------------------------- */
+
+/* Workers run TLS handshakes; give them an explicit stack instead of the platform default,
+ * which is not documented for PS5 payloads. */
+#define WORKER_STACK_BYTES ((size_t)1 << 20)
+
+static int start_worker(pthread_t *thread, void *(*fn)(void *), void *arg) {
+    pthread_attr_t attr;
+    if (pthread_attr_init(&attr) != 0) return -1;
+    int rc = pthread_attr_setstacksize(&attr, WORKER_STACK_BYTES);
+    if (rc == 0) rc = pthread_create(thread, &attr, fn, arg);
+    pthread_attr_destroy(&attr);
+    return rc;
+}
+
 /* ---- Realtime worker ---------------------------------------------------------------------- */
 
 static void rt_set_state(akeno_app *app, const char *state, const char *detail) {
@@ -496,7 +511,7 @@ akeno_status app_pair_start(akeno_app *app, char *err, size_t err_len) {
     app->pair_cancel = 0;
     app->pair_thread_done = 0;
     pthread_mutex_unlock(&app->lock);
-    if (pthread_create(&app->pair_thread, NULL, pair_main, app) != 0) {
+    if (start_worker(&app->pair_thread, pair_main, app) != 0) {
         akeno_client_destroy(client);
         pthread_mutex_lock(&app->lock);
         app->pair_client = NULL;
@@ -524,7 +539,7 @@ static void start_realtime(akeno_app *app) {
     app->rt_stop = 0;
     app->rt_thread_done = 0;
     pthread_mutex_unlock(&app->lock);
-    if (pthread_create(&app->rt_thread, NULL, rt_main, app) == 0) {
+    if (start_worker(&app->rt_thread, rt_main, app) == 0) {
         app->rt_thread_running = 1;
     } else {
         app_log(app, AKENO_LOG_ERROR, "realtime.thread_failed", "Could not start the realtime worker.");
@@ -562,7 +577,7 @@ void app_tick(akeno_app *app) {
     if (paired && wanted && !app->rt_thread_running && !app->stop) start_realtime(app);
 }
 
-void app_open_ui(akeno_app *app) {
+int app_open_ui(akeno_app *app) {
     char url[200];
     snprintf(url, sizeof(url), "http://127.0.0.1:%d/#t=%s", app->port, app->session_token);
     int rc = akeno_platform_open_browser(url);
@@ -575,6 +590,23 @@ void app_open_ui(akeno_app *app) {
     } else {
         app_log(app, AKENO_LOG_WARN, "ui.browser_failed", "The system browser could not be opened.");
         app_notify(app, 1, "AKENO: The browser could not be opened. AKENO keeps running and shows notifications.");
+    }
+    return rc;
+}
+
+/* Without a page, pairing still works: the code is delivered as a notification. */
+static void pair_without_page(akeno_app *app) {
+    pthread_mutex_lock(&app->lock);
+    int ready = app->server[0] && !app->paired;
+    pthread_mutex_unlock(&app->lock);
+    if (!ready) return;
+    char err[200];
+    if (app_pair_start(app, err, sizeof(err)) == AKENO_OK) {
+        app_log(app, AKENO_LOG_INFO, "pairing.without_page", "Started pairing; the code was sent as a notification.");
+    } else {
+        char text[260];
+        snprintf(text, sizeof(text), "AKENO: Pairing could not start: %s", err);
+        app_notify(app, 1, text);
     }
 }
 
@@ -688,8 +720,9 @@ int akeno_app_main(const akeno_app_options *options) {
     app_log(app, AKENO_LOG_INFO, "ui.listening", "Local page on http://127.0.0.1:%d/ (this console only).", app->port);
 
     akeno_platform_notify("AKENO NETWORK Alpha 0.1 started.");
-    if (options->open_browser) app_open_ui(app);
-    else {
+    if (options->open_browser) {
+        if (app_open_ui(app) != 0) pair_without_page(app);
+    } else {
         char url[200];
         snprintf(url, sizeof(url), "http://127.0.0.1:%d/#t=%s", app->port, app->session_token);
         akeno_platform_open_browser(url); /* Host build: prints the URL. */

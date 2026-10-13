@@ -132,7 +132,8 @@ void app_notify(akeno_app *app, int social, const char *text);
 akeno_status app_pair_start(akeno_app *app, char *err, size_t err_len);
 void app_pair_cancel(akeno_app *app);
 void app_mark_unpaired(akeno_app *app, const char *why);
-void app_open_ui(akeno_app *app);
+/* Opens the page in the system browser; returns 0 when the system accepted the request. */
+int app_open_ui(akeno_app *app);
 
 /* app_routes.c */
 typedef struct {

@@ -61,6 +61,11 @@ Branches: `claude/adoring-johnson-6re0yl` (this session; based on `claude/epic-b
    the loader's kernel R/W using per-firmware offsets from the SDK (12.20 and 13.60 are listed).
    AKENO code itself has no offsets and no kernel calls. Documented in SAFETY.md and PS5_CLIENT.md;
    this is inherent to running any payload with this SDK.
+8. **Fallback without the browser**: if the browser cannot be launched and a server is already
+   configured (`settings.json` via FTP), the app starts pairing itself and delivers the code as a
+   notification, so pairing and notifications work without the page.
+9. **Worker threads get an explicit 1 MiB stack** (the default stack size for PS5 payload threads
+   is not documented; TLS handshakes run on these threads).
 
 ### Built this session
 
@@ -80,7 +85,7 @@ Branches: `claude/adoring-johnson-6re0yl` (this session; based on `claude/epic-b
 | C unit tests, OpenSSL and mbedTLS builds (ASan/UBSan) | 383 checks each, 0 failures |
 | C unit tests under Valgrind (Release, both builds) | clean |
 | E2E, `akeno-cli` (OpenSSL) | 24/24 |
-| E2E, `akeno-cli-mbedtls` + console app `akeno-app` (incl. two Chromium runs, keyboard only) | 38/38 |
+| E2E, `akeno-cli-mbedtls` + console app `akeno-app` (incl. two Chromium runs, keyboard only, browser-launch failure fallback) | 39/39 |
 | PS5 build with SDK `f5d40f0`, `-Werror` | builds; 1.1 MB stripped PIE; import gate passes (negative test verified) |
 
 Not executed: anything on PS5 hardware; the PS5 browser; firmware 13.60; the production server.

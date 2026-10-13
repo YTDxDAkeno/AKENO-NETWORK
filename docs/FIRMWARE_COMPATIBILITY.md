@@ -23,7 +23,7 @@ demonstrated before any feature is called compatible.
 | etaHEN | Not required | Not required | Neither the app nor the diagnostic uses etaHEN. |
 | ps5-payload-sdk `f5d40f0` runtime | In the SDK's offset table; **diagnostic ran** | In the SDK's offset table; not tested | The SDK runtime adjusts its own process's credentials at start (see SAFETY.md). |
 | Toolchain diagnostic ELF (notification only) | **Tested on hardware** (user-reported, screenshot) | Not tested | CI artifact of run 38476802946. |
-| Console app Alpha 0.1 (`akeno-network-ps5.elf`) | Compiled (CI); **not run** | Compiled (CI); **not run** | Same source tested on Linux: 38 end-to-end scenarios. |
+| Console app Alpha 0.1 (`akeno-network-ps5.elf`) | Compiled (CI); **not run** | Compiled (CI); **not run** | Same source tested on Linux: 39 end-to-end scenarios. |
 | System notifications (`sceKernelSendNotificationRequest`) | **Call works** (diagnostic) | Not tested | |
 | Opening the page (`sceSystemServiceLaunchWebBrowser`) | Not tested | Not tested | Main open question. |
 | HTTPS/WSS (mbedTLS 3.6.7, verified) | Not tested | Not tested | Tested on Linux with the identical code. |

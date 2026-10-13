@@ -7,6 +7,7 @@
 
 #include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static pthread_mutex_t g_out = PTHREAD_MUTEX_INITIALIZER;
@@ -45,13 +46,16 @@ int akeno_platform_notify(const char *text) {
 }
 
 int akeno_platform_open_browser(const char *url) {
+    /* Test switch: simulate a console where the browser cannot be launched. */
+    const char *fail = getenv("AKENO_TEST_BROWSER_FAILS");
+    int failed = fail && fail[0] == '1';
     pthread_mutex_lock(&g_out);
     fputs("{\"event\":\"open-browser\",\"url\":", stdout);
     print_json_string(url);
-    fputs("}\n", stdout);
+    fputs(failed ? ",\"failed\":true}\n" : "}\n", stdout);
     fflush(stdout);
     pthread_mutex_unlock(&g_out);
-    return 0;
+    return failed ? -1 : 0;
 }
 
 void akeno_platform_debug_line(const char *line) {

@@ -64,6 +64,13 @@ not Chromium; layout and script compatibility there are unverified.
    to a console automatically.
 4. A notification "AKENO NETWORK Alpha 0.1 started." appears and the browser should open the
    AKENO page. If the browser does not open, AKENO keeps running and tells you by notification.
+   **Fallback without the page:** if `/data/akeno/settings.json` already names your server (copy
+   it via FTP, format below), AKENO then starts pairing by itself and shows the pairing code as a
+   notification; after approval, message and invitation notifications work without the page.
+
+   ```json
+   {"version":1,"server":"https://your-akeno-server.example","deviceName":"PlayStation 5","notifyMessages":true,"notifySocial":true}
+   ```
 5. First run: enter your server address (`https://...`) and a name for the console, select
    **Show pairing code**, then on your phone/PC open the shown address (normally
    `https://<your server>/pair`), enter the code, choose permissions and approve. The code is
@@ -151,7 +158,7 @@ report it. For each step note: works / does not work / what you saw.
 | # | Step | Expected |
 | --- | --- | --- |
 | H1 | Send the ELF with your loader | Notification "AKENO NETWORK Alpha 0.1 started." |
-| H2 | Wait 5 s | The browser opens the AKENO page (if not: notification "The browser could not be opened") |
+| H2 | Wait 5 s | The browser opens the AKENO page (if not: notification "The browser could not be opened"; then try the fallback above and continue with H5/H7/H8 via notifications) |
 | H3 | Move with D-pad/left stick, press ✕ and ◯ | Report which inputs move the focus or a cursor |
 | H4 | Enter the server address and console name with the on-screen keyboard | Pairing screen appears |
 | H5 | Show pairing code, approve it on your phone/PC | "paired as …" notification; Friends tab loads |

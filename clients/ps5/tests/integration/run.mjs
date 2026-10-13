@@ -952,6 +952,26 @@ if (appBinary) {
     }
   });
 
+
+  await step('console app: pairs through notifications when the browser cannot be opened', async () => {
+    const dataDir = join(work, 'app-nobrowser');
+    const first = await startApp(dataDir, ['--port', '0', '--server', server, '--ca-file', caFile]);
+    first.child.kill('SIGTERM'); // Only to write settings.json, as a user would via FTP.
+    await first.exited;
+    const headless = await startApp(dataDir, ['--port', '0', '--ca-file', caFile, '--open-browser'], { AKENO_TEST_BROWSER_FAILS: '1' });
+    await waitFor(() => notifications(headless).some((text) => /Pairing code [A-Z0-9]{4}-[A-Z0-9]{4}/.test(text)), 'the pairing code notification');
+    assert.ok(notifications(headless).some((text) => text.includes('The browser could not be opened')));
+    const code = /Pairing code ([A-Z0-9]{4}-[A-Z0-9]{4})/.exec(notifications(headless).find((text) => text.includes('Pairing code')))[1];
+    assert.equal((await alice.request('POST', '/devices/pairings/approve', { userCode: code })).status, 204);
+    await waitFor(() => notifications(headless).some((text) => text.includes('paired as it_alice')), 'the paired notification', 20_000);
+    const diagnostics = await appApi(headless, 'GET', '/api/diagnostics');
+    assert.equal(diagnostics.body.ui.browserLastResult, -1);
+    headless.child.kill('SIGTERM');
+    assert.equal((await headless.exited).code, 0);
+    const devices = await alice.request('GET', '/devices');
+    for (const device of devices.body.devices) await alice.request('DELETE', `/devices/${device.id}`);
+  });
+
   await step('console app: never writes tokens or device codes to its logs', async () => {
     const logs = readFileSync(join(appData, 'akeno.log'), 'utf8') + allStderr.join('\n');
     assert.doesNotMatch(logs, /akd_[A-Za-z0-9_-]{10,}/);
