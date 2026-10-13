@@ -158,8 +158,10 @@ PostgreSQL 16.15, Chromium 141 via Playwright 1.56.1):
 | `pnpm test:e2e` | 2 / 2 passed (~27 s; passed 3 consecutive runs) |
 | `docker build` + `docker compose up` | image built; stack healthy; registration, backup/restore and HTTPS via Caddy verified manually |
 
-The GitHub Actions workflow (`.github/workflows/ci.yml`) runs the same checks; its first run on
-GitHub has not been observed yet.
+The GitHub Actions workflow (`.github/workflows/ci.yml`) runs the same checks on every push and
+pull request. Its first run on GitHub (run 38455492193, commit `854d97d`) passed: lint,
+typecheck, unit/integration tests against a PostgreSQL service, build, both Playwright
+scenarios, the Docker image build and Compose validation.
 
 ## Not covered by automated tests
 

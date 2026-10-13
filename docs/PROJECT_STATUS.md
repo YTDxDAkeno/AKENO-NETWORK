@@ -36,11 +36,10 @@ Branch: `claude/epic-bell-s1psav`.
 | Docker image (non-root, read-only FS), Compose stack, Caddy HTTPS + WSS | Built and run in the dev container; HTTPS verified with a local certificate |
 | Backup and restore scripts | Round trip verified (data deleted, restored, user signed in) |
 | Load test script and measurements | `docs/PERFORMANCE.md`, `docs/perf/*.json` |
+| GitHub Actions CI (lint, typecheck, tests with PostgreSQL, build, Playwright E2E, Docker build) | Run 38455492193 on commit `854d97d` passed both jobs |
 
 ## Implemented but not yet tested in the target environment
 
-- **GitHub Actions CI** (`.github/workflows/ci.yml`) — written and YAML/Compose-validated, but
-  no run on GitHub has been observed yet.
 - **VPS deployment** with a real domain and Let's Encrypt certificate — the same Compose
   stack was verified locally with Caddy's internal certificate for `localhost`.
 - **Windows 11 / Docker Desktop** instructions — written from the Linux-verified commands;
@@ -104,12 +103,11 @@ Docker 29.8.2, Playwright 1.56.1 with Chromium 141.
 
 ## Next engineering actions
 
-1. Push and observe the first GitHub Actions run; fix any CI-specific issues.
-2. Deploy to a real VPS (1 vCPU / 2 GB) following VPS_DEPLOYMENT.md, run
+1. Deploy to a real VPS (1 vCPU / 2 GB) following VPS_DEPLOYMENT.md, run
    `load-test.mjs` there, and record the results in PERFORMANCE.md.
-3. Execute the Windows 11 guide on a real Windows machine and correct any differences.
-4. Add `pnpm audit` (or an equivalent scanner) to CI; it currently reports no known vulnerabilities.
-5. Add route-level code splitting for rarely used pages (admin, settings).
-6. Consider TOTP-based MFA for administrators.
-7. Only then: start Phase 9 (voice) with a two-user WebRTC prototype behind a feature flag,
+2. Execute the Windows 11 guide on a real Windows machine and correct any differences.
+3. Add `pnpm audit` (or an equivalent scanner) to CI; it currently reports no known vulnerabilities.
+4. Add route-level code splitting for rarely used pages (admin, settings).
+5. Consider TOTP-based MFA for administrators.
+6. Only then: start Phase 9 (voice) with a two-user WebRTC prototype behind a feature flag,
    using an operator-controlled TURN server with short-lived credentials.
