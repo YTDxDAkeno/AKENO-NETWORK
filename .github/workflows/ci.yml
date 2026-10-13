@@ -76,6 +76,60 @@ jobs:
             apps/web/test-results
           retention-days: 7
 
+  client:
+    name: Device client (C) - build, unit and end-to-end tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: akeno
+          POSTGRES_PASSWORD: akeno_ci_password
+          POSTGRES_DB: akeno_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U akeno -d akeno_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      TEST_DATABASE_ADMIN_URL: postgres://akeno:akeno_ci_password@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install C toolchain dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake libssl-dev valgrind
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build server
+        run: pnpm build
+
+      - name: Build client with AddressSanitizer and UndefinedBehaviorSanitizer
+        run: pnpm client:build
+
+      - name: Client unit tests
+        run: clients/ps5/build-asan/akeno_unit_tests
+
+      - name: Client end-to-end tests against a disposable server
+        run: node clients/ps5/tests/integration/run.mjs clients/ps5/build-asan/akeno-cli
+
+      - name: Release build and Valgrind check
+        run: |
+          cmake -S clients/ps5 -B clients/ps5/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build clients/ps5/build -j
+          valgrind --leak-check=full --error-exitcode=99 -q clients/ps5/build/akeno_unit_tests
+
   docker:
     name: Docker image build
     runs-on: ubuntu-24.04

@@ -8,6 +8,7 @@ export default defineConfig(
   {
     ignores: [
       '**/dist/**',
+      'clients/ps5/build*/**',
       '**/node_modules/**',
       '**/coverage/**',
       '**/playwright-report/**',

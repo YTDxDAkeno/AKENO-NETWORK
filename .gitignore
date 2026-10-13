@@ -32,3 +32,4 @@ Thumbs.db
 
 # Local backups created by the backup script
 backups/
+clients/ps5/build-*/
