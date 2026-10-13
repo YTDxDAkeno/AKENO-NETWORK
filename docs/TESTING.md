@@ -9,7 +9,7 @@ the database or the API: they run against real PostgreSQL and real HTTP/WebSocke
 | Server integration tests | `apps/server/test/*.test.ts` | Vitest + real PostgreSQL + real WebSockets | 101 |
 | Web unit/component tests | `apps/web/tests/unit/*.test.ts(x)` | Vitest + jsdom + Testing Library | 26 |
 | Browser end-to-end | `apps/web/tests/e2e/*.spec.ts` | Playwright (Chromium) against production builds | 3 scenarios (core acceptance with 22+ steps; mobile + parties; device pairing) |
-| Device client (C) | `clients/ps5/tests` | C unit tests under ASan/UBSan + Node runner against the production server build | 243 checks + 23 end-to-end scenarios |
+| Device client and PS5 console app (C) | `clients/ps5/tests` | C unit tests under ASan/UBSan (OpenSSL and mbedTLS builds) + Node runner against the production server build, incl. Chromium for the console page | 383 checks per build + 24 CLI and 14 console-app end-to-end scenarios |
 
 ## Running the tests
 
@@ -18,7 +18,7 @@ pnpm lint
 pnpm typecheck
 pnpm test        # shared + server + web
 pnpm test:e2e    # builds everything, then runs Playwright
-pnpm test:client # builds the server and the C client (sanitizers), runs its unit and E2E tests
+pnpm test:client # builds the server, the C client and the console app (sanitizers), runs unit and E2E tests
 ```
 
 ### Database for tests
@@ -158,22 +158,36 @@ closed with 4401); cross-user revocation refused; device presence and realtime e
 route table only lists existing, non-sensitive routes. The browser scenario approves a code via
 `/pair`, limits permissions, and unpairs from Settings.
 
-### Device client (`clients/ps5/tests`)
+### Device client and console app (`clients/ps5/tests`)
 
-- **Unit (243 checks, ASan + UBSan, also Valgrind):** strict JSON (escapes, surrogates, depth
-  limit, int64), bounded buffers, HTTP heads and chunked bodies (incl. conflicting lengths and
-  unsupported encodings), WebSocket framing (RFC 6455 vectors, masking, RSV bits, control-frame
-  rules, non-minimal lengths), SHA-1/Base64 vectors, URL parsing, backoff bounds, capability
-  policy for listed/unlisted/malformed firmware and missing TLS or storage, log redaction.
-- **End-to-end (23 scenarios):** real server build on a fresh database behind a TLS terminator
-  with a throwaway CA. Untrusted certificate and wrong host name are refused; pairing approve
-  and deny; 0600 credential bound to the server; profile, friends, status, sending messages
-  (quotes, backslashes, Unicode) and history; presence; party invitation accept; game sessions;
-  realtime events, then a **server restart** with automatic reconnection; unpairing on the
-  website stops the listener (exit 4) and deletes the credential; scope limits; logout;
+- **Unit (383 checks, ASan + UBSan, also Valgrind; built once per TLS transport):** strict JSON
+  (escapes, surrogates, depth limit, int64) and JSON output round trips, bounded buffers, HTTP
+  heads and chunked bodies (incl. conflicting lengths and unsupported encodings), WebSocket
+  framing (RFC 6455 vectors, masking, RSV bits, control-frame rules, non-minimal lengths),
+  SHA-1/Base64 vectors, URL parsing, backoff bounds, capability policy (firmware never changes a
+  decision), log redaction, HTTP method/path validation, transport init and CSPRNG output, and
+  the console app's local HTTP parser against hostile input (missing/duplicate Host, header
+  injection, folding, oversized fields, chunked bodies), Host/Origin checks and secret comparison.
+- **End-to-end, CLI (24 scenarios, run for the OpenSSL and the mbedTLS transport):** real server
+  build on a fresh database behind a TLS terminator with a throwaway CA. Untrusted certificate,
+  wrong host name and IP-vs-DNS mismatches are refused; a DNS-named certificate is accepted;
+  pairing approve and deny; 0600 credential bound to the server; profile, friends, status,
+  messages (quotes, backslashes, Unicode) and history; presence; party invitation accept; game
+  sessions; realtime events, then a **server restart** with automatic reconnection; unpairing on
+  the website stops the listener (exit 4) and deletes the credential; scope limits; logout;
   world-readable credential files refused; no tokens in logs; malformed HTTP, invalid JSON,
   oversized, truncated and stalled responses, 5xx and refused connections end cleanly; reconnect
   attempts are bounded.
+- **End-to-end, console app (14 scenarios, `--app`):** the host build of the PS5 app against the
+  same server: page secret, DNS-rebinding Host and cross-site Origin refused; proxy allow-list;
+  pairing through the page and the website (code also as notification); friends and messages
+  through the proxy; realtime events become page events and system notifications (and respect
+  the notification switches); party invitation by notification and accepted through the page;
+  diagnostics and a TLS connection test; a second launch reopens the page; revocation on the
+  website deletes the credential; clean exit; untrusted server certificate refused; no tokens in
+  logs; and two **Chromium** runs of the real page (first-run setup and pairing code; keyboard-only
+  navigation, chat, live reply, every tab) with no script or CSP errors. Set
+  `AKENO_UI_SCREENSHOTS=<dir>` to save screenshots (CI uploads them as `console-ui-screenshots`).
 
 ## Last verified results
 
@@ -188,8 +202,10 @@ PostgreSQL 16, Chromium 141 via Playwright 1.56.1, GCC 13, OpenSSL 3.0.13):
 | `pnpm --filter @akeno/server test` | 101 / 101 passed |
 | `pnpm --filter @akeno/web test` | 26 / 26 passed |
 | `pnpm test:e2e` | 3 / 3 passed (~27 s; 3 consecutive runs) |
-| `clients/ps5/build-asan/akeno_unit_tests` | 243 checks, 0 failures (ASan/UBSan; Valgrind clean on the release build) |
-| `node clients/ps5/tests/integration/run.mjs …` | 23 / 23 passed |
+| `clients/ps5/build-asan/akeno_unit_tests`, `akeno_unit_tests_mbedtls` | 383 checks each, 0 failures (ASan/UBSan; Valgrind clean on the release builds) |
+| `node clients/ps5/tests/integration/run.mjs …/akeno-cli` | 24 / 24 passed |
+| `node clients/ps5/tests/integration/run.mjs …/akeno-cli-mbedtls --app …/akeno-app` | 38 / 38 passed (incl. Chromium) |
+| `make -C clients/ps5/console` (PS5 SDK `f5d40f0`) + `check-imports.sh` | builds with `-Werror`; import gate passes |
 | Migration upgrade check | database created with the previous revision's migrations + data, upgraded with `0001_devices`: data kept, new tables present |
 | `docker build` + `docker compose up` | image built; stack healthy; registration, backup/restore and HTTPS via Caddy verified manually |
 
@@ -200,8 +216,8 @@ scenarios, the Docker image build and Compose validation.
 
 ## Not covered by automated tests
 
-- **Any PlayStation 5 hardware.** The device client is tested on Linux only; no console build
-  exists yet (see FIRMWARE_COMPATIBILITY.md).
+- **Any PlayStation 5 hardware.** The console app is built for the PS5 in CI but tested on Linux
+  only; only the toolchain diagnostic ELF has run on a PS5 (see FIRMWARE_COMPATIBILITY.md).
 - Real mobile devices and the PlayStation 5 browser (phone layouts are tested with Chromium's
   device emulation only).
 - Accessibility audits with screen readers (semantic markup and keyboard support were

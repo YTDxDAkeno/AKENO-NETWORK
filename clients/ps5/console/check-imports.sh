@@ -5,7 +5,9 @@
 #   check-imports.sh <build-ps5 directory> [nm]
 set -euo pipefail
 build="${1:?usage: check-imports.sh <build-ps5 dir> [nm]}"
-nm="${2:-llvm-nm-18}"
+nm="${2:-}"
+if [[ -z "$nm" && -n "${PS5_PAYLOAD_SDK:-}" ]]; then nm="$PS5_PAYLOAD_SDK/bin/prospero-nm"; fi
+nm="${nm:-llvm-nm-18}"
 elf="$build/akeno-network-ps5.elf"
 
 # Reviewed system functions (see app/platform_ps5.c and docs/PS5_CLIENT.md).

@@ -1,0 +1,106 @@
+name: PS5 console build
+
+# Builds the AKENO NETWORK console app and the toolchain diagnostic for the PS5 with a pinned
+# payload SDK. Produces ELF files with SHA-256 checksums and build information. Nothing is sent
+# to a console: hardware tests are started by a person, by hand, with an approved build.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ps5-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PS5_SDK_COMMIT: f5d40f02770e9b0001dd9e18056eca70b3da8b40
+
+jobs:
+  ps5:
+    name: Build PS5 ELF files with the pinned SDK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install SDK build requirements
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-18 lld-18 llvm-18-dev make wget file binutils
+
+      - name: Fetch pinned SDK source
+        shell: bash
+        run: |
+          git clone --filter=blob:none https://github.com/ps5-payload-dev/sdk.git "$RUNNER_TEMP/ps5-sdk-src"
+          git -C "$RUNNER_TEMP/ps5-sdk-src" checkout --detach "$PS5_SDK_COMMIT"
+          test "$(git -C "$RUNNER_TEMP/ps5-sdk-src" rev-parse HEAD)" = "$PS5_SDK_COMMIT"
+
+      - name: Install SDK to a temporary directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/ps5-payload-sdk"
+          make -C "$RUNNER_TEMP/ps5-sdk-src" DESTDIR="$RUNNER_TEMP/ps5-payload-sdk" install
+
+      - name: Fetch pinned third-party inputs (checksums verified)
+        run: clients/ps5/scripts/fetch-deps.sh
+
+      - name: Build the console app
+        run: |
+          export PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk"
+          make -C clients/ps5/console -j"$(nproc)" GIT_COMMIT="$(git rev-parse --short=12 HEAD)"
+
+      - name: Build the toolchain diagnostic
+        run: |
+          export PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk"
+          make -C clients/ps5/ps5-smoke
+
+      - name: Check system imports (safety gate)
+        run: |
+          export PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk"
+          clients/ps5/console/check-imports.sh clients/ps5/build-ps5 | tee imports.txt
+
+      - name: Inspect, checksum and describe the build
+        shell: bash
+        run: |
+          out=dist/akeno-network-ps5-alpha-0.1
+          mkdir -p "$out"
+          cp clients/ps5/build-ps5/akeno-network-ps5.elf "$out/"
+          cp clients/ps5/build-ps5/akeno-network-ps5.debug.elf "$out/"
+          cp clients/ps5/ps5-smoke/akeno-ps5-diagnostic.elf "$out/"
+          cp docs/PS5_CLIENT.md "$out/README.md"
+          for elf in "$out"/*.elf; do
+            readelf -h "$elf" | grep -q 'ELF64'
+            readelf -h "$elf" | grep -q 'Advanced Micro Devices X86-64'
+            readelf -h "$elf" | grep -q 'DYN (Position-Independent Executable file)'
+          done
+          (cd "$out" && sha256sum *.elf > SHA256SUMS)
+          {
+            echo "AKENO NETWORK console app 0.1.0-alpha"
+            echo "Source commit:   $(git rev-parse HEAD)"
+            echo "Workflow run:    $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo "ps5-payload-sdk: $PS5_SDK_COMMIT"
+            echo "mbedTLS:         3.6.7 ($(sha256sum clients/ps5/third_party/mbedtls-3.6.7.tar.bz2 | cut -d' ' -f1))"
+            echo "CA bundle:       certifi 2026.07.22 ($(sha256sum clients/ps5/third_party/cacert.pem | cut -d' ' -f1))"
+            echo "Compiler:        $("$RUNNER_TEMP/ps5-payload-sdk/bin/prospero-clang" --version | head -1)"
+            echo
+            echo "SHA-256:"
+            sed 's/^/  /' "$out/SHA256SUMS"
+            echo
+            echo "Shared libraries required:"
+            readelf -d "$out/akeno-network-ps5.elf" | grep NEEDED | sed 's/^.*\[/  /; s/\]$//'
+            echo
+            cat imports.txt
+            echo
+            echo "Hardware status: the console app has NOT been tested on a PS5. See README.md."
+          } > "$out/BUILDINFO.txt"
+          cat "$out/BUILDINFO.txt"
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: akeno-network-ps5-alpha-0.1
+          path: dist/akeno-network-ps5-alpha-0.1
+          retention-days: 30

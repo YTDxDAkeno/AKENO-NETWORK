@@ -5,6 +5,10 @@ PC or Linux server and requires no PlayStation, no PSN account and no console mo
 **Nothing was installed on, sent to, or tested against a physical PS5** during this project. It
 does not replace or integrate with PlayStation Network features.
 
+_Update 2026-10-13 (session 3):_ the Level 2 console app (Alpha 0.1) exists: a payload with
+verified TLS, code pairing, a page in the system browser and system notifications, built in CI
+and tested on Linux; it has not yet run on a PS5. See [PS5_CLIENT.md](PS5_CLIENT.md).
+
 _Update 2026-10-13:_ Level 2 (independent client) has started: device pairing is implemented on
 the server, and the client logic (`clients/ps5`) is implemented and tested **on Linux**. Native
 Game Base integration (Levels 3–4) remains unsupported; findings are in

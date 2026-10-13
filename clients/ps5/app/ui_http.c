@@ -40,13 +40,15 @@ int ui_http_parse_request(const char *data, size_t len, ui_request *out) {
         if (*p < 'A' || *p > 'Z') return UI_PARSE_BAD;
     memcpy(out->method, data, (size_t)(sp1 - data));
     const char *target = sp1 + 1;
+    if (target >= line_end) return UI_PARSE_BAD;
     const char *sp2 = memchr(target, ' ', (size_t)(line_end - target));
-    if (!sp2 || sp2 == target || *target != '/') return UI_PARSE_BAD;
+    if (!sp2 || sp2 <= target || *target != '/') return UI_PARSE_BAD;
     if ((size_t)(line_end - sp2 - 1) != 8 || strncmp(sp2 + 1, "HTTP/1.", 7) != 0 || (sp2[8] != '0' && sp2[8] != '1'))
         return UI_PARSE_BAD;
-    for (const char *p = target; p < sp2; p++)
-        if (!visible((unsigned char)*p)) return UI_PARSE_BAD;
-    const char *q = memchr(target, '?', (size_t)(sp2 - target));
+    size_t target_len = (size_t)(sp2 - target);
+    for (size_t i = 0; i < target_len; i++)
+        if (!visible((unsigned char)target[i])) return UI_PARSE_BAD;
+    const char *q = memchr(target, '?', target_len);
     const char *path_end = q ? q : sp2;
     if ((size_t)(path_end - target) >= sizeof(out->path)) return UI_PARSE_TOO_LARGE;
     memcpy(out->path, target, (size_t)(path_end - target));

@@ -88,7 +88,7 @@
       xhr.setRequestHeader('X-Akeno-Token', token);
       if (body !== undefined) xhr.setRequestHeader('Content-Type', 'application/json');
       xhr.onload = function () {
-        var data = null;
+        var data;
         try { data = JSON.parse(xhr.responseText); } catch (e) { data = null; }
         if (!data) data = { ok: false, error: { code: 'BAD_RESPONSE', message: 'Unexpected response from the console app.' } };
         if (xhr.status === 403 && data.error && data.error.code === 'SESSION_REQUIRED') showExpired();

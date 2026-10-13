@@ -1,7 +1,8 @@
 # Firmware compatibility
 
-**Nothing in this project has been tested on a PlayStation 5.** This page tracks what is known,
-what is assumed, and what must be demonstrated before any feature is called compatible.
+**Only the toolchain diagnostic ELF has run on a PlayStation 5 (firmware 12.20, user-reported).
+The console app has not.** This page tracks what is known, what is assumed, and what must be
+demonstrated before any feature is called compatible.
 
 ## Status vocabulary
 
@@ -18,15 +19,18 @@ what is assumed, and what must be demonstrated before any feature is called comp
 | --- | --- | --- | --- |
 | Jailbreak environment (kstuff) | User-reported | User-reported | Not verified by this project. |
 | kstuff version | Unknown | Unknown | Record the exact version and source when testing. |
-| ELF/payload loader | Unknown | Unknown | Required to run any homebrew; not chosen or tested yet. |
-| etaHEN | Not required | Not required | The client does not use etaHEN or its plugins. |
-| Console build of the client | **Not compiled** | **Not compiled** | Needs a console transport (TLS backend) and UI; see below. |
-| Client core (JSON, HTTP, WebSocket, pairing, realtime, backoff) | Tested in simulation (Linux) | Tested in simulation (Linux) | Platform-neutral C11; the same code is intended for the console. |
-| HTTPS/WSS with certificate verification | Not tested | Not tested | Needs a TLS library built for the target and a CA bundle shipped with the app. |
-| Controller input / on-screen UI | Not implemented | Not implemented | |
-| Credential storage | Not tested | Not tested | Needs a writable, per-user path; permissions model to be verified. |
+| ELF/payload loader | Used by the user; name/version not recorded | Unknown | Any ps5-payload-sdk compatible loader; not chosen by this project. |
+| etaHEN | Not required | Not required | Neither the app nor the diagnostic uses etaHEN. |
+| ps5-payload-sdk `f5d40f0` runtime | In the SDK's offset table; **diagnostic ran** | In the SDK's offset table; not tested | The SDK runtime adjusts its own process's credentials at start (see SAFETY.md). |
+| Toolchain diagnostic ELF (notification only) | **Tested on hardware** (user-reported, screenshot) | Not tested | CI artifact of run 38476802946. |
+| Console app Alpha 0.1 (`akeno-network-ps5.elf`) | Compiled (CI); **not run** | Compiled (CI); **not run** | Same source tested on Linux: 38 end-to-end scenarios. |
+| System notifications (`sceKernelSendNotificationRequest`) | **Call works** (diagnostic) | Not tested | |
+| Opening the page (`sceSystemServiceLaunchWebBrowser`) | Not tested | Not tested | Main open question. |
+| HTTPS/WSS (mbedTLS 3.6.7, verified) | Not tested | Not tested | Tested on Linux with the identical code. |
+| DNS (`getaddrinfo` → `sceNetResolver`, IPv4) | Not tested | Not tested | |
+| Credential storage in `/data/akeno` | Not tested | Not tested | |
+| Controller input in the page | Not tested | Not tested | Depends on the PS5 browser. |
 | Native Game Base friends, presence, messages, parties, voice, game invites | Unsupported | Unsupported | See [PS5_GAMEBASE_RESEARCH.md](PS5_GAMEBASE_RESEARCH.md). |
-| System notifications | Disabled | Disabled | Requires a documented interface verified on that firmware. |
 
 ## How compatibility is handled in code
 
@@ -38,24 +42,23 @@ sockets, TLS backend, writable storage) into explicit decisions:
 - A firmware version is parsed strictly (`MM.mm`). Unknown, unlisted or malformed versions are
   reported as such and **never enable anything**.
 - The table of tracked versions (12.20, 13.60) carries `hardware_tested = 0`. It is changed only
-  together with a recorded hardware test in this document.
+  together with a recorded hardware test of the client in this document (the diagnostic ELF
+  does not count as a client test).
+- System notifications are enabled by a platform fact (a reviewed notification call is linked),
+  never by a firmware number.
 - There are no firmware offsets, patches or version-specific code paths in this project, and none
   may be added without the review described in [SAFETY.md](SAFETY.md).
 
 Run `akeno-cli caps --firmware 12.20` to see the decisions.
 
-## Remaining work for a console build (requires your approval before any hardware test)
+## Console build
 
-1. Choose and document the payload SDK and loader versions, their licenses and their stated
-   firmware support (source-level review was **not** done in this session).
-2. Add a console transport (`transport.h`) with a verifying TLS library built for the target, and
-   ship the CA bundle for the AKENO server.
-3. Add a minimal, controller-driven UI (pairing code, friends, messages, invitations, parties,
-   sessions) with original AKENO branding.
-4. Produce a build artifact and its checksum; do **not** load it automatically.
-5. Hardware test plan: a non-primary console, data backed up, network-only features, a clear exit
-   path; record results here (firmware, kstuff and loader versions, steps, outcome).
+Built by the "PS5 console build" GitHub Actions workflow (`.github/workflows/ps5.yml`) with the
+pinned SDK; see [PS5_CLIENT.md](PS5_CLIENT.md) for installation, the list of system functions
+used, and the hardware test plan (H1–H11). Nothing is sent to a console automatically.
 
 ## Hardware test log
 
-_No entries._
+| Date | Build | Console / firmware | Environment | Steps | Result |
+| --- | --- | --- | --- | --- | --- |
+| 2026-10-13 | Toolchain diagnostic ELF, Actions run 38476802946 (commit `e324fa6`) | PS5, 12.20 | kstuff; loader not recorded | Sent the ELF with the user's loader | **Pass** (user-reported with screenshot): the system notification "AKENO NETWORK: PS5 toolchain diagnostic loaded. No network connection or system modification was attempted." appeared on the home screen. Proves only that this ELF runs and the notification call works. |

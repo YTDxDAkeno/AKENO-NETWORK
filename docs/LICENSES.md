@@ -13,12 +13,25 @@ logos, trademarks, fonts, sounds or other proprietary assets are used. "PlayStat
 other platform names appear only as plain-text, self-declared platform labels on game
 sessions and in documentation.
 
-## Device client (`clients/ps5`)
+## Device client and console app (`clients/ps5`)
 
-All C sources (JSON, HTTP, WebSocket, SHA-1/Base64, client, CLI, tests) were written for this
-project; no third-party source is vendored. The Linux build links the system **OpenSSL 3**
-library (Apache-2.0) dynamically. A console build would need a TLS library for that target;
-its license must be recorded here before it is added.
+All C sources (JSON, HTTP, WebSocket, SHA-1/Base64, client, both TLS transports, console app,
+local page server, page HTML/CSS/JS, CLI, tests) were written for this project. The Linux build
+links the system **OpenSSL 3** library (Apache-2.0) dynamically.
+
+The console build additionally contains, downloaded at pinned versions with SHA-256 checks by
+`clients/ps5/scripts/fetch-deps.sh` (not vendored in Git):
+
+| Component | Version | License | Use |
+| --- | --- | --- | --- |
+| mbedTLS | 3.6.7 (LTS) | Apache-2.0 | TLS 1.2/1.3 and X.509 verification (statically linked) |
+| Mozilla CA certificate bundle, via certifi | 2026.07.22 | MPL-2.0 | Trusted roots embedded in the ELF |
+| ps5-payload-sdk (crt, libc, stubs) | `f5d40f0` | GPLv3+ (FreeBSD headers under BSD licenses) | Startup code and libc linked into the PS5 ELF |
+
+Because the PS5 ELF links the SDK's GPLv3+ runtime, a distributed PS5 binary is a combined work
+under the GPLv3; AKENO's MIT and mbedTLS's Apache-2.0 code are compatible with that. The complete
+corresponding source is this repository plus the pinned SDK and inputs named above. The PR #1
+diagnostic ELF (`clients/ps5/ps5-smoke`) is built from the same SDK.
 
 ## Runtime dependencies (shipped)
 

@@ -33,6 +33,12 @@ export default defineConfig(
     },
   },
   {
+    // Console page served by the PS5 app: a classic browser script for older WebKit builds.
+    files: ['clients/ps5/app/web/**/*.js'],
+    languageOptions: { sourceType: 'script', globals: { ...globals.browser } },
+    rules: { '@typescript-eslint/no-unused-vars': ['error', { caughtErrors: 'none' }] },
+  },
+  {
     files: ['apps/web/**/*.{ts,tsx}'],
     languageOptions: { globals: { ...globals.browser } },
     extends: [reactHooks.configs.flat.recommended],

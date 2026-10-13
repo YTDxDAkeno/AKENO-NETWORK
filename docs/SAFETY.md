@@ -15,6 +15,16 @@ Homebrew is never risk-free; these rules reduce risk, they do not remove it.
 - Anything that affects consoles, accounts or networks other than your own.
 - Destructive tests against the production server or its database.
 
+## The PS5 payload SDK runtime (disclosure)
+
+Every payload built with ps5-payload-sdk starts with the SDK's runtime (`crt`). Before AKENO's
+`main()` runs, that runtime uses the kernel read/write access handed over by the ELF loader to
+raise **its own process's** credentials and syscall permissions, using firmware-specific offsets
+maintained by the SDK. The diagnostic ELF that already ran on the console did the same. AKENO's
+own code contains no offsets, calls none of the SDK's kernel-memory helpers, and touches no other
+process, system file or Sony service; CI enforces this (`clients/ps5/console/check-imports.sh`).
+If this runtime behaviour is not acceptable, no payload built with this SDK can be used.
+
 ## Always
 
 - Develop and test on PCs and Linux first (`clients/ps5` runs and is tested there).
@@ -38,8 +48,12 @@ Homebrew is never risk-free; these rules reduce risk, they do not remove it.
 ## Before the first console test (checklist)
 
 - [ ] A non-primary console is available and its data is backed up.
-- [ ] SDK, loader and their versions are documented with sources and licenses.
-- [ ] The build artifact, its checksum and its source commit are recorded.
-- [ ] The build only uses networking, file storage in its own directory, and controller input.
-- [ ] The test plan and the way to stop the app are written down.
+- [x] SDK version documented with source and license (ps5-payload-sdk `f5d40f0`, GPLv3+; see
+      LICENSES.md). The loader is the user's own; record its name and version when testing.
+- [x] The build artifact, its checksum and its source commit are recorded (`SHA256SUMS` and
+      `BUILDINFO.txt` in the CI artifact).
+- [x] The build only uses networking, file storage in its own directory (`/data/akeno`), system
+      notifications and the system browser; the import gate enforces the list.
+- [x] The test plan and the way to stop the app are written down (PS5_CLIENT.md, H1–H11; Exit
+      button, or send nothing further and reboot).
 - [ ] You approved this specific build for hardware testing.

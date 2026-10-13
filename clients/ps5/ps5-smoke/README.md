@@ -12,7 +12,7 @@ The call and its structure are based on the documented
 
 ## Reproducible build
 
-The GitHub Actions workflow `.github/workflows/ps5-smoke.yml` installs a
+The GitHub Actions workflow `.github/workflows/ps5.yml` installs a
 **pinned** SDK at commit `f5d40f02770e9b0001dd9e18056eca70b3da8b40`
 and builds the ELF using `prospero.mk`. The resulting Actions artifact includes
 the ELF and its SHA-256 checksum. The ELF is not shipped through production
@@ -30,7 +30,9 @@ sha256sum clients/ps5/ps5-smoke/akeno-ps5-diagnostic.elf
 
 - **Do not run this payload without explicit approval**, even though its
   functionality is intentionally small; unstable loaders or firmware can crash.
-- No real-hardware test on firmware 12.20 or 13.60 has been performed.
+- Hardware: the user ran this ELF (Actions run 38476802946) on a PS5 with firmware 12.20 and
+  kstuff; the notification appeared (2026-10-13, user-reported with screenshot). 13.60: not tested.
+  The real client is the console app in `clients/ps5/app` (see docs/PS5_CLIENT.md).
 - Compilation and linkage demonstrate a toolchain result, not firmware support.
 - There is no automatic console deployment or exploit in this project.
 - A complete PS5 client still requires verified HTTPS/TLS behavior, secure

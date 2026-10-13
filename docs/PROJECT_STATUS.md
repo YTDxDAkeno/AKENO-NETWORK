@@ -1,23 +1,111 @@
 # Project status
 
-_Last updated: 2026-10-13 (second session)._ This file is the source of truth for continuing
+_Last updated: 2026-10-13 (third session)._ This file is the source of truth for continuing
 work across sessions. Do not mark anything complete that has not actually been run.
 
-Branch: `claude/epic-bell-s1psav`. See `git log` for the latest commit; the last commit with a
-fully green GitHub Actions run is noted below.
+Branches: `claude/adoring-johnson-6re0yl` (this session; based on `claude/epic-bell-s1psav` at
+`8105593`, plus the reviewed parts of PR #1). `main` is untouched. See `git log` for details.
 
 ## Summary
 
 | Area | Status |
 | --- | --- |
-| AKENO NETWORK web platform (V1) | Implemented and tested (unchanged scope, one realtime bug fixed) |
-| Device pairing + scoped device tokens (server, web UI) | **Implemented and tested** |
-| Device client core `clients/ps5` (C11, Linux) | **Implemented and tested on Linux** against the real server |
-| Console (PS5) build of the client | **Not started** — needs SDK/loader review, a console TLS transport, a UI and your approval |
+| AKENO NETWORK web platform (V1) | Implemented and tested (unchanged this session) |
+| Device pairing + scoped device tokens (server, web UI) | Implemented and tested (unchanged this session) |
+| Device client core `clients/ps5` (C11) | Implemented and tested on Linux with **two** TLS transports (OpenSSL, mbedTLS) |
+| **PS5 console app Alpha 0.1** (`clients/ps5/app`, `clients/ps5/console`) | **Implemented; ELF builds in CI; tested end to end on Linux (host build). Not yet run on a PS5.** See [PS5_CLIENT.md](PS5_CLIENT.md) |
+| PS5 toolchain diagnostic ELF (from PR #1) | **Ran on a real PS5, firmware 12.20 + kstuff** (user-reported, with screenshot): native notification shown |
 | Native Game Base / PSN integration | **Unsupported** — no documented interface; see PS5_GAMEBASE_RESEARCH.md |
-| Any test on PS5 hardware (12.20 / 13.60) | **None performed** |
+| Production VPS revision | **Unverified** (local commits around `2963980` not reconciled; nothing deployed or changed this session) |
 
-## Phase 0 — deployment continuity (this session)
+## Session 3 — PS5 console app Alpha 0.1
+
+### Starting point and PR #1 review
+
+- Baseline `8105593` (green CI). PR #1 (`chatgpt/ps5-http-backend`, commits `f9df326`, `e324fa6`)
+  reviewed line by line:
+  - `e324fa6` (diagnostic ELF + pinned-SDK workflow): **adopted unchanged** by cherry-pick
+    (`4fd58dc`, original authorship kept). This is the ELF that ran on the console.
+  - `f9df326` (HTTP backend split): the HTTP **method allow-list** was adopted (with unit tests).
+    The `httpclient` split itself was **not** adopted: `transport.h` already isolates sockets and
+    TLS, the HTTP/1.1 framing is platform-neutral and is reused unchanged on the console, and
+    WebSockets need the raw stream anyway. The PR's `PS5_PORTING_PROGRESS.md` is superseded by
+    [PS5_CLIENT.md](PS5_CLIENT.md).
+- PR #1 is still open and was not merged into `main`.
+- Work of the earlier, unpushed Claude session (PS5 frontend, controller, notification modules)
+  was **not available** to this session; nothing of it is claimed or reconstructed here.
+
+### Decisions (with evidence)
+
+1. **TLS on the console = mbedTLS 3.6.7 over BSD sockets**, not `libSceSsl`/`libSceHttp2`. The SDK
+   only ships stubs for those (no headers, no documented trust-store or host-name semantics, no
+   WebSocket support); mbedTLS gives verifiable chain + host-name checks with our own trust store
+   and runs the identical code on Linux, where the complete test suite exercises it. The SDK's
+   libc provides sockets and an IPv4 `getaddrinfo` (via `sceNetResolver*`), read in
+   `libc/netdb.c` of the pinned SDK.
+2. **UI = page served on 127.0.0.1 and opened in the system browser** via
+   `sceSystemServiceLaunchWebBrowser` (SDK `samples/browser`). Drawing directly to the screen from a
+   background payload has no documented path in the SDK; the browser also provides the on-screen
+   keyboard and its own controller handling. Security: per-launch secret, exact loopback Host,
+   same-origin Origin, strict CSP, allow-listed proxy; the device token stays in the payload.
+3. **Controller input = the browser's own handling** (plus spatial focus on arrow keys and the
+   Gamepad API if exposed). `libScePad` from a background process was not used: the pad belongs
+   to the foreground app and no reviewed sample shows safe shared use.
+4. **Notifications = `sceKernelSendNotificationRequest`**, the exact call proven on 12.20.
+5. **Entropy = `kern.arandom` sysctl** (as the SDK's own libc seeds), fallback `/dev/urandom`;
+   TLS init fails if neither works.
+6. **Import gate**: CI fails if the PS5 ELF imports an `sce*` function outside the reviewed list or
+   if AKENO object files reference the SDK's kernel-memory helpers.
+7. **SDK runtime disclosure**: every ps5-payload-sdk payload (including the diagnostic that ran)
+   starts with the SDK `crt`, which raises its *own* process's credentials and syscall range through
+   the loader's kernel R/W using per-firmware offsets from the SDK (12.20 and 13.60 are listed).
+   AKENO code itself has no offsets and no kernel calls. Documented in SAFETY.md and PS5_CLIENT.md;
+   this is inherent to running any payload with this SDK.
+
+### Built this session
+
+| Item | Where |
+| --- | --- |
+| mbedTLS transport (Linux + PS5), shared socket code, pinned inputs with SHA-256 | `src/transport_mbedtls.c`, `src/net_posix.c`, `scripts/fetch-deps.sh`, `config/akeno_mbedtls_config.h` |
+| Console app: workers, settings, notifications, events, local page server, routes | `app/*.c` |
+| Console page (friends, messages, invitations, party, sessions, diagnostics, settings, pairing, setup) | `app/web/` |
+| PS5 build + import gate | `console/Makefile`, `console/check-imports.sh` |
+| CI: Linux job runs both transports + the app with Chromium; new `PS5 console build` workflow builds both ELFs, checks imports, uploads ELF + SHA256SUMS + BUILDINFO | `.github/workflows/ci.yml`, `.github/workflows/ps5.yml` |
+
+### Tests executed (2026-10-13, Linux container, GCC 13, clang 18, Node 22, PostgreSQL 16)
+
+| Command | Result |
+| --- | --- |
+| `pnpm check` (lint, typecheck, shared/server/web tests) | passed |
+| C unit tests, OpenSSL and mbedTLS builds (ASan/UBSan) | 383 checks each, 0 failures |
+| C unit tests under Valgrind (Release, both builds) | clean |
+| E2E, `akeno-cli` (OpenSSL) | 24/24 |
+| E2E, `akeno-cli-mbedtls` + console app `akeno-app` (incl. two Chromium runs, keyboard only) | 38/38 |
+| PS5 build with SDK `f5d40f0`, `-Werror` | builds; 1.1 MB stripped PIE; import gate passes (negative test verified) |
+
+Not executed: anything on PS5 hardware; the PS5 browser; firmware 13.60; the production server.
+
+### Open questions that only hardware can answer (see the test plan in PS5_CLIENT.md)
+
+1. Does `sceSystemServiceLaunchWebBrowser` open the page from a payload on 12.20/13.60?
+2. Can the PS5 browser load `http://127.0.0.1:8642` and run the page (ES2017, XHR)?
+3. Which controller inputs reach the page (arrow-key events, Gamepad API, cursor only)?
+4. Is `/data/akeno` writable and does `kern.arandom` work from the payload?
+5. Does DNS + TLS to the real server work from the console (`sceNetResolver`, mbedTLS)?
+6. Does the loader in use stay responsive while AKENO runs?
+
+### Next steps
+
+1. **User:** download the `akeno-network-ps5-alpha-0.1` artifact of the latest green "PS5 console
+   build" run, verify the checksum and run the hardware test plan (H1–H10) on 12.20.
+2. **User / VPS session:** reconcile the VPS commits (below), back up, then deploy a revision with
+   device pairing — or test against a separate, disposable server first.
+3. Record hardware results in FIRMWARE_COMPATIBILITY.md; fix what fails (the most likely area is
+   browser launch / browser compatibility; fallback ideas: auto-start pairing with the code shown
+   only as a notification, an opt-in LAN page with a short PIN).
+4. Then: game-session actions in the page, QR code for the pairing URL, 13.60.
+
+## Phase 0 — deployment continuity (session 2)
 
 | Check | Result |
 | --- | --- |
@@ -60,7 +148,7 @@ commits, `git pull --ff-only` on the VPS fast-forwards without rewriting anythin
 `git status` is clean first). Pulling needs only read access (a public repository, or a
 read-only deploy key) — never a write token on the VPS.
 
-## Implemented and tested in this session
+## Implemented and tested in session 2
 
 | Feature | Evidence |
 | --- | --- |
@@ -73,7 +161,7 @@ read-only deploy key) — never a write token on the VPS.
 | C client: pairing, friends, presence, messages, invitations, parties, sessions, realtime, bounded reconnect, TLS verification, hostile-server handling | 243 unit checks + 23 end-to-end scenarios under ASan/UBSan; Valgrind; CI job |
 | Web client fix: messages sent while a page was loading were lost until reload | `apps/web/tests/unit/message-sync.test.ts`; E2E 3 consecutive passes |
 
-## Last executed tests (2026-10-13)
+## Tests executed in session 2 (2026-10-13)
 
 | Command | Result |
 | --- | --- |
@@ -99,15 +187,14 @@ email reset, in-memory login throttle, no message editing, no voice).
    whose network policy allows the VPS.
 2. **Backups off the server** and **key-only SSH**: not checked; changing SSH needs your
    explicit go-ahead.
-3. **Console build** of the client: SDK and loader selection with a source-level review of
-   their firmware support (not performed in this session), a TLS transport for the target, a
-   controller UI, an artifact with checksum. Then a hardware test only with your approval
-   ([SAFETY.md](SAFETY.md) checklist).
+3. **Console app hardware test** (session 3 built the app; see "Next steps" above). The SDK was
+   reviewed at source level; the loader was not chosen by this project (use the one that ran the
+   diagnostic). Hardware tests only with your approval ([SAFETY.md](SAFETY.md) checklist).
 4. Native Game Base integration: recorded as unsupported. Revisit only if a documented,
    non-invasive interface is identified.
 5. Optional: route-level code splitting, `pnpm audit` in CI, TOTP for admins (from session 1).
 
-## Important decisions (this session)
+## Important decisions (session 2)
 
 1. Devices use opaque, revocable bearer tokens with an idle timeout instead of access/refresh
    token pairs: simpler and safer for clients with unreliable storage, same revocation model as

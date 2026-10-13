@@ -1,7 +1,8 @@
 # Installing the AKENO device client
 
-The client in `clients/ps5` currently builds and runs on **Linux** (and WSL on Windows). It is the
-tested reference for the console client; there is **no console build yet** (see
+The command-line client in `clients/ps5` builds and runs on **Linux** (and WSL on Windows). It is
+the tested reference for the console app. **For the PS5 console app (Alpha 0.1) see
+[PS5_CLIENT.md](PS5_CLIENT.md)**; it has not yet run on PS5 hardware (see
 [FIRMWARE_COMPATIBILITY.md](FIRMWARE_COMPATIBILITY.md)).
 
 ## Server side (once)
@@ -21,7 +22,7 @@ DEVICE_TOKEN_IDLE_DAYS=30
 sudo apt-get install -y build-essential cmake libssl-dev
 cmake -S clients/ps5 -B clients/ps5/build -DCMAKE_BUILD_TYPE=Release
 cmake --build clients/ps5/build -j
-clients/ps5/build/akeno_unit_tests          # 243 checks, must print "0 failures"
+clients/ps5/build/akeno_unit_tests          # must print "0 failures"
 ```
 
 ## Pair and use it

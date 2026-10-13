@@ -610,7 +610,7 @@ async function appApi(app, method, path, body, headers = {}) {
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await response.text();
-  let json = null;
+  let json;
   try {
     json = JSON.parse(text);
   } catch {
@@ -724,7 +724,7 @@ if (appBinary) {
   });
 
   await step('console app: turns realtime events into page events and system notifications', async () => {
-    await waitFor(() => false || app.stderr.includes('realtime.state connected'), 'the realtime connection', 20_000);
+    await waitFor(() => app.stderr.includes('realtime.state connected'), 'the realtime connection', 20_000);
     const before = (await appState(app)).eventsNext;
     const conversations = await bob.request('GET', '/conversations');
     const conversation = conversations.body.conversations.find((entry) => entry.otherUser.onlineId === 'it_alice');
@@ -757,7 +757,7 @@ if (appBinary) {
 
 
   await step('console app: the page works in a browser with keyboard-only navigation', async () => {
-    let chromium = null;
+    let chromium;
     try {
       ({ chromium } = createRequire(resolve(root, 'apps/web/package.json'))('@playwright/test'));
     } catch {
@@ -784,7 +784,7 @@ if (appBinary) {
 
       // Keyboard only: focus starts in the page; arrows move between controls, Enter activates.
       await page.keyboard.press('ArrowDown');
-      const focused = await page.evaluate(() => document.activeElement && document.activeElement.id);
+      const focused = await page.evaluate('document.activeElement && document.activeElement.id');
       assert.match(focused, /^friend-/, `focus moved to a friend (got ${focused})`);
       await page.keyboard.press('Enter');
       await page.locator('#composer-input').waitFor();
@@ -905,7 +905,7 @@ if (appBinary) {
 
 
   await step('console app: first-run setup and pairing screens work in a browser', async () => {
-    let chromium = null;
+    let chromium;
     try {
       ({ chromium } = createRequire(resolve(root, 'apps/web/package.json'))('@playwright/test'));
     } catch {
