@@ -6,9 +6,10 @@ database. This keeps a 5–20 user deployment simple to run on a small VPS while
 module boundaries for later growth.
 
 ```
- Browser (desktop / mobile)
-        │  HTTPS + WSS (same origin)
-        ▼
+ Browser (desktop / mobile)          AKENO device client (clients/ps5, C11)
+        │  HTTPS + WSS (cookie,              │  HTTPS + WSS (Authorization: Bearer
+        │  same origin)                      │  device token, scoped, revocable)
+        ▼                                    ▼
  ┌──────────────┐   reverse proxy, automatic TLS (Let's Encrypt)
  │    Caddy     │
  └──────┬───────┘
@@ -37,6 +38,7 @@ module boundaries for later growth.
 | `packages/shared` | Zod request schemas, response contracts (DTO types), realtime event types, product constants (limits, avatars, platforms). Imported as TypeScript source by both apps, so validation rules are identical on client and server. |
 | `apps/server` | Fastify application, PostgreSQL schema and migrations (Drizzle ORM), services, WebSocket gateway, operator CLI. Bundled with esbuild into `dist/main.js` and `dist/cli.js`. |
 | `apps/web` | React 19 single-page application (React Router 7, TanStack Query 5, Tailwind CSS 4), built with Vite. |
+| `clients/ps5` | Portable C11 device client (library + `akeno-cli`): pairing, REST, realtime, capability policy. Built and tested on Linux; the reference for a future console build. Not a pnpm workspace member. |
 
 ## Server modules
 
@@ -75,10 +77,34 @@ clients are never told about changes that were rolled back. Concurrency-sensitiv
 enforced by the database (unique and partial unique indexes, CHECK constraints, row locks);
 see [DATABASE.md](DATABASE.md).
 
+## Paired devices
+
+Non-browser clients authenticate with device tokens issued through code-based pairing
+([DEVICE_PAIRING.md](DEVICE_PAIRING.md)). `middleware/auth.ts` resolves `Authorization: Bearer`
+before cookies (and then ignores cookies), marks the identity as `credential: 'device'` with its
+scopes, and a global `preValidation` hook enforces the default-deny route table in
+`modules/devices/scopes.ts` before any route guard runs. Device connections are ordinary
+`ClientConnection`s in the realtime hub (keyed by device ID), so presence, fan-out and
+revocation work exactly as for browser tabs.
+
+```
+clients/ps5
+  include/akeno/   akeno.h (public API), caps.h (capability policy), json.h
+  src/             buf, json, url, http, ws, backoff, caps        (platform-neutral core)
+                   client.c (config, credentials, requests, pairing), realtime.c
+                   transport.h + transport_openssl.c              (the only socket/TLS code)
+  cli/main.c       akeno-cli
+  tests/           unit tests (C) and the end-to-end runner (Node)
+```
+
+Porting to another platform means implementing `transport.h` (sockets + verifying TLS) and a
+front end; the core has no platform dependencies.
+
 ## Realtime design
 
-- One authenticated WebSocket per browser tab at `/ws`. The handshake must carry a valid
-  session cookie and an allowed `Origin`; identity always comes from the server-side session.
+- One authenticated WebSocket per browser tab or paired device at `/ws`. Browsers present a
+  valid session cookie and an allowed `Origin`; devices present a bearer token with the
+  `realtime` scope. Identity always comes from server-side state.
 - Events are versioned envelopes `{ v: 1, type, data, ts }` defined in
   `packages/shared/src/contracts/realtime.ts`. Clients may only send `ping`, `presence.idle`
   and `typing`; anything else closes the socket with code 4400.
@@ -86,9 +112,11 @@ see [DATABASE.md](DATABASE.md).
   10 s; the server sends protocol pings every 20 s and terminates connections silent for 70 s.
 - Session revocation (logout, password change, suspension, account deletion) closes the
   affected sockets with code 4401, after which the client stops reconnecting.
-- **PostgreSQL is the source of truth.** WebSockets only reduce latency. After a reconnect the
-  client fetches missed messages with the `after` cursor for every cached conversation and
-  then refetches all other server state through the REST API.
+- **PostgreSQL is the source of truth.** WebSockets only reduce latency. After every `hello`
+  (including the first one after a page load) the web client fetches missed messages with the
+  `after` cursor for every cached conversation; after a reconnect it also refetches all other
+  server state. Message events that arrive while a conversation is still loading are applied
+  once that fetch settles (`apps/web/src/lib/message-sync.ts`).
 
 ### Presence
 

@@ -40,8 +40,21 @@ log line for that request.
 | Header shows **Reconnecting…** permanently | The WebSocket at `/ws` is blocked. Behind Caddy it works out of the box; behind another proxy, enable WebSocket upgrades (`Upgrade`/`Connection` headers) and long idle timeouts. Check the browser console for the close code. |
 | WebSocket closes with code 4401 | The session was revoked or expired; sign in again. |
 | Friends always appear offline | Presence is only shared according to their privacy settings (default: friends only). Users set to **Invisible** appear offline. Blocked users always appear offline. |
-| Messages appear only after reloading | The realtime connection is down (see above). Messages are always stored; the client catches up automatically after reconnecting. |
+| Messages appear only after reloading | The realtime connection is down (see above). Messages are always stored; the client catches up after every (re)connection. Before 2026-10-13 a message sent while a page was loading could be missed until a reload; this was fixed. |
 | Typing indicator never shows | It is only sent while typing and is throttled to every 3 seconds; both users must be connected. |
+
+## Paired devices and the device client
+
+| Symptom | Cause and fix |
+| --- | --- |
+| `akeno-cli` exits with 6 and "certificate is not trusted" | The server certificate does not chain to the system trust store (or `--ca-file`), or the host name does not match. Fix the certificate; never disable verification. |
+| "Refusing plain HTTP" | Plain `http://` is only allowed for loopback testing. Use the `https://` address. |
+| Exit code 3 "not paired" | No credential for this server. Run `akeno-cli pair`. A credential issued by another server address is ignored on purpose. |
+| Exit code 4 "unpaired on the server" | The device was unpaired on the website, signed out, expired, or the account password changed. Pair again. |
+| Exit code 5 with a scope name | The permission was not granted at pairing. Unpair and pair again, granting it. |
+| "credential file can be read by other users" | `chmod 600` is not enough to trust a leaked file: delete it and pair again. |
+| Pairing code says "invalid or expired" on the website | Codes expire after 10 minutes and work once. Start pairing again on the device. |
+| `listen` exits with 9 | The server stayed unreachable for the whole reconnect budget (default 20 attempts with backoff up to 60 s). Check the server, then start it again. |
 
 ## Development
 

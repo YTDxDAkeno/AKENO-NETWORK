@@ -1,14 +1,15 @@
 # Testing
 
-AKENO NETWORK has four layers of automated tests. None of the backend or end-to-end tests mock
+AKENO NETWORK has five layers of automated tests. None of the backend or end-to-end tests mock
 the database or the API: they run against real PostgreSQL and real HTTP/WebSocket servers.
 
 | Layer | Location | Runner | Count (last run) |
 | --- | --- | --- | --- |
 | Shared schema unit tests | `packages/shared/src/schemas/*.test.ts` | Vitest | 8 |
-| Server integration tests | `apps/server/test/*.test.ts` | Vitest + real PostgreSQL + real WebSockets | 84 |
-| Web unit/component tests | `apps/web/tests/unit/*.test.ts(x)` | Vitest + jsdom + Testing Library | 20 |
-| Browser end-to-end | `apps/web/tests/e2e/*.spec.ts` | Playwright (Chromium) against production builds | 2 scenarios (core acceptance with 22+ steps; mobile + parties) |
+| Server integration tests | `apps/server/test/*.test.ts` | Vitest + real PostgreSQL + real WebSockets | 101 |
+| Web unit/component tests | `apps/web/tests/unit/*.test.ts(x)` | Vitest + jsdom + Testing Library | 26 |
+| Browser end-to-end | `apps/web/tests/e2e/*.spec.ts` | Playwright (Chromium) against production builds | 3 scenarios (core acceptance with 22+ steps; mobile + parties; device pairing) |
+| Device client (C) | `clients/ps5/tests` | C unit tests under ASan/UBSan + Node runner against the production server build | 243 checks + 23 end-to-end scenarios |
 
 ## Running the tests
 
@@ -17,6 +18,7 @@ pnpm lint
 pnpm typecheck
 pnpm test        # shared + server + web
 pnpm test:e2e    # builds everything, then runs Playwright
+pnpm test:client # builds the server and the C client (sanitizers), runs its unit and E2E tests
 ```
 
 ### Database for tests
@@ -143,19 +145,52 @@ navigation drawer on every main page with **no horizontal overflow**, starting a
 from Home, realtime member updates, party chat, leadership handoff when the leader leaves,
 and the **Invisible** status hiding a user from friends until they switch to Do Not Disturb.
 
+### Device pairing (`apps/server/test/devices.test.ts`, `apps/web/tests/e2e/device-pairing.spec.ts`)
+
+Full pairing without a password; only hashes stored; one-time redemption; `SLOW_DOWN`,
+`ACCESS_DENIED`, `EXPIRED_TOKEN`, unknown and malformed codes; granted scopes must be a subset;
+approval requires a browser session with CSRF; suspended accounts get no token; device tokens
+work without cookies/Origin/CSRF; default-deny for authentication, password, account deletion,
+profile editing, privacy, blocks, device management and admin routes (also for admins);
+scope limits incl. the WebSocket; cookies ignored when a bearer header is present (Basic auth
+unaffected); revocation by unpairing, device sign-out, password change and expiry (live socket
+closed with 4401); cross-user revocation refused; device presence and realtime events; the
+route table only lists existing, non-sensitive routes. The browser scenario approves a code via
+`/pair`, limits permissions, and unpairs from Settings.
+
+### Device client (`clients/ps5/tests`)
+
+- **Unit (243 checks, ASan + UBSan, also Valgrind):** strict JSON (escapes, surrogates, depth
+  limit, int64), bounded buffers, HTTP heads and chunked bodies (incl. conflicting lengths and
+  unsupported encodings), WebSocket framing (RFC 6455 vectors, masking, RSV bits, control-frame
+  rules, non-minimal lengths), SHA-1/Base64 vectors, URL parsing, backoff bounds, capability
+  policy for listed/unlisted/malformed firmware and missing TLS or storage, log redaction.
+- **End-to-end (23 scenarios):** real server build on a fresh database behind a TLS terminator
+  with a throwaway CA. Untrusted certificate and wrong host name are refused; pairing approve
+  and deny; 0600 credential bound to the server; profile, friends, status, sending messages
+  (quotes, backslashes, Unicode) and history; presence; party invitation accept; game sessions;
+  realtime events, then a **server restart** with automatic reconnection; unpairing on the
+  website stops the listener (exit 4) and deletes the credential; scope limits; logout;
+  world-readable credential files refused; no tokens in logs; malformed HTTP, invalid JSON,
+  oversized, truncated and stalled responses, 5xx and refused connections end cleanly; reconnect
+  attempts are bounded.
+
 ## Last verified results
 
-Executed on 2026-10-13 in the development container (Linux, Node.js 22.22.0,
-PostgreSQL 16.15, Chromium 141 via Playwright 1.56.1):
+Executed on 2026-10-13 in a cloud development container (Linux, Node.js 22.22.0,
+PostgreSQL 16, Chromium 141 via Playwright 1.56.1, GCC 13, OpenSSL 3.0.13):
 
 | Command | Result |
 | --- | --- |
 | `pnpm lint` | passed (0 problems) |
 | `pnpm typecheck` | passed |
 | `pnpm --filter @akeno/shared test` | 8 / 8 passed |
-| `pnpm --filter @akeno/server test` | 84 / 84 passed (stable across repeated runs) |
-| `pnpm --filter @akeno/web test` | 20 / 20 passed |
-| `pnpm test:e2e` | 2 / 2 passed (~27 s; passed 3 consecutive runs) |
+| `pnpm --filter @akeno/server test` | 101 / 101 passed |
+| `pnpm --filter @akeno/web test` | 26 / 26 passed |
+| `pnpm test:e2e` | 3 / 3 passed (~27 s; 3 consecutive runs) |
+| `clients/ps5/build-asan/akeno_unit_tests` | 243 checks, 0 failures (ASan/UBSan; Valgrind clean on the release build) |
+| `node clients/ps5/tests/integration/run.mjs …` | 23 / 23 passed |
+| Migration upgrade check | database created with the previous revision's migrations + data, upgraded with `0001_devices`: data kept, new tables present |
 | `docker build` + `docker compose up` | image built; stack healthy; registration, backup/restore and HTTPS via Caddy verified manually |
 
 The GitHub Actions workflow (`.github/workflows/ci.yml`) runs the same checks on every push and
@@ -165,6 +200,8 @@ scenarios, the Docker image build and Compose validation.
 
 ## Not covered by automated tests
 
+- **Any PlayStation 5 hardware.** The device client is tested on Linux only; no console build
+  exists yet (see FIRMWARE_COMPATIBILITY.md).
 - Real mobile devices and the PlayStation 5 browser (phone layouts are tested with Chromium's
   device emulation only).
 - Accessibility audits with screen readers (semantic markup and keyboard support were

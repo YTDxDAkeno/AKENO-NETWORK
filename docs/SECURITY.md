@@ -43,6 +43,12 @@ private group. This document describes the threat model, the controls that are i
 - **Revocation:** logout, per-device sign-out, "sign out other sessions", password change
   (signs out all other sessions), admin suspension and account deletion delete session rows
   and immediately close affected WebSockets (close code 4401).
+- **Paired devices:** consoles and other clients never receive the password. They get an
+  opaque bearer token (`akd_` + 32 random bytes; SHA-256 stored) through code-based pairing
+  approved in a signed-in browser ([DEVICE_PAIRING.md](DEVICE_PAIRING.md)). Tokens are limited to
+  granted scopes by a default-deny route table, never carry the admin role, expire (180 days
+  absolute, 30 days idle by default), and are revoked by unpairing, device sign-out, password
+  change or reset, suspension and account deletion.
 - **Invitations:** 16 characters from a 31-symbol alphabet (~79 bits), shown once, stored as
   SHA-256, limited uses and expiry, redeemed under a row lock inside the registration
   transaction, revocable, audited.
@@ -63,6 +69,10 @@ private group. This document describes the threat model, the controls that are i
 4. The WebSocket upgrade requires an allowed `Origin` and a valid session before a socket is
    created (`realtime/gateway.ts`); identity always comes from the server-side session, never
    from client-supplied data.
+5. Requests with `Authorization: Bearer` (paired devices) ignore cookies completely and are
+   therefore exempt from the Origin and CSRF checks; browsers cannot attach that header
+   cross-origin without a CORS preflight, which is not allowed. The two unauthenticated pairing
+   endpoints set and read no cookies.
 
 ## Authorization and privacy
 

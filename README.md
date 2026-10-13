@@ -7,9 +7,10 @@ directory — running on your own PC or a small Linux VPS.
 > **Independence notice.** AKENO NETWORK is an independent project. It is **not** affiliated
 > with, endorsed by, or connected to Sony Interactive Entertainment, PlayStation Network or any
 > console manufacturer. It does not provide PSN sign-in, native console friends, console party
-> voice, Share Play, console game presence or game multiplayer networking. It requires **no**
-> console, no PSN account and no console modification. See
-> [docs/PS5_FEASIBILITY.md](docs/PS5_FEASIBILITY.md).
+> voice, Share Play, console game presence or game multiplayer networking, and it does not
+> integrate with the PS5's own Game Base. The server requires **no** console, no PSN account and
+> no console modification. See [docs/PS5_FEASIBILITY.md](docs/PS5_FEASIBILITY.md) and
+> [docs/PS5_GAMEBASE_RESEARCH.md](docs/PS5_GAMEBASE_RESEARCH.md).
 
 ## Features (V1)
 
@@ -23,6 +24,8 @@ directory — running on your own PC or a small Linux VPS.
 | Groups | Owner / moderator / member roles, invitations, open groups, group chat, ownership transfer, deletion |
 | Parties | Private text parties with leader, invitations, capacity, one party per user (voice is **not** included in this release) |
 | Game sessions | Lobby directory with search and filters, visibility, instant or approval-based joining, invitations, capacity enforced under concurrency, connection details for participants only |
+| Paired devices | Code-based device pairing approved on the website (no password on the device), scoped and revocable device tokens for API and realtime, paired-device management in Settings |
+| Device client | Portable C11 client library + `akeno-cli` (`clients/ps5`): pairing, friends, presence, messages, invitations, parties, game sessions, realtime with bounded reconnects. Tested on Linux; **no console build yet** |
 | Administration | Invitation codes (shown once, stored hashed), member suspension and roles, audit log, system stats |
 | Operations | Docker Compose deployment, Caddy automatic HTTPS, health checks, backups and restore, structured logs |
 
@@ -72,6 +75,7 @@ Full instructions: [docs/LOCAL_SETUP.md](docs/LOCAL_SETUP.md).
 | `pnpm admin:create --online-id <id>` | Create an administrator |
 | `pnpm invite:create [--max-uses n]` | Create a registration invitation code |
 | `pnpm perf` | Load test against a disposable instance |
+| `pnpm test:client` | Build and test the C device client (unit + end-to-end, sanitizers) |
 
 ## Repository layout
 
@@ -79,6 +83,7 @@ Full instructions: [docs/LOCAL_SETUP.md](docs/LOCAL_SETUP.md).
 apps/server        Fastify API, WebSocket gateway, PostgreSQL schema & migrations, CLI
 apps/web           React web client (Vite, Tailwind CSS), unit and E2E tests
 packages/shared    Zod schemas, API contracts and realtime event types used by both
+clients/ps5        Portable C11 device client (library, akeno-cli, unit and end-to-end tests)
 infrastructure     Dockerfile, Caddyfile, backup/restore, load-test and E2E scripts
 docs               Architecture, API, security, deployment and status documentation
 ```
@@ -89,6 +94,9 @@ docs               Architecture, API, security, deployment and status documentat
 - [Local setup](docs/LOCAL_SETUP.md) · [Windows 11](docs/WINDOWS_SETUP.md) · [VPS deployment](docs/VPS_DEPLOYMENT.md)
 - [Security](docs/SECURITY.md) · [Testing](docs/TESTING.md) · [Performance](docs/PERFORMANCE.md) · [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Game integration (future)](docs/GAME_INTEGRATION.md) · [PS5 feasibility](docs/PS5_FEASIBILITY.md) · [Licenses](docs/LICENSES.md)
+- Devices and PS5: [Device pairing](docs/DEVICE_PAIRING.md) · [Client installation](docs/INSTALLATION.md) ·
+  [Firmware compatibility](docs/FIRMWARE_COMPATIBILITY.md) · [Safety](docs/SAFETY.md) ·
+  [Game Base research](docs/PS5_GAMEBASE_RESEARCH.md) · [PSN compatibility research](docs/PSN_COMPATIBILITY_RESEARCH.md)
 - [Project status](docs/PROJECT_STATUS.md) — what is implemented, tested, incomplete or deferred
 
 ## License

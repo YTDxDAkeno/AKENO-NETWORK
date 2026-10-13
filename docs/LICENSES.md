@@ -13,6 +13,13 @@ logos, trademarks, fonts, sounds or other proprietary assets are used. "PlayStat
 other platform names appear only as plain-text, self-declared platform labels on game
 sessions and in documentation.
 
+## Device client (`clients/ps5`)
+
+All C sources (JSON, HTTP, WebSocket, SHA-1/Base64, client, CLI, tests) were written for this
+project; no third-party source is vendored. The Linux build links the system **OpenSSL 3**
+library (Apache-2.0) dynamically. A console build would need a TLS library for that target;
+its license must be recorded here before it is added.
+
 ## Runtime dependencies (shipped)
 
 Server (`apps/server`, installed in the Docker image):

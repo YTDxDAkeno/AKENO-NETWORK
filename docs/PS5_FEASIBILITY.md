@@ -1,9 +1,16 @@
 # PlayStation 5 feasibility
 
-**Summary:** AKENO NETWORK V1 is a website. It runs entirely on a PC or Linux server, requires
-no PlayStation, no PSN account and no console modification, and **nothing was installed on,
-sent to, or tested against a physical PS5** during this project. It does not replace or
-integrate with PlayStation Network features.
+**Summary:** AKENO NETWORK is a website plus an independent device client. The server runs on a
+PC or Linux server and requires no PlayStation, no PSN account and no console modification.
+**Nothing was installed on, sent to, or tested against a physical PS5** during this project. It
+does not replace or integrate with PlayStation Network features.
+
+_Update 2026-10-13:_ Level 2 (independent client) has started: device pairing is implemented on
+the server, and the client logic (`clients/ps5`) is implemented and tested **on Linux**. Native
+Game Base integration (Levels 3–4) remains unsupported; findings are in
+[PS5_GAMEBASE_RESEARCH.md](PS5_GAMEBASE_RESEARCH.md) and
+[PSN_COMPATIBILITY_RESEARCH.md](PSN_COMPATIBILITY_RESEARCH.md). Safety rules are in
+[SAFETY.md](SAFETY.md).
 
 This document explains four very different meanings of "running on PS5", what each would
 require, and what this project will and will not do.
@@ -44,7 +51,7 @@ input inside the browser tab; it is opt-in under Settings → Preferences.
 | What it is | A separate application running on the console that talks to AKENO's API (like the Omega Dashboard client talks to its own server). |
 | Prerequisites | A console in a homebrew-capable state (which generally involves exploiting the system), a toolchain, and a client that implements AKENO's API — for example via the device-authorization flow in [GAME_INTEGRATION.md](GAME_INTEGRATION.md). |
 | Console risk | Significant: depends on unofficial system access; can crash or destabilize the console, and may violate platform terms. |
-| Status | **Not started and out of scope for V1.** Would require a separate, explicit decision and documented interfaces. Omega's source shows such a client is technically possible (evidence level 2: source visible, hardware reliability not verified by this project). |
+| Status | **In progress.** Device pairing and scoped device tokens are implemented and tested on the server ([DEVICE_PAIRING.md](DEVICE_PAIRING.md)). The client core in `clients/ps5` is implemented and tested on Linux against the real server. No console build exists and nothing has run on a console; a console build and any hardware test need your explicit approval ([FIRMWARE_COMPATIBILITY.md](FIRMWARE_COMPATIBILITY.md)). Omega's source shows such a client is technically possible (evidence level 2). |
 
 ### Level 3 — Alternative homebrew dashboard
 
