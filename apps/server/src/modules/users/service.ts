@@ -158,8 +158,9 @@ export class UsersService {
         friendRequestPrivacy: p.friendRequestPrivacy,
       },
       presencePreference: p.presencePreference,
+      // The request itself proves the user is active, so they count as connected here.
       presence: effectiveSelfStatus({
-        connected: this.ctx.presence.isConnected(row.id),
+        connected: true,
         allIdle: this.ctx.presence.allIdle(row.id),
         preference: p.presencePreference,
       }),

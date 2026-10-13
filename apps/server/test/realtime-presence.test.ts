@@ -65,6 +65,13 @@ describe('presence rules', () => {
     expect(hiddenLastSeen.lastSeenAt).toBeNull();
     expect(computePresenceView(base, friend).lastSeenAt).toBeNull(); // online users show no last seen
   });
+
+  it('treats users viewing their own presence as active', () => {
+    const self = { isSelf: true, isFriend: false, blocked: false };
+    expect(computePresenceView({ ...base, connected: false }, self).status).toBe('online');
+    expect(computePresenceView({ ...base, connected: false, preference: 'dnd' }, self).status).toBe('dnd');
+    expect(computePresenceView({ ...base, preference: 'invisible' }, self).status).toBe('offline');
+  });
 });
 
 describe('websocket gateway', () => {

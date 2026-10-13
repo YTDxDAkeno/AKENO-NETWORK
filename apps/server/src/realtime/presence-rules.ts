@@ -52,7 +52,9 @@ export function computePresenceView(subject: PresenceSubject, viewer: PresenceVi
   const hidden: PresenceView = { status: 'offline', lastSeenAt: null, activity: null };
   if (subject.deleted) return hidden;
   if (viewer.isSelf) {
-    const self = effectiveSelfStatus(subject);
+    // A user looking at their own presence is active right now, even if their WebSocket is
+    // momentarily reconnecting (for example during a page reload).
+    const self = effectiveSelfStatus({ ...subject, connected: true });
     return {
       status: self === 'invisible' ? 'offline' : self,
       lastSeenAt: subject.lastSeenAt ? subject.lastSeenAt.toISOString() : null,
