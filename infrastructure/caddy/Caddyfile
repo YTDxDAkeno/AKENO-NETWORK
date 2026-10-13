@@ -1,0 +1,19 @@
+# Caddy terminates HTTPS (automatic Let's Encrypt certificates) and forwards everything,
+# including WebSocket upgrades on /ws, to the AKENO NETWORK app container.
+# AKENO_DOMAIN must have DNS A/AAAA records pointing at this server, and ports 80/443 open.
+
+{$AKENO_DOMAIN} {
+	encode zstd gzip
+
+	reverse_proxy app:3000
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

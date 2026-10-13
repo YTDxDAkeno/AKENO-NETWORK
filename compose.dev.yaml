@@ -1,0 +1,25 @@
+# PostgreSQL for local development with `pnpm dev`.
+#   docker compose -f compose.dev.yaml up -d
+# Matches DATABASE_URL in .env.example. Only reachable from this machine.
+name: akeno-dev
+
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: akeno_dev
+      POSTGRES_USER: akeno
+      POSTGRES_PASSWORD: ${DEV_POSTGRES_PASSWORD:-change-me-local-dev-password}
+    ports:
+      - '127.0.0.1:5432:5432'
+    volumes:
+      - akeno-dev-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U akeno -d akeno_dev']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  akeno-dev-data:
