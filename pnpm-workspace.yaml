@@ -6,3 +6,8 @@ packages:
 # esbuild ships platform binaries as optional dependencies; its postinstall only validates them.
 onlyBuiltDependencies:
   - esbuild
+
+# drizzle-kit's legacy loader (@esbuild-kit) pins esbuild 0.18, which is affected by
+# GHSA-67mh-4wv8-2f99 (dev-server CORS). Force a patched esbuild for that dev-only path.
+overrides:
+  "@esbuild-kit/core-utils>esbuild": "0.25.12"

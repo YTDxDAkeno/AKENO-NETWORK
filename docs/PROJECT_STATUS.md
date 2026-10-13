@@ -28,11 +28,11 @@ Branch: `claude/epic-bell-s1psav`.
 | Presence: online/away/DND/invisible/offline, multi-device, idle, last seen, privacy filtering | `realtime-presence.test.ts`, E2E steps 9 and 22 |
 | Direct messages: persistence, realtime delivery, idempotency, pagination, unread, typing, reconnect recovery, restart persistence | `messages.test.ts`, E2E steps 10–14 and 22 |
 | Groups: roles, invitations, open groups, chat, moderation, ownership transfer, deletion | `groups-parties.test.ts`, E2E steps 15–17 |
-| Text parties: leader, invitations, capacity, one party per user, chat, close | `groups-parties.test.ts`; UI verified manually (screenshots) |
+| Text parties: leader, invitations, capacity, one party per user, chat, close | `groups-parties.test.ts`, `mobile-parties.spec.ts` |
 | Game sessions: directory, filters, visibility, open/approval joins, invitations, capacity under concurrency, host handoff, close | `game-sessions.test.ts`, E2E steps 18–20 |
 | Notifications and unified invitation inbox | Server tests, E2E (group invitation accepted from Home) |
 | Account deletion with safe data handling | `auth.test.ts` |
-| Web UI: all pages, responsive (desktop + 390 px), dark default + light theme, loading/empty/error states, confirmations, reconnect banner | Unit tests, E2E, manual screenshots in Chromium |
+| Web UI: all pages, responsive (desktop + phone), dark default + light theme, loading/empty/error states, confirmations, reconnect banner | Unit tests, both E2E specs (phone viewport without horizontal overflow), manual screenshots |
 | Docker image (non-root, read-only FS), Compose stack, Caddy HTTPS + WSS | Built and run in the dev container; HTTPS verified with a local certificate |
 | Backup and restore scripts | Round trip verified (data deleted, restored, user signed in) |
 | Load test script and measurements | `docs/PERFORMANCE.md`, `docs/perf/*.json` |
@@ -80,9 +80,10 @@ modifications. See PS5_FEASIBILITY.md.
 | `pnpm lint` | passed |
 | `pnpm typecheck` | passed |
 | `pnpm --filter @akeno/shared test` | 8 / 8 passed |
-| `pnpm --filter @akeno/server test` | 83 / 83 passed |
+| `pnpm --filter @akeno/server test` | 84 / 84 passed |
 | `pnpm --filter @akeno/web test` | 20 / 20 passed |
-| `pnpm --filter @akeno/web run test:e2e` | core acceptance passed (3 consecutive runs, ~17 s each) |
+| `pnpm --filter @akeno/web run test:e2e` | 2 / 2 passed: core acceptance + mobile/parties (3 consecutive runs) |
+| `pnpm audit` | no known vulnerabilities (after overriding a dev-only esbuild advisory) |
 | `docker build` / `docker compose up` / backup + restore / Caddy HTTPS | succeeded (manual verification) |
 | Load test (20 users; 20 users on 1 core; 100 users) | completed without errors; results in PERFORMANCE.md |
 
@@ -107,7 +108,7 @@ Docker 29.8.2, Playwright 1.56.1 with Chromium 141.
 2. Deploy to a real VPS (1 vCPU / 2 GB) following VPS_DEPLOYMENT.md, run
    `load-test.mjs` there, and record the results in PERFORMANCE.md.
 3. Execute the Windows 11 guide on a real Windows machine and correct any differences.
-4. Add `pnpm audit --prod` (or an equivalent scanner) to CI.
+4. Add `pnpm audit` (or an equivalent scanner) to CI; it currently reports no known vulnerabilities.
 5. Add route-level code splitting for rarely used pages (admin, settings).
 6. Consider TOTP-based MFA for administrators.
 7. Only then: start Phase 9 (voice) with a two-user WebRTC prototype behind a feature flag,

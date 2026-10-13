@@ -6,9 +6,9 @@ the database or the API: they run against real PostgreSQL and real HTTP/WebSocke
 | Layer | Location | Runner | Count (last run) |
 | --- | --- | --- | --- |
 | Shared schema unit tests | `packages/shared/src/schemas/*.test.ts` | Vitest | 8 |
-| Server integration tests | `apps/server/test/*.test.ts` | Vitest + real PostgreSQL + real WebSockets | 83 |
+| Server integration tests | `apps/server/test/*.test.ts` | Vitest + real PostgreSQL + real WebSockets | 84 |
 | Web unit/component tests | `apps/web/tests/unit/*.test.ts(x)` | Vitest + jsdom + Testing Library | 20 |
-| Browser end-to-end acceptance | `apps/web/tests/e2e/*.spec.ts` | Playwright (Chromium) against production builds | 1 scenario, 22+ steps |
+| Browser end-to-end | `apps/web/tests/e2e/*.spec.ts` | Playwright (Chromium) against production builds | 2 scenarios (core acceptance with 22+ steps; mobile + parties) |
 
 ## Running the tests
 
@@ -95,7 +95,8 @@ system dependencies with `--with-deps`). The Playwright version is pinned to 1.5
   updates; host handoff; closing prevents joins; host-only kicks.
 - **health-security.test.ts** — liveness/readiness; CSP and other headers; `no-store` on API
   responses; HttpOnly/SameSite cookies and no token in bodies; `__Host-` Secure cookies and
-  HSTS for HTTPS origins; JSON 404, 413 and malformed-JSON errors; rate limiting.
+  HSTS for HTTPS origins; JSON 404, 413 and malformed-JSON errors; empty JSON bodies accepted
+  on action endpoints while `__proto__` payloads are rejected; rate limiting.
 
 ### Web unit tests (`apps/web/tests/unit`)
 
@@ -134,6 +135,14 @@ Separate browser contexts for an administrator, Alice, Bob and Mallory:
 The test also fails if any browser page logs a JavaScript error or a Content-Security-Policy
 violation.
 
+### Mobile and parties scenario (`apps/web/tests/e2e/mobile-parties.spec.ts`)
+
+Two users on Pixel 7–sized phones (412 × 915): registration, the bottom tab bar and the
+navigation drawer on every main page with **no horizontal overflow**, starting a named party
+(shown as "Text chat only" with the voice-unavailable notice), inviting a friend, accepting
+from Home, realtime member updates, party chat, leadership handoff when the leader leaves,
+and the **Invisible** status hiding a user from friends until they switch to Do Not Disturb.
+
 ## Last verified results
 
 Executed on 2026-10-13 in the development container (Linux, Node.js 22.22.0,
@@ -144,9 +153,9 @@ PostgreSQL 16.15, Chromium 141 via Playwright 1.56.1):
 | `pnpm lint` | passed (0 problems) |
 | `pnpm typecheck` | passed |
 | `pnpm --filter @akeno/shared test` | 8 / 8 passed |
-| `pnpm --filter @akeno/server test` | 83 / 83 passed (stable across repeated runs) |
+| `pnpm --filter @akeno/server test` | 84 / 84 passed (stable across repeated runs) |
 | `pnpm --filter @akeno/web test` | 20 / 20 passed |
-| `pnpm test:e2e` | 1 / 1 passed (~17 s; passed 3 consecutive runs) |
+| `pnpm test:e2e` | 2 / 2 passed (~27 s; passed 3 consecutive runs) |
 | `docker build` + `docker compose up` | image built; stack healthy; registration, backup/restore and HTTPS via Caddy verified manually |
 
 The GitHub Actions workflow (`.github/workflows/ci.yml`) runs the same checks; its first run on
@@ -154,8 +163,8 @@ GitHub has not been observed yet.
 
 ## Not covered by automated tests
 
-- Real mobile devices and the PlayStation 5 browser (layouts were checked at 390 px width in
-  Chromium only).
+- Real mobile devices and the PlayStation 5 browser (phone layouts are tested with Chromium's
+  device emulation only).
 - Accessibility audits with screen readers (semantic markup and keyboard support were
   implemented but not audited with assistive technology).
 - Multi-instance deployments (not supported in V1).

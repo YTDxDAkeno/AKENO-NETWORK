@@ -61,6 +61,19 @@ export async function buildApp(options: BuildAppOptions): Promise<BuiltApp> {
 
   const ctx = createContext(config, database.db, app.log);
 
+  // Accept JSON requests with an empty body (e.g. action endpoints such as /accept) while
+  // keeping Fastify's default parser and its prototype-poisoning protection for everything else.
+  const defaultJsonParser = app.getDefaultJsonParser('error', 'error');
+  app.removeContentTypeParser('application/json');
+  app.addContentTypeParser('application/json', { parseAs: 'string' }, (request, body, done) => {
+    const text = typeof body === 'string' ? body : body.toString('utf8');
+    if (text.trim() === '') {
+      done(null, undefined);
+      return;
+    }
+    defaultJsonParser(request, text, done);
+  });
+
   await app.register(cookie);
   await app.register(helmet, {
     contentSecurityPolicy: {

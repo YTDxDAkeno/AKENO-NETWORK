@@ -84,6 +84,24 @@ describe('health and HTTP hardening', () => {
     expect(malformed.json().error.code).toBe('BAD_REQUEST');
   });
 
+  it('accepts empty JSON bodies on action endpoints but rejects prototype pollution', async () => {
+    const owner = await registerUser(server, 'emptybody');
+    const response = await server.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/sessions/revoke-others',
+      headers: { 'content-type': 'application/json', origin: 'http://localhost:5173', cookie: owner.cookie!, 'x-csrf-token': owner.csrf! },
+      payload: '',
+    });
+    expect(response.statusCode).toBe(200);
+    const polluted = await server.app.inject({
+      method: 'PATCH',
+      url: '/api/v1/profile',
+      headers: { 'content-type': 'application/json', origin: 'http://localhost:5173', cookie: owner.cookie!, 'x-csrf-token': owner.csrf! },
+      payload: '{"bio":"x","__proto__":{"isAdmin":true}}',
+    });
+    expect(polluted.statusCode).toBe(400);
+  });
+
   it('rate limits requests when enabled', async () => {
     const limited = await createTestServer({ RATE_LIMIT_ENABLED: 'true' });
     try {
