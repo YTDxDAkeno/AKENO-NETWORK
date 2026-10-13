@@ -29,7 +29,17 @@ export async function registerStaticWeb(app: FastifyInstance, directory: string)
   return true;
 }
 
-/** Paths that must never fall back to the single-page app. */
+/**
+ * Paths that must never fall back to the single-page app. Missing hashed assets (for example
+ * an old chunk requested after a redeploy) get a real 404 instead of index.html.
+ */
 export function isApiLikePath(url: string): boolean {
-  return url.startsWith('/api/') || url === '/api' || url.startsWith('/health') || url === '/ws' || url.startsWith('/ws?');
+  return (
+    url.startsWith('/api/') ||
+    url === '/api' ||
+    url.startsWith('/health') ||
+    url === '/ws' ||
+    url.startsWith('/ws?') ||
+    url.startsWith('/assets/')
+  );
 }
