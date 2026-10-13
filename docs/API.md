@@ -31,6 +31,7 @@ and `packages/shared/src/contracts` (response DTOs). The tables below summarize 
 | 409 | `CONFLICT`, `ONLINE_ID_TAKEN`, `ALREADY_FRIENDS`, `REQUEST_PENDING`, `ALREADY_MEMBER`, `CAPACITY_REACHED`, `SESSION_CLOSED` |
 | 413 / 415 | `PAYLOAD_TOO_LARGE`, `UNSUPPORTED_MEDIA_TYPE` |
 | 429 | `RATE_LIMITED` |
+| Device pairing | `400 AUTHORIZATION_PENDING`, `SLOW_DOWN`, `ACCESS_DENIED`, `EXPIRED_TOKEN`, `PAIRING_INVALID`; `403 DEVICE_SCOPE_DENIED` |
 
 - **Rate limits** (per user when signed in, otherwise per IP): 300 requests/minute globally
   (configurable), login 20/min, registration 10 per 15 min, password change and account
@@ -55,6 +56,26 @@ and `packages/shared/src/contracts` (response DTOs). The tables below summarize 
 Online IDs: 3–16 characters, letters/digits/`_`/`-`, starting with a letter, unique
 case-insensitively. Passwords: 12–128 characters, not a common password, not containing the
 Online ID.
+
+## Paired devices — `/devices`
+
+Consoles and other non-browser clients authenticate with a **device token** obtained through
+code-based pairing; see [DEVICE_PAIRING.md](DEVICE_PAIRING.md) for the flow, scopes and security
+properties.
+
+- Send `Authorization: Bearer akd_…`. Cookies are ignored on such requests, and no `Origin` or
+  `X-CSRF-Token` header is needed.
+- Only routes mapped to a granted scope are allowed; everything else returns
+  `403 DEVICE_SCOPE_DENIED`.
+- The WebSocket accepts the same header (scope `realtime`).
+
+| Method & path | Caller | Response |
+| --- | --- | --- |
+| `POST /devices/pairings` | device | `201 { deviceCode, userCode, verificationUri, verificationUriComplete, expiresIn, interval }` |
+| `POST /devices/pairings/token` | device | `DeviceTokenResponse` once; else `400 AUTHORIZATION_PENDING \| SLOW_DOWN \| ACCESS_DENIED \| EXPIRED_TOKEN \| PAIRING_INVALID` |
+| `POST /devices/pairings/lookup` \| `approve` \| `deny` | website | `{ userCode, scopes? }` |
+| `GET /devices`, `DELETE /devices/:id` | website | List / unpair |
+| `GET /devices/current`, `DELETE /devices/current` | device | Self-description / sign-out |
 
 ## Users, profiles, presence
 
@@ -194,7 +215,9 @@ concurrent joins can never exceed `maxParticipants`.
 
 ## Realtime protocol (`/ws`, version 1)
 
-Connect with the session cookie from the same origin. Server messages are JSON envelopes:
+Browsers connect with the session cookie from the same origin; paired devices send
+`Authorization: Bearer <device token>` instead (no Origin required). Server messages are JSON
+envelopes:
 
 ```json
 { "v": 1, "type": "message.created", "ts": "2026-10-13T18:47:00.000Z", "data": { ... } }

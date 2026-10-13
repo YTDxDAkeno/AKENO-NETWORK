@@ -6,15 +6,13 @@ import {
   type ConversationKind,
   type DirectConversationDto,
   type FriendDto,
-  type MessagePage,
   type PresenceView,
   type ServerEventEnvelope,
 } from '@akeno/shared';
 import { useToast } from '../../components/Toast';
 import { useAuth } from '../../features/auth/AuthProvider';
 import { useIdleDetection } from '../../hooks/useIdleDetection';
-import { api } from '../../lib/api';
-import { type MessageCache, mergeIntoCache, newestMessageId } from '../../lib/messages';
+import { applyRealtimeMessage, catchUpMessages } from '../../lib/message-sync';
 import { describeNotification } from '../../lib/notifications';
 import { queryKeys } from '../../lib/query-keys';
 import { RealtimeClient, type RealtimeStatus } from '../../lib/realtime';
@@ -48,25 +46,7 @@ function patchPresence(queryClient: QueryClient, userId: string, presence: Prese
  * conversation, then all other server state is refetched from PostgreSQL via the REST API.
  */
 async function resynchronize(queryClient: QueryClient): Promise<void> {
-  const messageQueries = queryClient.getQueryCache().findAll({ queryKey: queryKeys.allMessages });
-  for (const query of messageQueries) {
-    const conversationId = query.queryKey[1] as string;
-    const data = query.state.data as MessageCache | undefined;
-    let after = newestMessageId(data);
-    if (!data || after === 0) continue;
-    try {
-      for (let page = 0; page < 10; page += 1) {
-        const result = await api.get<MessagePage>(`/conversations/${conversationId}/messages?after=${after}&limit=100`);
-        queryClient.setQueryData<MessageCache>(queryKeys.messages(conversationId), (current) =>
-          mergeIntoCache(current, result.messages),
-        );
-        if (!result.hasMore || result.messages.length === 0) break;
-        after = result.messages[result.messages.length - 1]!.id;
-      }
-    } catch {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.messages(conversationId) });
-    }
-  }
+  await catchUpMessages(queryClient);
   await queryClient.invalidateQueries({ predicate: (query) => query.queryKey[0] !== 'messages' });
 }
 
@@ -94,7 +74,9 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       const invalidate = (queryKey: readonly unknown[]) => void queryClient.invalidateQueries({ queryKey });
       switch (event.type) {
         case 'hello':
-          if (meta.reconnected) void resynchronize(queryClient);
+          // Even the first connection can miss messages stored between the page's initial
+          // fetches and the socket opening; everything else is refetched only after reconnects.
+          void (meta.reconnected ? resynchronize(queryClient) : catchUpMessages(queryClient));
           break;
         case 'presence.updated':
           patchPresence(queryClient, event.data.userId, event.data.presence);
@@ -109,7 +91,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
           break;
         case 'message.created': {
           const { conversationId, message } = event.data;
-          queryClient.setQueryData<MessageCache>(queryKeys.messages(conversationId), (data) => mergeIntoCache(data, [message]));
+          applyRealtimeMessage(queryClient, conversationId, message);
           typingStore.remove(conversationId, message.sender.id);
           const kind: ConversationKind = event.data.conversationKind;
           if (kind === 'direct') invalidate(queryKeys.conversations);
