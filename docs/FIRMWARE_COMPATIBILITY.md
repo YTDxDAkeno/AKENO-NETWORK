@@ -1,8 +1,8 @@
 # Firmware compatibility
 
-**Alpha 0.1 of the console app ran on a PlayStation 5 with firmware 12.20 (user report with
-screenshots, 2026-10-13/14). Alpha 0.2 has not run on a console yet. Nothing has been tested on
-13.60.** This page tracks what is known, what is assumed, and what must be demonstrated before a
+**Alpha 0.1 and Alpha 0.2 of the console app ran on a PlayStation 5 with firmware 12.20 (user
+reports with screenshots, 2026-10-13/14). Alpha 0.3's console-page additions (profile pictures,
+game icons) have not run on a console yet. Nothing has been tested on 13.60.** This page tracks what is known, what is assumed, and what must be demonstrated before a
 feature is called compatible. Building for a firmware never counts as testing on it.
 
 ## Status vocabulary
@@ -16,26 +16,27 @@ feature is called compatible. Building for a firmware never counts as testing on
 
 ## Matrix
 
-| Item | 12.20 — Alpha 0.1 | 12.20 — Alpha 0.2 | 13.60 | Notes |
+| Item | 12.20 — Alpha 0.1 | 12.20 — Alpha 0.2 (user report) | 13.60 | Notes |
 | --- | --- | --- | --- | --- |
 | Jailbreak environment | kstuff (user) | — | kstuff (user) | Not verified by this project; record versions when testing |
 | ELF loader | User's ps5-payload-sdk loader (name/version not recorded) | — | Unknown | Not chosen by this project |
 | etaHEN | Not used | Not used | Not used | Not required |
 | ps5-payload-sdk `f5d40f0` runtime | **Runs** | Compiled | Compiled; in the SDK offset table | See SAFETY.md |
 | Build | `akeno-network-ps5.elf` SHA-256 `35f393c6…6b65` (commit `592c23a`) | Release candidate `06765c7b…b217` (commit `e4e1a28`, PS5 build run 38500880488) | — | Alpha 0.1 is rebuilt and verified byte-identical in every PS5 CI run |
-| App starts | **Tested on hardware** | Not tested | Not tested | |
-| Browser launch (`sceSystemServiceLaunchWebBrowser`) | **Tested on hardware**: opened automatically | Not tested | Not tested | |
-| Page renders and runs in the PS5 browser | **Tested on hardware** (full UI) | Not tested (Games tab, banner, new settings) | Not tested | Page script limited to ES2017 syntax by lint |
-| HTTPS to the production server (mbedTLS, verified) | **Tested on hardware** | Not tested | Not tested | |
-| WebSocket (WSS) realtime | **Tested on hardware** (connected state shown) | Not tested | Not tested | |
-| Device pairing | **Tested on hardware** (completed, account signed in) | Not tested | Not tested | |
-| Native notifications (`sceKernelSendNotificationRequest`) | **Tested on hardware**, incl. **while a game runs** | Not tested | Not tested | Also the diagnostic ELF |
-| Notifications with a button (`sceNotificationSend`, opt-in) | n/a | Not tested | Not tested | Loaded at run time; plain fallback |
-| Game detection (`sysctl` + `sceKernelGetAppInfo`) | n/a | Not tested | Not tested | Layout (offset 20/16) decided on the console; see GAME_ACTIVITY.md |
-| Game names from metadata files | n/a | Not tested | Not tested | |
-| Playtime reporting (heartbeats) | n/a | Not tested | Not tested | |
-| Controller input in the page | Used by the user; details not recorded | Not tested | Not tested | Please report D-pad / ✕ / ◯ behaviour |
-| Stability (long runs, rest mode, network loss) | Not recorded | Not tested | Not tested | |
+| App starts | **Tested on hardware** | **Tested on hardware** | Not tested | |
+| Browser launch (`sceSystemServiceLaunchWebBrowser`) | **Tested on hardware**: opened automatically | **Tested on hardware** | Not tested | |
+| Page renders and runs in the PS5 browser | **Tested on hardware** (full UI) | **Tested on hardware** | Not tested | Page script limited to ES2017 syntax by lint |
+| HTTPS to the production server (mbedTLS, verified) | **Tested on hardware** | **Tested on hardware** | Not tested | |
+| WebSocket (WSS) realtime | **Tested on hardware** (connected state shown) | **Tested on hardware** | Not tested | |
+| Device pairing | **Tested on hardware** (completed, account signed in) | **Tested on hardware** | Not tested | |
+| Native notifications (`sceKernelSendNotificationRequest`) | **Tested on hardware**, incl. **while a game runs** | **Tested on hardware**, incl. while gaming | Not tested | Also the diagnostic ELF |
+| Notifications with a button (`sceNotificationSend`, opt-in) | n/a | **Tested on hardware**: interactive message notification opened the right conversation; reply and return to the game worked | Not tested | Loaded at run time; plain fallback |
+| Game detection (`sysctl` + `sceKernelGetAppInfo`) | n/a | **Tested on hardware** (detection and switching between games) | Not tested | Layout (offset 20/16) decided on the console; see GAME_ACTIVITY.md |
+| Game names from metadata files | n/a | **Tested on hardware** (full titles resolved) | Not tested | |
+| Playtime reporting (heartbeats) | n/a | **Tested on hardware** (session duration, recently played, visible to a second account) | Not tested | |
+| Controller input in the page | Used by the user; details not recorded | Used by the user; details not recorded | Not tested | Please report D-pad / ✕ / ◯ behaviour |
+| Profile pictures / game icons on the console page (Alpha 0.3) | n/a | n/a | Not tested | Linux-tested; console icons read from `/user/appmeta` (read-only, never uploaded) |
+| Stability (long runs, rest mode, network loss) | Not recorded | Not recorded | Not tested | |
 | Native Game Base friends, presence, messages, parties, voice, game invites | Unsupported | Unsupported | Unsupported | See PS5_GAMEBASE_RESEARCH.md |
 
 ## How compatibility is handled in code

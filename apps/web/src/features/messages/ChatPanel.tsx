@@ -287,7 +287,7 @@ function MessageBubble({ message, mine, showHeader }: { message: MessageDto; min
   return (
     <li className={cn('flex gap-2.5', showHeader ? 'mt-3' : 'mt-0.5', mine && 'flex-row-reverse')} data-testid="message">
       <div className="w-9 shrink-0">
-        {showHeader && !mine ? <Avatar avatar={message.sender.avatar} name={message.sender.displayName} size="sm" /> : null}
+        {showHeader && !mine ? <Avatar avatar={message.sender.avatar} image={message.sender.avatarImage} name={message.sender.displayName} size="sm" /> : null}
       </div>
       <div className={cn('flex max-w-[78%] flex-col', mine ? 'items-end' : 'items-start')}>
         {showHeader ? (
@@ -301,7 +301,7 @@ function MessageBubble({ message, mine, showHeader }: { message: MessageDto; min
         <p
           className={cn(
             'whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2 text-sm leading-relaxed',
-            mine ? 'brand-gradient rounded-tr-md text-on-accent' : 'rounded-tl-md bg-surface-3 text-ink',
+            mine ? 'bg-accent rounded-tr-md text-on-accent' : 'rounded-tl-md bg-surface-3 text-ink',
           )}
           title={new Date(message.createdAt).toLocaleString('en-US')}
         >
@@ -320,7 +320,7 @@ function PendingBubble({ entry, onRetry }: { entry: PendingMessage; onRetry: (en
         <p
           className={cn(
             'whitespace-pre-wrap break-words rounded-2xl rounded-tr-md px-3.5 py-2 text-sm leading-relaxed',
-            entry.status === 'failed' ? 'border border-danger/50 bg-danger-soft text-ink' : 'brand-gradient text-on-accent opacity-70',
+            entry.status === 'failed' ? 'border border-danger/50 bg-danger-soft text-ink' : 'bg-accent text-on-accent opacity-70',
           )}
         >
           {entry.body}

@@ -4,6 +4,7 @@ import { GAME_SESSION_STATUS_LABELS, type GameSessionDto } from '@akeno/shared';
 import { Avatar } from '../../components/Avatar';
 import { Badge } from '../../components/Badge';
 import { cn } from '../../components/cn';
+import { GameArt } from '../../components/GameArt';
 
 const STATE_LABEL = { host: 'Hosting', member: 'Joined', requested: 'Requested', invited: 'Invited', none: null } as const;
 
@@ -14,10 +15,11 @@ export function SessionCard({ session }: { session: GameSessionDto }) {
   return (
     <Link to={`/sessions/${session.id}`} className="card group flex flex-col gap-4 p-5 transition-shadow hover:shadow-glow" data-testid="session-card">
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
+        <GameArt art={session.art} name={session.gameName} className="size-12" sizes="48px" decorative />
+        <div className="min-w-0 flex-1">
           <h3 className="truncate text-lg font-semibold group-hover:text-accent">{session.gameName}</h3>
           <div className="mt-1 flex items-center gap-2 text-xs text-muted">
-            <Avatar avatar={session.host.avatar} name={session.host.displayName} size="xs" />
+            <Avatar avatar={session.host.avatar} image={session.host.avatarImage} name={session.host.displayName} size="xs" />
             Hosted by {session.host.displayName}
           </div>
         </div>
@@ -43,7 +45,7 @@ export function SessionCard({ session }: { session: GameSessionDto }) {
           {full ? <span className="font-medium text-warning">Full</span> : null}
         </div>
         <div className="h-1.5 overflow-hidden rounded-full bg-surface-3" role="progressbar" aria-valuemin={0} aria-valuemax={session.maxParticipants} aria-valuenow={session.participantCount} aria-label="Players">
-          <div className={cn('h-full rounded-full', full ? 'bg-warning' : 'brand-gradient')} style={{ width: `${fill}%` }} />
+          <div className={cn('h-full rounded-full', full ? 'bg-warning' : 'bg-accent')} style={{ width: `${fill}%` }} />
         </div>
       </div>
     </Link>

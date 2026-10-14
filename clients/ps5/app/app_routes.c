@@ -13,6 +13,7 @@
 
 #include "akeno/caps.h"
 #include "app_internal.h"
+#include "crypto_util.h"
 #include "json_write.h"
 #include "transport.h"
 #include "ui_http.h"
@@ -264,6 +265,80 @@ static void route_logout(akeno_app *app, ui_response *r) {
     pthread_mutex_unlock(&app->lock);
     app_tick(app);
     respond_ok(r);
+}
+
+/* ---- Images -------------------------------------------------------------------------------- */
+
+/*
+ * The page shows images as data: URLs (its CSP allows only 'self' and data: images, and every
+ * /api/ request needs the session secret header, which an <img> cannot send). Images are small:
+ * server variants are capped at 512 KiB and console icons at AKENO_ICON_MAX_BYTES.
+ */
+#define MEDIA_MAX_BYTES (512 * 1024)
+
+static void respond_image(ui_response *r, const char *type, const unsigned char *data, size_t len, const char *source) {
+    size_t need = (len + 2) / 3 * 4 + 1;
+    char *encoded = malloc(need);
+    if (!encoded || akeno_base64_encode(data, len, encoded, need) != 0) {
+        free(encoded);
+        respond_error(r, 500, "NO_MEMORY", "Out of memory.");
+        return;
+    }
+    respond_json(r, 200);
+    akeno_buf_reset(&r->body);
+    akeno_buf_append_str(&r->body, "{\"ok\":true");
+    json_kv_str(&r->body, "type", type, 1);
+    if (source) json_kv_str(&r->body, "source", source, 1);
+    akeno_buf_append_str(&r->body, ",\"data\":\"");
+    if (akeno_buf_append_str(&r->body, encoded) != 0 || akeno_buf_append_str(&r->body, "\"}") != 0) {
+        respond_error(r, 500, "TOO_LARGE", "The image is too large.");
+    }
+    free(encoded);
+}
+
+/* GET /api/media?id=<media id>&v=sm|md|fallback: a profile picture or game artwork from the server. */
+static void route_media(akeno_app *app, const ui_request *req, ui_response *r) {
+    char id[40] = "", variant[16] = "";
+    ui_http_query_param(req->query, "id", id, sizeof(id));
+    ui_http_query_param(req->query, "v", variant, sizeof(variant));
+    const char *file = strcmp(variant, "sm") == 0 ? "sm.webp" : strcmp(variant, "md") == 0 ? "md.webp" : "fallback.jpg";
+    if (!app->ui_client || !akeno_client_is_paired(app->ui_client)) {
+        respond_error(r, 401, "NOT_PAIRED", "This console is not paired.");
+        return;
+    }
+    unsigned char *data = NULL;
+    size_t len = 0;
+    char type[32];
+    akeno_status status = akeno_fetch_media(app->ui_client, id, file, MEDIA_MAX_BYTES, &data, &len, type, sizeof(type));
+    if (status != AKENO_OK) {
+        free(data);
+        if (status == AKENO_ERR_UNAUTHORIZED) {
+            app_mark_unpaired(app, "The server no longer accepts this console's credential.");
+            app_tick(app);
+        }
+        respond_error(r, status == AKENO_ERR_ARGUMENT ? 400 : status == AKENO_ERR_NOT_FOUND ? 404 : 502, akeno_status_name(status),
+                      "The image could not be loaded.");
+        return;
+    }
+    respond_image(r, type, data, len, NULL);
+    free(data);
+}
+
+/* GET /api/local-art?title=PPSA01234: the icon of a title installed on this console (read-only). */
+static void route_local_art(akeno_app *app, const ui_request *req, ui_response *r) {
+    char title[AKENO_TITLE_ID_MAX] = "";
+    ui_http_query_param(req->query, "title", title, sizeof(title));
+    const char *root = akeno_platform_metadata_root();
+    char source[160] = "";
+    size_t len = 0;
+    unsigned char *data = akeno_is_game_title_id(title) ? akeno_game_icon_lookup(root, title, &len, source, sizeof(source)) : NULL;
+    (void)app;
+    if (!data) {
+        respond_error(r, 404, "NOT_FOUND", "No icon for this title on this console.");
+        return;
+    }
+    respond_image(r, "image/png", data, len, source);
+    free(data);
 }
 
 /* ---- API proxy ---------------------------------------------------------------------------- */
@@ -580,6 +655,10 @@ void app_route(akeno_app *app, const ui_request *req, const char *body, size_t b
     akeno_json_doc *doc = NULL;
     if (strncmp(req->path, "/api/v1/", 8) == 0) {
         route_proxy(app, req, body, body_len, r);
+    } else if (is(req, "GET", "/api/media")) {
+        route_media(app, req, r);
+    } else if (is(req, "GET", "/api/local-art")) {
+        route_local_art(app, req, r);
     } else if (is(req, "GET", "/api/state")) {
         route_state(app, r);
     } else if (is(req, "GET", "/api/events")) {

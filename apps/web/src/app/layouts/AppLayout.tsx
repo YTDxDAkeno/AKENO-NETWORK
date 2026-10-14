@@ -23,6 +23,7 @@ import { useToast } from '../../components/Toast';
 import { useAuth, useCurrentUser } from '../../features/auth/AuthProvider';
 import { useGamepadNavigation } from '../../hooks/useGamepadNavigation';
 import { getControllerNavigation } from '../../lib/preferences';
+import { useApplyUserTheme } from '../../lib/theme';
 import { useConversations, useCurrentParty, useFriendRequests, useGroups } from '../../lib/queries';
 import { ConnectionBanner, ConnectionPill } from './ConnectionStatus';
 import { NotificationsMenu } from './NotificationsMenu';
@@ -152,6 +153,8 @@ const MOBILE_TABS = ['/', '/friends', '/messages', '/parties', '/sessions'];
 
 export function AppLayout({ children }: { children?: ReactNode }) {
   const items = useNavItems();
+  const me = useCurrentUser();
+  useApplyUserTheme(me.profile.appearance);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const location = useLocation();
   const [controller, setController] = useState(getControllerNavigation);

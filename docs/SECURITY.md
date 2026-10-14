@@ -108,6 +108,28 @@ private group. This document describes the threat model, the controls that are i
 - Production must use HTTPS; `COOKIE_SECURE=false` and open registration are refused in
   production unless explicitly overridden.
 
+### Uploaded images (Alpha 0.3)
+
+- Only signed-in website sessions with a CSRF token can upload; devices cannot. The raw-body
+  parser exists only on upload routes (8 MB); unauthenticated uploads are refused before the
+  body is read. Rate limit 12 per 10 minutes, quota 30 profile uploads per day, global size and
+  free-space limits.
+- File type is detected from the content (JPEG, PNG, WebP, GIF only); names and MIME types are
+  ignored; SVG and every active format are refused. Decoding is bounded (dimensions, pixel count,
+  timeout, one decode at a time). Images are re-encoded to WebP/JPEG with **all metadata
+  removed** (EXIF/GPS, XMP, ICC); animations become still images.
+- Storage paths come only from a random 128-bit ID and four fixed file names (no traversal);
+  files are served with fixed content types, `nosniff`, the app CSP and same-origin resource
+  policy, only to authenticated users and paired devices.
+- Replaced and deleted images are removed immediately; orphans are swept; images are deleted
+  with the account. Details: MEDIA_STORAGE.md.
+
+### Badges
+
+Badges are granted only by administrators (audited) or the operator CLI; the Administrator badge
+is derived from the role; administrators cannot grant authority badges to themselves; users can
+only feature badges they hold (validated on the server).
+
 ## Logging and audit
 
 - Structured JSON logs (pino). Cookies, authorization and CSRF headers, `Set-Cookie`,

@@ -137,4 +137,14 @@ int akeno_param_sfo_title(const unsigned char *data, size_t len, const char *exp
  */
 int akeno_game_meta_lookup(const char *root, const char *title_id, char *name, size_t name_len, char *source, size_t source_len);
 
+/*
+ * Reads the icon the console keeps for an installed title (icon0.png in the same per-title
+ * metadata folders as param.json/param.sfo), read-only. The file must be a PNG of at most
+ * AKENO_ICON_MAX_BYTES. Returns a malloc'd buffer (release with free()) and its length, and the
+ * path it came from (relative to root) in source, or NULL when no readable icon exists. The icon
+ * is only shown on this console's own page; it is never sent to the AKENO server.
+ */
+#define AKENO_ICON_MAX_BYTES (1024 * 1024)
+unsigned char *akeno_game_icon_lookup(const char *root, const char *title_id, size_t *len, char *source, size_t source_len);
+
 #endif

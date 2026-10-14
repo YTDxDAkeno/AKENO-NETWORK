@@ -23,7 +23,7 @@ export function GroupCard({ group }: { group: GroupDto }) {
     <Link to={`/groups/${group.id}`} className="card group flex flex-col gap-3 p-5 transition-shadow hover:shadow-glow" data-testid="group-card">
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
-          <span className="brand-gradient inline-flex size-11 shrink-0 items-center justify-center rounded-xl font-display text-lg font-bold text-white">
+          <span className="inline-flex size-11 shrink-0 items-center justify-center rounded-xl bg-accent-soft font-display text-lg font-bold text-accent">
             {group.name.slice(0, 1).toUpperCase()}
           </span>
           <div className="min-w-0">

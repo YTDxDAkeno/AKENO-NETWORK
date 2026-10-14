@@ -98,6 +98,16 @@ const akeno_json *akeno_response_json(const akeno_response *response);
 akeno_status akeno_request(akeno_client *client, const char *method, const char *path, const char *json_body,
                            akeno_response *response);
 
+/*
+ * Downloads one variant of an uploaded image (profile picture or game artwork) from
+ * /media/<media_id>/<file> with the device token. media_id must be 32 lowercase hex characters and
+ * file one of "sm.webp", "md.webp", "lg.webp", "fallback.jpg". The body (at most max_bytes) is
+ * stored in *data (malloc'd, release with free()) and the server's content type is checked to be
+ * image/webp or image/jpeg and copied to content_type.
+ */
+akeno_status akeno_fetch_media(akeno_client *client, const char *media_id, const char *file, size_t max_bytes,
+                               unsigned char **data, size_t *len, char *content_type, size_t content_type_len);
+
 /* ---- Device pairing ---------------------------------------------------------------------- */
 
 typedef struct {

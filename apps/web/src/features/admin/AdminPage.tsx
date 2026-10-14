@@ -20,8 +20,10 @@ import { api, errorMessage } from '../../lib/api';
 import { useAdminInvitations, useAdminStats, useAdminUsers, useAuditEvents } from '../../lib/queries';
 import { queryKeys } from '../../lib/query-keys';
 import { useCurrentUser } from '../auth/AuthProvider';
+import { BadgesDialog } from './BadgesDialog';
+import { GamesPanel } from './GamesPanel';
 
-type Tab = 'invitations' | 'users' | 'audit' | 'system';
+type Tab = 'invitations' | 'users' | 'games' | 'audit' | 'system';
 
 const STATUS_TONE: Record<RegistrationInvitationStatus, 'success' | 'neutral' | 'warning' | 'danger'> = {
   active: 'success',
@@ -198,6 +200,7 @@ function UsersPanel() {
   const queryClient = useQueryClient();
   const toast = useToast();
   const confirm = useConfirm();
+  const [badgesFor, setBadgesFor] = useState<AdminUserDto | null>(null);
   const update = useMutation({
     mutationFn: ({ id, patch }: { id: string; patch: Partial<Pick<AdminUserDto, 'status' | 'role'>> }) => api.patch(`/admin/users/${id}`, patch),
     onSuccess: () => {
@@ -242,6 +245,9 @@ function UsersPanel() {
               />
               <div className="flex flex-wrap items-center gap-2">
                 {user.role === 'admin' ? <Badge tone="violet">Admin</Badge> : null}
+                <Button size="sm" variant="ghost" onClick={() => setBadgesFor(user)}>
+                  Badges
+                </Button>
                 {user.status === 'suspended' ? <Badge tone="danger">Suspended</Badge> : null}
                 {user.id !== me.id ? (
                   <>
@@ -291,6 +297,7 @@ function UsersPanel() {
           ))}
         </ul>
       )}
+      {badgesFor ? <BadgesDialog user={badgesFor} isSelf={badgesFor.id === me.id} onClose={() => setBadgesFor(null)} /> : null}
     </Card>
   );
 }
@@ -347,6 +354,13 @@ function SystemPanel() {
     { label: 'Connected now', value: `${data.realtime.connectedUsers} users`, detail: `${data.realtime.connections} live connections` },
     { label: 'Server memory', value: formatBytes(data.process.rssBytes), detail: `Heap ${formatBytes(data.process.heapUsedBytes)} · Node ${data.process.nodeVersion}` },
     { label: 'Database pool', value: `${data.database.totalConnections} connections`, detail: `${data.database.idleConnections} idle · ${data.database.waitingRequests} waiting` },
+    {
+      label: 'Uploaded media',
+      value: data.media.available ? formatBytes(data.media.bytes) : 'Unavailable',
+      detail: data.media.available
+        ? `${data.media.objects} images · limit ${formatBytes(data.media.limitBytes)}${data.media.freeBytes !== null ? ` · ${formatBytes(data.media.freeBytes)} free on disk` : ''}`
+        : 'The media directory is not writable; uploads are disabled.',
+    },
     { label: 'Uptime', value: `${Math.floor(data.process.uptimeSeconds / 3600)} h ${Math.floor((data.process.uptimeSeconds % 3600) / 60)} min`, detail: 'Since last restart' },
   ];
   return (
@@ -378,6 +392,7 @@ export function AdminPage() {
         items={[
           { value: 'invitations', label: 'Invitations' },
           { value: 'users', label: 'Members' },
+          { value: 'games', label: 'Games' },
           { value: 'audit', label: 'Audit log' },
           { value: 'system', label: 'System' },
         ]}
@@ -385,6 +400,7 @@ export function AdminPage() {
       <div role="tabpanel" aria-label={tab}>
         {tab === 'invitations' ? <InvitationsPanel /> : null}
         {tab === 'users' ? <UsersPanel /> : null}
+        {tab === 'games' ? <GamesPanel /> : null}
         {tab === 'audit' ? <AuditPanel /> : null}
         {tab === 'system' ? <SystemPanel /> : null}
       </div>

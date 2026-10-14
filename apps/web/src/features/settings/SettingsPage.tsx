@@ -3,7 +3,6 @@ import { Check, KeyRound, Laptop, LogOut, Plus, Save, Settings, ShieldAlert, Sma
 import { useState, type FormEvent } from 'react';
 import { useSearchParams } from 'react-router';
 import {
-  AVATAR_PRESETS,
   GAME_ACTIVITY,
   LIMITS,
   checkPasswordQuality,
@@ -11,11 +10,9 @@ import {
   type CurrentUser,
   type PrivacySettings,
 } from '@akeno/shared';
-import { Avatar } from '../../components/Avatar';
 import { Badge } from '../../components/Badge';
 import { Button } from '../../components/Button';
 import { Card, CardHeader } from '../../components/Card';
-import { cn } from '../../components/cn';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { SelectField, Switch, TextArea, TextField } from '../../components/Field';
 import { Modal } from '../../components/Modal';
@@ -31,6 +28,7 @@ import { useAuthSessions, useGameActivity } from '../../lib/queries';
 import { queryKeys } from '../../lib/query-keys';
 import { useAuth, useCurrentUser } from '../auth/AuthProvider';
 import { PairedDevicesCard } from '../devices/PairedDevicesCard';
+import { AppearanceCard, ProfileMediaCard } from './ProfileCustomization';
 
 type Tab = 'profile' | 'privacy' | 'security' | 'preferences';
 
@@ -41,7 +39,6 @@ function ProfileSettings() {
   const queryClient = useQueryClient();
   const [form, setForm] = useState({
     displayName: user.profile.displayName,
-    avatar: user.profile.avatar,
     statusMessage: user.profile.statusMessage,
     bio: user.profile.bio,
     activity: user.profile.activity ?? '',
@@ -54,7 +51,6 @@ function ProfileSettings() {
     mutationFn: () =>
       api.patch<CurrentUser>('/profile', {
         displayName: form.displayName,
-        avatar: form.avatar,
         statusMessage: form.statusMessage,
         bio: form.bio,
         activity: form.activity.trim() ? form.activity : null,
@@ -87,136 +83,114 @@ function ProfileSettings() {
   };
 
   return (
-    <form onSubmit={onSubmit} className="flex flex-col gap-6" noValidate>
-      <Card>
-        <CardHeader title="Identity" description="How other players see you across the network." />
-        <div className="grid gap-5 p-5 md:grid-cols-[auto_1fr]">
-          <Avatar avatar={form.avatar} name={form.displayName || user.onlineId} size="xl" className="mx-auto" />
-          <div className="flex flex-col gap-4">
-            <TextField
-              label="Display name"
-              name="displayName"
-              value={form.displayName}
-              maxLength={LIMITS.displayNameMax}
-              onChange={(event) => setForm((current) => ({ ...current, displayName: event.target.value }))}
-              error={errors.displayName}
-              hint={`Your Online ID @${user.onlineId} stays the same.`}
-            />
-            <TextField
-              label="Status message"
-              name="statusMessage"
-              value={form.statusMessage}
-              maxLength={LIMITS.statusMessageMax}
-              onChange={(event) => setForm((current) => ({ ...current, statusMessage: event.target.value }))}
-              error={errors.statusMessage}
-              placeholder="Looking for a squad tonight"
-            />
-          </div>
-        </div>
-        <fieldset className="border-t border-line p-5">
-          <legend className="mb-3 text-sm font-medium">Avatar</legend>
-          <div className="grid grid-cols-4 gap-3 sm:grid-cols-8" role="radiogroup" aria-label="Avatar">
-            {AVATAR_PRESETS.map((preset) => {
-              const selected = preset.id === form.avatar;
-              return (
-                <button
-                  key={preset.id}
-                  type="button"
-                  role="radio"
-                  aria-checked={selected}
-                  aria-label={preset.label}
-                  onClick={() => setForm((current) => ({ ...current, avatar: preset.id }))}
-                  className={cn(
-                    'flex flex-col items-center gap-1.5 rounded-xl border p-2 text-xs transition-colors',
-                    selected ? 'border-accent bg-accent-soft text-ink' : 'border-transparent text-muted hover:bg-surface-2',
-                  )}
-                >
-                  <Avatar avatar={preset.id} name={preset.label} size="md" />
-                  {preset.label}
-                </button>
-              );
-            })}
-          </div>
-        </fieldset>
-      </Card>
-
-      <Card>
-        <CardHeader title="About you" />
-        <div className="flex flex-col gap-4 p-5">
-          <TextArea
-            label="Bio"
-            name="bio"
-            value={form.bio}
-            maxLength={LIMITS.bioMax}
-            onChange={(event) => setForm((current) => ({ ...current, bio: event.target.value }))}
-            error={errors.bio}
-            hint={`${form.bio.length}/${LIMITS.bioMax} characters`}
-            placeholder="Tell your friends what you like to play."
-          />
-          <TextField
-            label="What are you playing?"
-            name="activity"
-            value={form.activity}
-            maxLength={LIMITS.activityMax}
-            onChange={(event) => setForm((current) => ({ ...current, activity: event.target.value }))}
-            error={errors.activity}
-            hint="Self-reported and shown with your presence. AKENO NETWORK does not detect what you play on any console or PC."
-            placeholder="Playing a co-op adventure"
-          />
-          <div>
-            <p className="mb-1.5 text-sm font-medium">Favorite games</p>
-            <div className="flex gap-2">
-              <label className="sr-only" htmlFor="favorite-game-input">
-                Add a favorite game
-              </label>
-              <input
-                id="favorite-game-input"
-                value={gameDraft}
-                maxLength={LIMITS.favoriteGameNameMax}
-                onChange={(event) => setGameDraft(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault();
-                    addGame();
-                  }
-                }}
-                placeholder="Add a game and press Enter"
-                disabled={form.favoriteGames.length >= LIMITS.favoriteGamesMax}
-                className="h-11 flex-1 rounded-xl border border-line-strong bg-surface-2 px-3.5 text-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 disabled:opacity-60"
+    <div className="flex flex-col gap-6">
+      <ProfileMediaCard />
+      <form onSubmit={onSubmit} className="flex flex-col gap-6" noValidate>
+        <Card>
+          <CardHeader title="Identity" description="How other players see you across the network." />
+          <div className="grid gap-5 p-5">
+            <div className="flex flex-col gap-4">
+              <TextField
+                label="Display name"
+                name="displayName"
+                value={form.displayName}
+                maxLength={LIMITS.displayNameMax}
+                onChange={(event) => setForm((current) => ({ ...current, displayName: event.target.value }))}
+                error={errors.displayName}
+                hint={`Your Online ID @${user.onlineId} stays the same.`}
               />
-              <Button onClick={addGame} disabled={!gameDraft.trim() || form.favoriteGames.length >= LIMITS.favoriteGamesMax} icon={<Plus aria-hidden className="size-4" />}>
-                Add
-              </Button>
+              <TextField
+                label="Status message"
+                name="statusMessage"
+                value={form.statusMessage}
+                maxLength={LIMITS.statusMessageMax}
+                onChange={(event) => setForm((current) => ({ ...current, statusMessage: event.target.value }))}
+                error={errors.statusMessage}
+                placeholder="Looking for a squad tonight"
+              />
             </div>
-            <p className="mt-1.5 text-xs text-muted">
-              Up to {LIMITS.favoriteGamesMax} games. {form.favoriteGames.length}/{LIMITS.favoriteGamesMax} used.
-            </p>
-            {form.favoriteGames.length > 0 ? (
-              <ul className="mt-3 flex flex-wrap gap-2">
-                {form.favoriteGames.map((game) => (
-                  <li key={game} className="inline-flex items-center gap-1 rounded-lg border border-line bg-surface-2 py-1 pl-2.5 pr-1 text-sm">
-                    {game}
-                    <button
-                      type="button"
-                      onClick={() => setForm((current) => ({ ...current, favoriteGames: current.favoriteGames.filter((entry) => entry !== game) }))}
-                      className="rounded p-0.5 text-subtle hover:text-ink"
-                      aria-label={`Remove ${game}`}
-                    >
-                      <X aria-hidden className="size-3.5" />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            ) : null}
           </div>
+        </Card>
+
+        <Card>
+          <CardHeader title="About you" />
+          <div className="flex flex-col gap-4 p-5">
+            <TextArea
+              label="Bio"
+              name="bio"
+              value={form.bio}
+              maxLength={LIMITS.bioMax}
+              onChange={(event) => setForm((current) => ({ ...current, bio: event.target.value }))}
+              error={errors.bio}
+              hint={`${form.bio.length}/${LIMITS.bioMax} characters`}
+              placeholder="Tell your friends what you like to play."
+            />
+            <TextField
+              label="What are you playing?"
+              name="activity"
+              value={form.activity}
+              maxLength={LIMITS.activityMax}
+              onChange={(event) => setForm((current) => ({ ...current, activity: event.target.value }))}
+              error={errors.activity}
+              hint="Self-reported and shown with your presence. AKENO NETWORK does not detect what you play on any console or PC."
+              placeholder="Playing a co-op adventure"
+            />
+            <div>
+              <p className="mb-1.5 text-sm font-medium">Favorite games</p>
+              <div className="flex gap-2">
+                <label className="sr-only" htmlFor="favorite-game-input">
+                  Add a favorite game
+                </label>
+                <input
+                  id="favorite-game-input"
+                  value={gameDraft}
+                  maxLength={LIMITS.favoriteGameNameMax}
+                  onChange={(event) => setGameDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      addGame();
+                    }
+                  }}
+                  placeholder="Add a game and press Enter"
+                  disabled={form.favoriteGames.length >= LIMITS.favoriteGamesMax}
+                  className="h-11 flex-1 rounded-xl border border-line-strong bg-surface-2 px-3.5 text-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 disabled:opacity-60"
+                />
+                <Button onClick={addGame} disabled={!gameDraft.trim() || form.favoriteGames.length >= LIMITS.favoriteGamesMax} icon={<Plus aria-hidden className="size-4" />}>
+                  Add
+                </Button>
+              </div>
+              <p className="mt-1.5 text-xs text-muted">
+                Up to {LIMITS.favoriteGamesMax} games. {form.favoriteGames.length}/{LIMITS.favoriteGamesMax} used.
+              </p>
+              {form.favoriteGames.length > 0 ? (
+                <ul className="mt-3 flex flex-wrap gap-2">
+                  {form.favoriteGames.map((game) => (
+                    <li key={game} className="inline-flex items-center gap-1 rounded-lg border border-line bg-surface-2 py-1 pl-2.5 pr-1 text-sm">
+                      {game}
+                      <button
+                        type="button"
+                        onClick={() => setForm((current) => ({ ...current, favoriteGames: current.favoriteGames.filter((entry) => entry !== game) }))}
+                        className="rounded p-0.5 text-subtle hover:text-ink"
+                        aria-label={`Remove ${game}`}
+                      >
+                        <X aria-hidden className="size-3.5" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          </div>
+        </Card>
+        <div className="flex justify-end">
+          <Button type="submit" variant="primary" loading={save.isPending} icon={<Save aria-hidden className="size-4" />}>
+            Save profile
+          </Button>
         </div>
-      </Card>
-      <div className="flex justify-end">
-        <Button type="submit" variant="primary" loading={save.isPending} icon={<Save aria-hidden className="size-4" />}>
-          Save profile
-        </Button>
-      </div>
-    </form>
+      </form>
+      <AppearanceCard />
+    </div>
   );
 }
 

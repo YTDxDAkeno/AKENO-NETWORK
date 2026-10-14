@@ -10,7 +10,7 @@ const base =
   'inline-flex items-center justify-center gap-2 rounded-xl font-medium transition-[background-color,box-shadow,color,transform] duration-150 select-none disabled:cursor-not-allowed disabled:opacity-55 active:translate-y-px';
 
 const variants: Record<Variant, string> = {
-  primary: 'brand-gradient text-on-accent shadow-[0_8px_24px_-12px_rgb(79_124_255/0.8)] hover:brightness-110',
+  primary: 'bg-accent text-on-accent shadow-sm hover:bg-accent-strong',
   secondary: 'border border-line-strong bg-surface-2 text-ink hover:bg-surface-3',
   ghost: 'text-muted hover:bg-surface-2 hover:text-ink',
   danger: 'bg-danger text-white hover:brightness-110',

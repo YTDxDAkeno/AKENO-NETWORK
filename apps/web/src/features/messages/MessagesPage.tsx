@@ -74,7 +74,7 @@ function ConversationItem({ conversation }: { conversation: DirectConversationDt
         cn('flex items-center gap-3 rounded-xl px-3 py-2.5 transition-colors', isActive ? 'bg-accent-soft' : 'hover:bg-surface-2')
       }
     >
-      <Avatar avatar={conversation.otherUser.avatar} name={conversation.otherUser.displayName} status={conversation.otherUser.presence.status} />
+      <Avatar avatar={conversation.otherUser.avatar} image={conversation.otherUser.avatarImage} name={conversation.otherUser.displayName} status={conversation.otherUser.presence.status} />
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline justify-between gap-2">
           <span className={cn('truncate text-sm', conversation.unreadCount > 0 ? 'font-semibold text-ink' : 'font-medium text-ink')}>
@@ -148,7 +148,7 @@ export function MessagesPage() {
               <Link to="/messages" className="rounded-lg p-1.5 text-muted hover:bg-surface-2 md:hidden" aria-label="Back to conversations">
                 <ArrowLeft aria-hidden className="size-5" />
               </Link>
-              <Avatar avatar={active.otherUser.avatar} name={active.otherUser.displayName} status={active.otherUser.presence.status} />
+              <Avatar avatar={active.otherUser.avatar} image={active.otherUser.avatarImage} name={active.otherUser.displayName} status={active.otherUser.presence.status} />
               <div className="min-w-0">
                 <Link to={`/u/${active.otherUser.onlineId}`} className="block truncate font-semibold hover:underline">
                   {active.otherUser.displayName}

@@ -146,7 +146,7 @@ export function GroupDetailPage() {
         <Link to="/groups" className="mt-1 rounded-lg p-1.5 text-muted hover:bg-surface-2" aria-label="Back to groups">
           <ArrowLeft aria-hidden className="size-5" />
         </Link>
-        <span className="brand-gradient inline-flex size-12 shrink-0 items-center justify-center rounded-xl font-display text-xl font-bold text-white">
+        <span className="inline-flex size-12 shrink-0 items-center justify-center rounded-xl bg-accent-soft font-display text-xl font-bold text-accent">
           {data.name.slice(0, 1).toUpperCase()}
         </span>
         <div className="min-w-0">

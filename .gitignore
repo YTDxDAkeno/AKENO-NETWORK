@@ -35,3 +35,6 @@ backups/
 clients/ps5/build-*/
 clients/ps5/third_party/
 clients/ps5/ps5-smoke/*.elf
+
+# Local media storage (development default MEDIA_DIR)
+data/

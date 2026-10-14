@@ -14,6 +14,7 @@ export default defineConfig({
     proxy: {
       '/api': { target: API_TARGET },
       '/health': { target: API_TARGET },
+      '/media': { target: API_TARGET },
       '/ws': { target: API_TARGET.replace(/^http/, 'ws'), ws: true },
     },
   },

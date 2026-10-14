@@ -26,7 +26,7 @@ export function PresenceMenu({ compact = false }: { compact?: boolean }) {
       triggerClassName="gap-2 px-1.5 py-1 hover:bg-surface-2"
       trigger={
         <>
-          <Avatar avatar={user.profile.avatar} name={user.profile.displayName} size="sm" status={shown} />
+          <Avatar avatar={user.profile.avatar} image={user.profile.avatarImage} name={user.profile.displayName} size="sm" status={shown} />
           {compact ? null : (
             <span className="hidden text-left md:block">
               <span className="block max-w-32 truncate text-sm font-medium text-ink">{user.profile.displayName}</span>

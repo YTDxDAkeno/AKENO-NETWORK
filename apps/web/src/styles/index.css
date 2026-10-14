@@ -22,7 +22,7 @@
   --color-accent-strong: var(--akeno-accent-strong);
   --color-accent-soft: var(--akeno-accent-soft);
   --color-violet: var(--akeno-violet);
-  --color-on-accent: #ffffff;
+  --color-on-accent: var(--akeno-on-accent);
   --color-danger: var(--akeno-danger);
   --color-danger-soft: var(--akeno-danger-soft);
   --color-warning: var(--akeno-warning);
@@ -32,8 +32,10 @@
   --color-status-dnd: #ef4444;
   --color-status-offline: var(--akeno-status-offline);
 
+  --color-tint: var(--akeno-profile-tint);
+
   --shadow-card: var(--akeno-shadow-card);
-  --shadow-glow: 0 0 0 1px rgb(79 124 255 / 0.35), 0 10px 40px -12px rgb(79 124 255 / 0.55);
+  --shadow-glow: 0 0 0 1px var(--akeno-accent-soft), 0 10px 40px -12px var(--akeno-accent-soft);
 }
 
 @layer base {
@@ -51,6 +53,8 @@
     --akeno-accent: #4f7cff;
     --akeno-accent-strong: #3d66f0;
     --akeno-accent-soft: rgb(79 124 255 / 0.16);
+    --akeno-on-accent: #ffffff;
+    --akeno-profile-tint: #0d1323;
     --akeno-violet: #8b5cf6;
     --akeno-danger: #f43f5e;
     --akeno-danger-soft: rgb(244 63 94 / 0.14);
@@ -58,9 +62,8 @@
     --akeno-success: #22c55e;
     --akeno-status-offline: #5b6584;
     --akeno-shadow-card: 0 1px 0 0 rgb(255 255 255 / 0.03) inset, 0 12px 32px -18px rgb(0 0 0 / 0.8);
-    --akeno-backdrop:
-      radial-gradient(1100px 600px at -10% -20%, rgb(79 124 255 / 0.14), transparent 60%),
-      radial-gradient(900px 500px at 110% -10%, rgb(139 92 246 / 0.12), transparent 60%);
+    /* One faint light source at the top; the interface itself stays flat. */
+    --akeno-backdrop: radial-gradient(1200px 520px at 50% -18%, rgb(120 140 200 / 0.07), transparent 70%);
   }
 
   :root[data-theme='light'] {
@@ -77,6 +80,8 @@
     --akeno-accent: #3b63f0;
     --akeno-accent-strong: #2f53d6;
     --akeno-accent-soft: rgb(59 99 240 / 0.12);
+    --akeno-on-accent: #ffffff;
+    --akeno-profile-tint: #ffffff;
     --akeno-violet: #7c3aed;
     --akeno-danger: #e11d48;
     --akeno-danger-soft: rgb(225 29 72 / 0.1);
@@ -84,9 +89,7 @@
     --akeno-success: #15803d;
     --akeno-status-offline: #8a93ad;
     --akeno-shadow-card: 0 1px 2px rgb(15 23 42 / 0.06), 0 12px 28px -20px rgb(15 23 42 / 0.25);
-    --akeno-backdrop:
-      radial-gradient(1100px 600px at -10% -20%, rgb(59 99 240 / 0.08), transparent 60%),
-      radial-gradient(900px 500px at 110% -10%, rgb(124 58 237 / 0.07), transparent 60%);
+    --akeno-backdrop: none;
   }
 
   html {
@@ -118,7 +121,7 @@
   }
 
   ::selection {
-    background: rgb(79 124 255 / 0.35);
+    background: var(--akeno-accent-soft);
   }
 
   dialog::backdrop {
@@ -150,6 +153,23 @@
     background-image: linear-gradient(135deg, var(--akeno-accent) 0%, var(--akeno-violet) 100%);
   }
 
+  /* Profile and party surfaces tinted with the owner's theme. */
+  .card-tinted {
+    background-color: color-mix(in srgb, var(--akeno-profile-tint) 55%, var(--akeno-surface));
+    border: 1px solid var(--akeno-line);
+    border-radius: 1rem;
+    box-shadow: var(--akeno-shadow-card);
+  }
+
+  /* Uploaded and game images fade in once decoded instead of popping in. */
+  .img-fade {
+    opacity: 0;
+    transition: opacity 160ms ease-out;
+  }
+  .img-fade[data-loaded='true'] {
+    opacity: 1;
+  }
+
   .text-gradient {
     background-image: linear-gradient(120deg, #8fb0ff 0%, #b79bff 100%);
     -webkit-background-clip: text;
@@ -176,10 +196,10 @@
 
 @keyframes akeno-pulse-ring {
   0% {
-    box-shadow: 0 0 0 0 rgb(79 124 255 / 0.45);
+    box-shadow: 0 0 0 0 var(--akeno-accent-soft);
   }
   100% {
-    box-shadow: 0 0 0 10px rgb(79 124 255 / 0);
+    box-shadow: 0 0 0 10px transparent;
   }
 }
 

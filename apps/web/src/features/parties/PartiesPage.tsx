@@ -1,7 +1,11 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Crown, DoorOpen, Lock, MicOff, MoreHorizontal, PartyPopper, Plus, UserMinus, UserPlus, Users, XCircle } from 'lucide-react';
+import { Crown, DoorOpen, Lock, MoreHorizontal, PartyPopper, Plus, UserMinus, UserPlus, Users, XCircle } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
-import { LIMITS, type PartyDto, type PartyPrivacy } from '@akeno/shared';
+import { LIMITS, type PartyDto, type PartyMemberDto, type PartyPrivacy } from '@akeno/shared';
+import { Link } from 'react-router';
+import { Avatar } from '../../components/Avatar';
+import { GameActivityLine } from '../../components/GameActivity';
+import { MemberVolumeControl, PartyVoicePanel, VoiceStateLine, useMemberVoice } from '../voice/PartyVoice';
 import { Badge } from '../../components/Badge';
 import { Button } from '../../components/Button';
 import { Card, CardHeader } from '../../components/Card';
@@ -10,9 +14,8 @@ import { SelectField, TextField } from '../../components/Field';
 import { Menu } from '../../components/Menu';
 import { PageHeader } from '../../components/PageHeader';
 import { Skeleton } from '../../components/Spinner';
-import { EmptyState, ErrorState, Notice } from '../../components/States';
+import { EmptyState, ErrorState } from '../../components/States';
 import { useToast } from '../../components/Toast';
-import { UserRow } from '../../components/UserRow';
 import { api, errorMessage } from '../../lib/api';
 import { useCurrentParty, useInvitations, useJoinableParties } from '../../lib/queries';
 import { queryKeys } from '../../lib/query-keys';
@@ -53,7 +56,7 @@ function CreatePartyCard() {
   };
   return (
     <Card>
-      <CardHeader title="Start a party" description="A private hangout for you and your friends with its own text chat." icon={<PartyPopper className="size-5" />} />
+      <CardHeader title="Start a party" description="A private hangout for you and your friends with its own chat." icon={<PartyPopper className="size-5" />} />
       <form className="grid gap-4 p-5 sm:grid-cols-3" onSubmit={onSubmit}>
         <TextField
           label="Party name"
@@ -90,6 +93,46 @@ function CreatePartyCard() {
   );
 }
 
+function MemberTile({ member, party, isLeader, meId, onAction }: { member: PartyMemberDto; party: PartyDto; isLeader: boolean; meId: string; onAction: (run: () => Promise<unknown>) => void }) {
+  const game = member.user.presence.game;
+  const voice = useMemberVoice(member);
+  return (
+    <li className="flex items-center gap-3 rounded-xl border border-line bg-surface/60 p-3" data-testid="party-member" data-user-id={member.user.id}>
+      <Avatar
+        avatar={member.user.avatar}
+        image={member.user.avatarImage}
+        name={member.user.displayName}
+        size="lg"
+        status={member.user.presence.status}
+        speaking={voice.speaking}
+      />
+      <div className="min-w-0 flex-1">
+        <p className="flex items-center gap-1.5 truncate font-medium text-ink">
+          <Link to={`/u/${member.user.onlineId}`} className="truncate hover:underline">
+            {member.user.displayName}
+          </Link>
+          {member.isLeader ? <Crown aria-label="Party leader" className="size-3.5 shrink-0 text-warning" /> : null}
+          {member.user.id === meId ? <span className="text-xs font-normal text-subtle">(you)</span> : null}
+        </p>
+        <VoiceStateLine state={voice} />
+        {game ? <GameActivityLine game={game} className="mt-0.5 max-w-full text-xs" /> : null}
+      </div>
+      {voice.connected && member.user.id !== meId ? <MemberVolumeControl member={member} /> : null}
+      {isLeader && member.user.id !== meId ? (
+        <Menu
+          label={`Manage ${member.user.displayName}`}
+          triggerClassName="p-1.5 text-muted hover:bg-surface-2"
+          trigger={<MoreHorizontal aria-hidden className="size-4" />}
+          items={[
+            { label: 'Make party leader', icon: <Crown />, onSelect: () => onAction(() => api.post(`/parties/${party.id}/leader`, { userId: member.user.id })) },
+            { label: 'Remove from party', icon: <UserMinus />, tone: 'danger', onSelect: () => onAction(() => api.delete(`/parties/${party.id}/members/${member.user.id}`)) },
+          ]}
+        />
+      ) : null}
+    </li>
+  );
+}
+
 function CurrentParty({ party }: { party: PartyDto }) {
   const me = useCurrentUser();
   const toast = useToast();
@@ -97,28 +140,74 @@ function CurrentParty({ party }: { party: PartyDto }) {
   const refresh = usePartyRefresh();
   const [inviteOpen, setInviteOpen] = useState(false);
   const isLeader = party.leaderId === me.id;
+  const leader = party.members.find((member) => member.isLeader);
   const action = useMutation({
     mutationFn: (run: () => Promise<unknown>) => run(),
     onSuccess: refresh,
     onError: (error) => toast.error('Action failed', errorMessage(error)),
   });
 
+  const leave = async () => {
+    const ok = await confirm({
+      title: 'Leave the party?',
+      message: party.memberCount === 1 ? 'You are the last member, so the party and its chat will end.' : 'You can rejoin later if the party is still running.',
+      confirmLabel: 'Leave party',
+    });
+    if (ok) action.mutate(() => api.post(`/parties/${party.id}/leave`));
+  };
+  const close = async () => {
+    const ok = await confirm({ title: 'Close the party for everyone?', message: 'All members are removed and the party chat is deleted.', confirmLabel: 'Close party' });
+    if (ok) action.mutate(() => api.post(`/parties/${party.id}/close`));
+  };
+
   return (
-    <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
-      <Card className="flex h-[65dvh] min-h-[420px] flex-col overflow-hidden lg:h-[calc(100dvh-14rem)]">
-        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-3.5">
-          <div className="min-w-0">
-            <h2 className="truncate text-lg font-semibold" data-testid="party-name">
-              {party.name}
-            </h2>
-            <p className="text-xs text-muted">
-              {party.memberCount}/{party.maxMembers} members · {party.privacy === 'friends' ? 'Friends can join' : 'Invited people only'}
-            </p>
+    <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
+      <section className="card-tinted flex min-w-0 flex-col" aria-labelledby="party-name">
+        <header className="flex flex-col gap-4 border-b border-line px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-accent-soft text-accent">
+              <PartyPopper aria-hidden className="size-5" />
+            </span>
+            <div className="min-w-0">
+              <h2 id="party-name" className="truncate text-lg font-semibold" data-testid="party-name">
+                {party.name}
+              </h2>
+              <p className="truncate text-xs text-muted">
+                Led by {leader?.user.displayName ?? 'unknown'} · {party.memberCount}/{party.maxMembers} members ·{' '}
+                {party.privacy === 'friends' ? (
+                  'Friends can join'
+                ) : (
+                  <span className="inline-flex items-center gap-1">
+                    <Lock aria-hidden className="size-3" /> Invited people only
+                  </span>
+                )}
+              </p>
+            </div>
           </div>
-          <Badge tone="neutral" icon={<MicOff aria-hidden className="size-3" />}>
-            Text chat only
-          </Badge>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="secondary" size="sm" onClick={() => setInviteOpen(true)} disabled={party.memberCount >= party.maxMembers} icon={<UserPlus aria-hidden className="size-4" />}>
+              Invite
+            </Button>
+            <Button size="sm" variant="ghost" icon={<DoorOpen aria-hidden className="size-4" />} onClick={() => void leave()}>
+              Leave
+            </Button>
+            {isLeader ? (
+              <Button size="sm" variant="ghost" className="text-danger hover:text-danger" icon={<XCircle aria-hidden className="size-4" />} onClick={() => void close()}>
+                Close
+              </Button>
+            ) : null}
+          </div>
         </header>
+        <PartyVoicePanel party={party} />
+        <ul className="grid gap-3 p-4 sm:grid-cols-2" data-testid="party-members">
+          {party.members.map((member) => (
+            <MemberTile key={member.user.id} member={member} party={party} isLeader={isLeader} meId={me.id} onAction={(run) => action.mutate(run)} />
+          ))}
+        </ul>
+      </section>
+
+      <Card className="flex h-[60dvh] min-h-[420px] flex-col overflow-hidden xl:h-[calc(100dvh-14rem)]">
+        <h2 className="border-b border-line px-5 py-3.5 text-sm font-semibold">Party chat</h2>
         <ChatPanel
           conversationId={party.conversationId!}
           participants={party.members.map((member) => member.user)}
@@ -126,94 +215,6 @@ function CurrentParty({ party }: { party: PartyDto }) {
           emptyDescription="Messages here are visible to everyone in the party."
         />
       </Card>
-
-      <div className="flex flex-col gap-4">
-        <Card>
-          <h2 className="border-b border-line px-5 py-3.5 text-sm font-semibold">Members</h2>
-          <ul className="divide-y divide-line" data-testid="party-members">
-            {party.members.map((member) => (
-              <li key={member.user.id} className="px-4 py-2.5">
-                <UserRow
-                  user={member.user}
-                  presence={member.user.presence}
-                  size="sm"
-                  secondary={
-                    member.isLeader ? (
-                      <span className="inline-flex items-center gap-1 text-warning">
-                        <Crown aria-hidden className="size-3" /> Party leader
-                      </span>
-                    ) : undefined
-                  }
-                  actions={
-                    isLeader && member.user.id !== me.id ? (
-                      <Menu
-                        label={`Manage ${member.user.displayName}`}
-                        triggerClassName="p-1.5 text-muted hover:bg-surface-2"
-                        trigger={<MoreHorizontal aria-hidden className="size-4" />}
-                        items={[
-                          {
-                            label: 'Make party leader',
-                            icon: <Crown />,
-                            onSelect: () => action.mutate(() => api.post(`/parties/${party.id}/leader`, { userId: member.user.id })),
-                          },
-                          {
-                            label: 'Remove from party',
-                            icon: <UserMinus />,
-                            tone: 'danger',
-                            onSelect: () => action.mutate(() => api.delete(`/parties/${party.id}/members/${member.user.id}`)),
-                          },
-                        ]}
-                      />
-                    ) : null
-                  }
-                />
-              </li>
-            ))}
-          </ul>
-          <div className="flex flex-wrap gap-2 border-t border-line p-4">
-            <Button variant="primary" size="sm" onClick={() => setInviteOpen(true)} disabled={party.memberCount >= party.maxMembers} icon={<UserPlus aria-hidden className="size-4" />}>
-              Invite friends
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              icon={<DoorOpen aria-hidden className="size-4" />}
-              onClick={async () => {
-                const ok = await confirm({
-                  title: 'Leave the party?',
-                  message: party.memberCount === 1 ? 'You are the last member, so the party and its chat will end.' : 'You can rejoin later if the party is still running.',
-                  confirmLabel: 'Leave party',
-                });
-                if (ok) action.mutate(() => api.post(`/parties/${party.id}/leave`));
-              }}
-            >
-              Leave
-            </Button>
-            {isLeader ? (
-              <Button
-                size="sm"
-                variant="ghost"
-                className="text-danger hover:text-danger"
-                icon={<XCircle aria-hidden className="size-4" />}
-                onClick={async () => {
-                  const ok = await confirm({
-                    title: 'Close the party for everyone?',
-                    message: 'All members are removed and the party chat is deleted.',
-                    confirmLabel: 'Close party',
-                  });
-                  if (ok) action.mutate(() => api.post(`/parties/${party.id}/close`));
-                }}
-              >
-                Close party
-              </Button>
-            ) : null}
-          </div>
-        </Card>
-        <Notice icon={<MicOff className="size-4" />}>
-          <strong className="font-medium">Voice chat is not available.</strong> {party.voice.reason} AKENO NETWORK parties are
-          separate from console party systems.
-        </Notice>
-      </div>
       {inviteOpen ? (
         <InviteDialog
           open
@@ -300,7 +301,7 @@ export function PartiesPage() {
   const party = useCurrentParty();
   return (
     <>
-      <PageHeader title="Parties" description="Hang out with friends in a private party with shared text chat." icon={<PartyPopper />} />
+      <PageHeader title="Parties" description="Hang out with friends in a private party." icon={<PartyPopper />} />
       {party.isPending ? (
         <Skeleton className="h-64" />
       ) : party.isError ? (

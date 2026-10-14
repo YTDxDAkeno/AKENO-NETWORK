@@ -43,8 +43,11 @@ ENV NODE_ENV=production \
     PORT=3000 \
     WEB_DIST_DIR=/app/web \
     MIGRATIONS_DIR=/app/dist/migrations \
-    MIGRATE_ON_START=true
+    MIGRATE_ON_START=true \
+    MEDIA_DIR=/data/media
 WORKDIR /app
+# Mount point of the media volume; a new named volume inherits this ownership.
+RUN mkdir -p /data/media && chown node:node /data/media
 COPY --from=build --chown=node:node /deploy/package.json ./package.json
 COPY --from=build --chown=node:node /deploy/node_modules ./node_modules
 COPY --from=build --chown=node:node /repo/apps/server/dist ./dist

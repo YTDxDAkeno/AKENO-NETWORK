@@ -9,7 +9,9 @@ import { Skeleton } from '../../components/Spinner';
 import { EmptyState, ErrorState } from '../../components/States';
 import { UserRow } from '../../components/UserRow';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
-import { presenceLabel } from '../../lib/format';
+import { formatDuration, presenceLabel, secondsSince } from '../../lib/format';
+import { GameArt } from '../../components/GameArt';
+import { gameTitle, useNow } from '../../components/GameActivity';
 import { describeNotification } from '../../lib/notifications';
 import { useConversations, useCurrentParty, useFriends, useGameSessions, useInvitations, useNotifications } from '../../lib/queries';
 import { useCurrentUser } from '../auth/AuthProvider';
@@ -75,6 +77,41 @@ function OnlineFriends() {
   );
 }
 
+/** Friends whose consoles report a game right now, with the game's artwork. */
+function PlayingNow() {
+  const friends = useFriends();
+  const now = useNow();
+  const playing = (friends.data ?? []).filter((friend) => friend.presence.game);
+  if (playing.length === 0) return null;
+  return (
+    <section aria-labelledby="playing-now-heading">
+      <h2 id="playing-now-heading" className="mb-3 text-lg font-semibold">
+        Friends playing now
+      </h2>
+      <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3" data-testid="playing-now">
+        {playing.slice(0, 6).map((friend) => {
+          const game = friend.presence.game!;
+          return (
+            <li key={friend.id}>
+              <Link to={`/u/${friend.onlineId}`} className="card flex items-center gap-3 p-3 transition-colors hover:bg-surface-2">
+                <GameArt art={game.art} name={gameTitle(game)} className="size-16" sizes="64px" decorative />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-semibold text-ink">{gameTitle(game)}</span>
+                  <span className="mt-0.5 flex items-center gap-1.5 text-sm text-muted">
+                    <Avatar avatar={friend.avatar} image={friend.avatarImage} name={friend.displayName} size="xs" />
+                    <span className="truncate">{friend.displayName}</span>
+                  </span>
+                  <span className="block text-xs text-success">for {formatDuration(secondsSince(game.startedAt, now))}</span>
+                </span>
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
 function RecentConversations() {
   const conversations = useConversations();
   const me = useCurrentUser();
@@ -95,7 +132,7 @@ function RecentConversations() {
             .map((conversation) => (
               <li key={conversation.id}>
                 <Link to={`/messages/${conversation.id}`} className="flex items-center gap-3 px-5 py-3 hover:bg-surface-2">
-                  <Avatar avatar={conversation.otherUser.avatar} name={conversation.otherUser.displayName} size="sm" status={conversation.otherUser.presence.status} />
+                  <Avatar avatar={conversation.otherUser.avatar} image={conversation.otherUser.avatarImage} name={conversation.otherUser.displayName} size="sm" status={conversation.otherUser.presence.status} />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium">{conversation.otherUser.displayName}</span>
                     <span className="block truncate text-xs text-muted">
@@ -124,13 +161,13 @@ function PartySummary() {
         <Link to="/parties" className="flex items-center gap-4 px-5 py-4 hover:bg-surface-2">
           <div className="flex -space-x-2">
             {party.data.members.slice(0, 4).map((member) => (
-              <Avatar key={member.user.id} avatar={member.user.avatar} name={member.user.displayName} size="sm" className="rounded-full ring-2 ring-surface" />
+              <Avatar key={member.user.id} avatar={member.user.avatar} image={member.user.avatarImage} name={member.user.displayName} size="sm" className="rounded-full ring-2 ring-surface" />
             ))}
           </div>
           <div className="min-w-0">
             <p className="truncate font-medium">{party.data.name}</p>
             <p className="text-xs text-muted">
-              {party.data.memberCount}/{party.data.maxMembers} members · text chat
+              {party.data.memberCount}/{party.data.maxMembers} members
             </p>
           </div>
         </Link>
@@ -158,7 +195,7 @@ function RecentNotifications() {
             return (
               <li key={notification.id}>
                 <Link to={href} className="flex items-start gap-3 px-5 py-3 hover:bg-surface-2">
-                  <Avatar avatar={notification.data.actor.avatar} name={notification.data.actor.displayName} size="xs" />
+                  <Avatar avatar={notification.data.actor.avatar} image={notification.data.actor.avatarImage} name={notification.data.actor.displayName} size="xs" />
                   <span className="min-w-0 flex-1 text-sm">
                     {text}
                     <RelativeTime iso={notification.createdAt} className="block text-xs text-subtle" />
@@ -183,10 +220,9 @@ export function HomePage() {
   return (
     <div className="flex flex-col gap-6">
       <section className="card relative overflow-hidden p-6 sm:p-8" aria-labelledby="welcome-heading">
-        <div className="brand-gradient pointer-events-none absolute -right-24 -top-24 size-72 rounded-full opacity-25 blur-3xl" aria-hidden />
         <div className="relative flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-4">
-            <Avatar avatar={user.profile.avatar} name={user.profile.displayName} size="lg" status={shownPresence} />
+            <Avatar avatar={user.profile.avatar} image={user.profile.avatarImage} name={user.profile.displayName} size="lg" status={shownPresence} />
             <div>
               <p className="text-sm text-muted">{greeting()},</p>
               <h1 id="welcome-heading" className="text-2xl font-bold sm:text-3xl" data-testid="welcome-name">
@@ -216,6 +252,8 @@ export function HomePage() {
           </div>
         </div>
       </section>
+
+      <PlayingNow />
 
       {invitations.data && invitations.data.length > 0 ? (
         <Card>

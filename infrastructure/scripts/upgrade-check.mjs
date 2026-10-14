@@ -18,10 +18,11 @@
 // pg_restore on PATH for --from-dump.
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import net from 'node:net';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -46,6 +47,9 @@ if (!oldRoot && !dump) {
 for (const dir of [root, oldRoot].filter(Boolean)) {
   if (!existsSync(resolve(dir, 'apps/server/dist/main.js'))) throw new Error(`Run "pnpm build" in ${dir} first.`);
 }
+
+// Uploaded images of the disposable database (removed at the end).
+const mediaDir = mkdtempSync(join(tmpdir(), 'akeno-upgrade-media-'));
 
 const databaseUrl = new URL(adminUrl);
 databaseUrl.pathname = `/${DATABASE}`;
@@ -93,6 +97,7 @@ function env(port) {
     PUBLIC_ORIGIN: `http://localhost:${port}`,
     REGISTRATION_MODE: 'invite',
     MIGRATE_ON_START: 'false',
+    MEDIA_DIR: mediaDir,
     LOG_LEVEL: 'warn',
     LOG_PRETTY: 'false',
   };
@@ -152,6 +157,15 @@ class Session {
     const text = await response.text();
     return { status: response.status, body: text ? JSON.parse(text) : null };
   }
+  async upload(path, data) {
+    const response = await fetch(`http://127.0.0.1:${this.server.port}/api/v1${path}`, {
+      method: 'PUT',
+      headers: { Origin: this.server.origin, Cookie: this.cookie, 'X-CSRF-Token': this.csrf, 'Content-Type': 'image/png' },
+      body: data,
+    });
+    const text = await response.text();
+    return { status: response.status, body: text ? JSON.parse(text) : null };
+  }
   async signIn(onlineId, password) {
     const response = await this.request('POST', '/auth/login', { onlineId, password });
     assert.equal(response.status, 200, JSON.stringify(response.body));
@@ -159,6 +173,39 @@ class Session {
     this.user = response.body.user;
     return this;
   }
+}
+
+/** A valid 160x160 RGB PNG (solid colour) for the upload check. */
+function tinyPng() {
+  const require_ = createRequire(import.meta.url);
+  const { deflateSync } = require_('node:zlib');
+  const table = Array.from({ length: 256 }, (_, n) => {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    return c >>> 0;
+  });
+  const crc = (buffer) => {
+    let c = 0xffffffff;
+    for (const byte of buffer) c = table[(c ^ byte) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (type, data) => {
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type, 'latin1'), data]);
+    const sum = Buffer.alloc(4);
+    sum.writeUInt32BE(crc(body));
+    return Buffer.concat([length, body, sum]);
+  };
+  const size = 160;
+  const row = Buffer.concat([Buffer.from([0]), Buffer.alloc(size * 3, 0x55)]);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(size, 0);
+  ihdr.writeUInt32BE(size, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr),
+    chunk('IDAT', deflateSync(Buffer.concat(Array(size).fill(row)))), chunk('IEND', Buffer.alloc(0))]);
 }
 
 const COUNTED = ['users', 'profiles', 'friendships', 'conversations', 'messages', 'device_credentials', 'notifications'];
@@ -209,7 +256,10 @@ async function seedWithOldRevision() {
       else await sleep(Math.max(1000, (started.body.interval ?? 5) * 1000));
     }
     assert.ok(token, 'the console was paired by the old revision');
-    return { conversationId: conversation.body.id, deviceToken: token };
+    // An administrator-curated game name (Alpha 0.2 game_titles), when the old revision has them.
+    const named = await adminSession.request('PUT', '/admin/game-titles/PPSA01234', { name: 'Racing Game' });
+    const curatedName = named.status === 200 ? 'Racing Game' : null;
+    return { conversationId: conversation.body.id, deviceToken: token, curatedName };
   } finally {
     await stopServer(server);
   }
@@ -261,6 +311,22 @@ try {
   );
   assert.equal(defaults[0].ok, defaults[0].total, 'new privacy columns have their defaults');
   log('  ok   new columns have their defaults (tracking on, playtime visible, nothing excluded)');
+  const alpha03 = await query(`SELECT to_regclass('public.media_objects') AS media, to_regclass('public.games') AS games`);
+  if (alpha03[0].media) {
+    const profileDefaults = await query(
+      `SELECT count(*) FILTER (WHERE avatar_media_id IS NULL AND banner_media_id IS NULL AND banner_overlay AND theme = 'default'
+                                 AND accent_color IS NULL AND featured_badges = '{}')::int AS ok,
+              count(*)::int AS total FROM profiles`,
+    );
+    assert.equal(profileDefaults[0].ok, profileDefaults[0].total, 'profile customization columns have their defaults');
+    log('  ok   profiles keep their preset avatars; customization columns have their defaults');
+    const curated = await query(`SELECT count(*)::int AS n FROM game_titles`);
+    const mapped = await query(
+      `SELECT count(*)::int AS n FROM game_titles t JOIN game_title_mappings m ON m.title_id = t.title_id JOIN games g ON g.id = m.game_id AND g.name = t.name`,
+    );
+    assert.equal(mapped[0].n, curated[0].n, 'every curated name became a verified game with its title ID');
+    log(`  ok   ${curated[0].n} curated game name(s) migrated into the game catalogue as verified title mappings`);
+  }
 
   const current = await useRevision(root, 'this revision', seeded);
   if (seeded) {
@@ -269,9 +335,25 @@ try {
       const device = new Session(server);
       device.token = seeded.deviceToken;
       const beat = await device.request('POST', '/activity/heartbeat', { titleId: 'PPSA01234', platform: 'PS5' });
-      assert.equal(beat.status, 403);
-      assert.equal(beat.body.error.code, 'DEVICE_SCOPE_DENIED');
-      log('  ok   the old console has no game-activity permission until its owner allows it');
+      if (beat.status === 200) {
+        // Alpha 0.2 and newer grant the game-activity permission when the console is paired.
+        log('  ok   the console paired by the old revision reports game activity (permission granted at pairing)');
+      } else {
+        assert.equal(beat.status, 403);
+        assert.equal(beat.body.error.code, 'DEVICE_SCOPE_DENIED');
+        log('  ok   the old console has no game-activity permission until its owner allows it');
+      }
+      if (seeded.curatedName) {
+        const adminSession = await new Session(server).signIn('upgrade_admin', ADMIN_PASSWORD);
+        const titles = await adminSession.request('GET', '/admin/game-titles');
+        assert.ok(titles.body.titles.some((t) => t.titleId === 'PPSA01234' && t.name === seeded.curatedName), JSON.stringify(titles.body));
+        log('  ok   this revision shows the migrated curated name');
+      }
+      // A profile picture can be uploaded on the upgraded database.
+      const a = await new Session(server).signIn('upgrade_a', PASSWORD);
+      const uploaded = await a.upload('/profile/avatar', tinyPng());
+      assert.equal(uploaded.status, 200, JSON.stringify(uploaded.body));
+      log('  ok   a profile picture upload works on the upgraded database');
     } finally {
       await stopServer(server);
     }
@@ -284,5 +366,6 @@ try {
   log(`  FAIL ${String(error?.stack ?? error)}`);
 } finally {
   if (!keep) await admin(`DROP DATABASE IF EXISTS ${DATABASE} WITH (FORCE)`);
+  rmSync(mediaDir, { recursive: true, force: true });
 }
 process.exit(failed ? 1 : 0);

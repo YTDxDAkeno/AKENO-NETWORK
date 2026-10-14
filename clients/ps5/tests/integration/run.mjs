@@ -19,6 +19,7 @@ import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import tls from 'node:tls';
+import { deflateSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
@@ -72,6 +73,7 @@ const origin = `http://localhost:${backendPort}`;
 const databaseUrl = new URL(adminUrl);
 databaseUrl.pathname = `/${databaseName}`;
 const serverEnv = {
+  MEDIA_DIR: join(work, 'media'),
   ...process.env,
   NODE_ENV: 'production',
   HOST: '127.0.0.1',
@@ -135,6 +137,15 @@ class WebSession {
     });
     const setCookie = response.headers.get('set-cookie');
     if (setCookie) this.cookie = setCookie.split(';')[0];
+    const text = await response.text();
+    return { status: response.status, body: text ? JSON.parse(text) : null };
+  }
+  async upload(path, data, type = 'image/png') {
+    const response = await fetch(`http://127.0.0.1:${backendPort}/api/v1${path}`, {
+      method: 'PUT',
+      headers: { Origin: origin, Cookie: this.cookie, 'X-CSRF-Token': this.csrf, 'Content-Type': type },
+      body: data,
+    });
     const text = await response.text();
     return { status: response.status, body: text ? JSON.parse(text) : null };
   }
@@ -597,6 +608,41 @@ async function startApp(dataDir, args = [], env = {}) {
   );
   await waitFor(() => state.port || state.exit, 'the console app to start');
   return state;
+}
+
+/** A real RGB PNG generated without dependencies (diagonal two-colour split). */
+function pngImage(width, height) {
+  const table = Array.from({ length: 256 }, (_, n) => {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    return c >>> 0;
+  });
+  const crc = (buffer) => {
+    let c = 0xffffffff;
+    for (const byte of buffer) c = table[(c ^ byte) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (type, data) => {
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type, 'latin1'), data]);
+    const sum = Buffer.alloc(4);
+    sum.writeUInt32BE(crc(body));
+    return Buffer.concat([length, body, sum]);
+  };
+  const rows = [];
+  for (let y = 0; y < height; y++) {
+    const row = Buffer.alloc(1 + width * 3);
+    for (let x = 0; x < width; x++) row.set(x + y < width ? [40, 90, 200] : [230, 120, 60], 1 + x * 3);
+    rows.push(row);
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr),
+    chunk('IDAT', deflateSync(Buffer.concat(rows))), chunk('IEND', Buffer.alloc(0))]);
 }
 
 function notifications(app) {
@@ -1082,6 +1128,36 @@ if (appBinary) {
     assert.equal(local.state, 'playing');
     assert.equal(local.name, 'Racing Game');
     assert.ok(local.startedAt, 'server start time known');
+  });
+
+  await step('console app: shows profile pictures and game icons as data: images (server media and local console icons)', async () => {
+    // An uploaded profile picture reaches the page through the console app's bounded media fetch.
+    const png = pngImage(300, 300);
+    const uploaded = await carol.upload('/profile/avatar', png);
+    assert.equal(uploaded.status, 200, JSON.stringify(uploaded.body));
+    const mediaId = uploaded.body.profile.avatarImage;
+    const media = await appApi(player, 'GET', `/api/media?id=${mediaId}&v=fallback`);
+    assert.equal(media.status, 200, JSON.stringify(media.body));
+    assert.equal(media.body.type, 'image/jpeg');
+    assert.equal(Buffer.from(media.body.data, 'base64').subarray(0, 3).toString('hex'), 'ffd8ff');
+    assert.equal((await appApi(player, 'GET', '/api/media?id=../../etc/passwd&v=fallback')).status, 400);
+    assert.equal((await appApi(player, 'GET', `/api/media?id=${'0'.repeat(32)}&v=fallback`)).status, 404);
+    // Without the page secret nothing is served.
+    const anonymous = await fetch(`http://127.0.0.1:${player.port}/api/media?id=${mediaId}&v=fallback`);
+    assert.equal(anonymous.status, 403);
+
+    // Icons of games installed on this console come from its own metadata, read-only.
+    spawnSync('mkdir', ['-p', join(metaRoot, 'user/appmeta/PPSA01234'), join(metaRoot, 'user/appmeta/CUSA00009')]);
+    writeFileSync(join(metaRoot, 'user/appmeta/PPSA01234/icon0.png'), png);
+    writeFileSync(join(metaRoot, 'user/appmeta/CUSA00009/icon0.png'), '<html>not a png</html>');
+    const icon = await appApi(player, 'GET', '/api/local-art?title=PPSA01234');
+    assert.equal(icon.status, 200);
+    assert.equal(icon.body.type, 'image/png');
+    assert.equal(icon.body.source, '/user/appmeta/PPSA01234/icon0.png');
+    assert.equal(Buffer.from(icon.body.data, 'base64').equals(png), true);
+    assert.equal((await appApi(player, 'GET', '/api/local-art?title=CUSA00009')).status, 404);
+    assert.equal((await appApi(player, 'GET', '/api/local-art?title=..%2F..%2Fetc')).status, 404);
+    assert.equal((await appApi(player, 'GET', '/api/local-art?title=NPXS40028')).status, 404);
   });
 
   await step('console app: detects a game switch, ignores ambiguity and reports the end of the game', async () => {

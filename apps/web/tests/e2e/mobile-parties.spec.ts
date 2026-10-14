@@ -117,11 +117,11 @@ test('mobile layout, party lifecycle and invisible status', async ({ browser, ba
     await carol.page.getByLabel('Party name').fill('Late Night Squad');
     await carol.page.getByRole('button', { name: 'Start party' }).click();
     await expect(carol.page.getByTestId('party-name')).toHaveText('Late Night Squad');
-    await expect(carol.page.getByText('Text chat only')).toBeVisible();
-    await expect(carol.page.getByText('Voice chat is not available.')).toBeVisible();
+    // Without a configured media server the party says so plainly (no fake voice controls).
+    await expect(carol.page.getByTestId('party-voice')).toBeVisible();
     await expectNoHorizontalOverflow(carol.page);
 
-    await carol.page.getByRole('button', { name: 'Invite friends' }).click();
+    await carol.page.getByRole('button', { name: 'Invite', exact: true }).click();
     const dialog = carol.page.getByRole('dialog', { name: 'Invite friends to the party' });
     await dialog.getByRole('button', { name: 'Invite Dave' }).click();
     await expect(dialog.getByText('Invited')).toBeVisible();
@@ -151,7 +151,7 @@ test('mobile layout, party lifecycle and invisible status', async ({ browser, ba
     await expect(carol.page.getByRole('button', { name: 'Start party' })).toBeVisible();
     const members = dave.page.getByTestId('party-members');
     await expect(members.getByRole('listitem')).toHaveCount(1);
-    await expect(members.getByText('Party leader')).toBeVisible();
+    await expect(members.getByLabel('Party leader')).toBeVisible();
   });
 
   await test.step('Invisible status hides Dave from Carol until he is online again', async () => {

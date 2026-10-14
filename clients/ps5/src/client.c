@@ -362,6 +362,77 @@ akeno_status akeno_request_raw(akeno_client *client, const char *method, const c
     return status;
 }
 
+static int valid_media_id(const char *id) {
+    if (!id || strlen(id) != 32) return 0;
+    for (size_t i = 0; i < 32; i++)
+        if (!((id[i] >= '0' && id[i] <= '9') || (id[i] >= 'a' && id[i] <= 'f'))) return 0;
+    return 1;
+}
+
+akeno_status akeno_fetch_media(akeno_client *client, const char *media_id, const char *file, size_t max_bytes,
+                               unsigned char **data, size_t *len, char *content_type, size_t content_type_len) {
+    static const char *const files[] = { "sm.webp", "md.webp", "lg.webp", "fallback.jpg" };
+    if (data) *data = NULL;
+    if (len) *len = 0;
+    if (content_type_len) content_type[0] = '\0';
+    int known = 0;
+    for (size_t i = 0; file && i < sizeof(files) / sizeof(files[0]); i++) known |= strcmp(file, files[i]) == 0;
+    if (!client || !data || !len || !valid_media_id(media_id) || !known || max_bytes == 0) return AKENO_ERR_ARGUMENT;
+    if (!client->paired) return AKENO_ERR_NOT_PAIRED;
+
+    char host[300];
+    if (akeno_build_host_header(client, host, sizeof(host)) != 0) return AKENO_ERR_ARGUMENT;
+    akeno_buf request;
+    akeno_buf_init(&request, 4096);
+    if (akeno_buf_printf(&request,
+                         "GET %s/media/%s/%s HTTP/1.1\r\nHost: %s\r\nUser-Agent: akeno-device-client/" AKENO_CLIENT_VERSION
+                         "\r\nAccept: image/webp,image/jpeg\r\nAuthorization: Bearer %s\r\nConnection: close\r\n\r\n",
+                         client->url.base_path, media_id, file, host, client->token) != 0) {
+        akeno_buf_free(&request);
+        return AKENO_ERR_TOO_LARGE;
+    }
+    char err[256] = "";
+    akeno_conn *conn = NULL;
+    akeno_status status = akeno_conn_open(&client->url, client->ca_file, client->connect_timeout_ms, &conn, err, sizeof(err));
+    if (status != AKENO_OK) {
+        akeno_log(client, AKENO_LOG_WARN, "http.connect_failed", "%s", err);
+        akeno_buf_free(&request);
+        return status;
+    }
+    akeno_http_head head;
+    akeno_buf body;
+    akeno_buf_init(&body, max_bytes);
+    status = akeno_http_exchange(conn, &request, client->io_timeout_ms, &head, &body);
+    akeno_conn_close(conn);
+    akeno_buf_free(&request);
+    if (status != AKENO_OK) {
+        akeno_buf_free(&body);
+        return status;
+    }
+    if (head.status != 200) {
+        akeno_buf_free(&body);
+        status = map_http_status(head.status);
+        if (status == AKENO_ERR_UNAUTHORIZED) clear_credentials(client);
+        return status;
+    }
+    int webp = strncmp(head.content_type, "image/webp", 10) == 0;
+    int jpeg = strncmp(head.content_type, "image/jpeg", 10) == 0;
+    if ((!webp && !jpeg) || body.len == 0) {
+        akeno_buf_free(&body);
+        return AKENO_ERR_PROTOCOL;
+    }
+    *data = malloc(body.len);
+    if (!*data) {
+        akeno_buf_free(&body);
+        return AKENO_ERR_NO_MEMORY;
+    }
+    memcpy(*data, body.data, body.len);
+    *len = body.len;
+    if (content_type_len) snprintf(content_type, content_type_len, "%s", webp ? "image/webp" : "image/jpeg");
+    akeno_buf_free(&body);
+    return AKENO_OK;
+}
+
 akeno_status akeno_request(akeno_client *client, const char *method, const char *path, const char *json_body,
                            akeno_response *response) {
     akeno_status status = akeno_request_raw(client, method, path, json_body, 1, response);

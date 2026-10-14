@@ -67,9 +67,14 @@ export function formatDuration(totalSeconds: number): string {
   return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`;
 }
 
+/** Like formatDuration, but short enough for tiles: "< 1 min", "45 min", "2 h 5 min". */
+export function formatDurationShort(totalSeconds: number): string {
+  return totalSeconds < 60 ? '< 1 min' : formatDuration(totalSeconds);
+}
+
 /** Playtime for display; null means the owner hides playtime from this viewer. */
 export function formatPlaytime(totalSeconds: number | null): string {
-  return totalSeconds === null ? 'hidden' : formatDuration(totalSeconds);
+  return totalSeconds === null ? 'hidden' : formatDurationShort(totalSeconds);
 }
 
 /** Seconds elapsed since an ISO timestamp (never negative). */

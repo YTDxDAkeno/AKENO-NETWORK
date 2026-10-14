@@ -360,6 +360,52 @@ static void test_meta_lookup(void) {
     rmdir(root);
 }
 
+static void test_icon_lookup(void) {
+    char root[] = "/tmp/akeno-icon-XXXXXX";
+    if (!mkdtemp(root)) {
+        CHECK(0);
+        return;
+    }
+    char path[700];
+    const char *dirs[] = { "/user", "/user/appmeta", "/user/appmeta/PPSA01234", "/user/appmeta/CUSA00001" };
+    for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++) {
+        snprintf(path, sizeof(path), "%s%s", root, dirs[i]);
+        mkdir(path, 0700);
+    }
+    static const unsigned char png[] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0, 0, 0, 13, 'I', 'H', 'D', 'R' };
+    snprintf(path, sizeof(path), "%s/user/appmeta/PPSA01234/icon0.png", root);
+    FILE *f = fopen(path, "wb");
+    CHECK(f != NULL);
+    if (f) {
+        fwrite(png, 1, sizeof(png), f);
+        fclose(f);
+    }
+    /* Not a PNG (for example an HTML file renamed to icon0.png): ignored. */
+    char fake[700];
+    snprintf(fake, sizeof(fake), "%s/user/appmeta/CUSA00001/icon0.png", root);
+    write_file(fake, "<html><script>alert(1)</script></html>");
+
+    size_t len = 0;
+    char source[160];
+    unsigned char *data = akeno_game_icon_lookup(root, "PPSA01234", &len, source, sizeof(source));
+    CHECK(data != NULL && len == sizeof(png));
+    CHECK_STR(source, "/user/appmeta/PPSA01234/icon0.png");
+    free(data);
+    CHECK(akeno_game_icon_lookup(root, "CUSA00001", &len, source, sizeof(source)) == NULL);
+    CHECK(akeno_game_icon_lookup(root, "PPSA07777", &len, source, sizeof(source)) == NULL);
+    CHECK(akeno_game_icon_lookup(root, "../../etc", &len, source, sizeof(source)) == NULL);
+    CHECK(akeno_game_icon_lookup(root, "NPXS40028", &len, source, sizeof(source)) == NULL);
+    CHECK(akeno_game_icon_lookup(NULL, "PPSA01234", &len, source, sizeof(source)) == NULL);
+
+    unlink(path);
+    unlink(fake);
+    for (size_t i = sizeof(dirs) / sizeof(dirs[0]); i-- > 0;) {
+        snprintf(path, sizeof(path), "%s%s", root, dirs[i]);
+        rmdir(path);
+    }
+    rmdir(root);
+}
+
 void run_game_tests(void);
 void run_game_tests(void) {
     test_title_ids();
@@ -371,4 +417,5 @@ void run_game_tests(void) {
     test_param_json();
     test_param_sfo();
     test_meta_lookup();
+    test_icon_lookup();
 }

@@ -32,7 +32,7 @@ export function UserRow({
   );
   return (
     <div className={cn('flex items-center gap-3', className)}>
-      <Avatar avatar={user.avatar} name={user.displayName} size={size} {...(presence ? { status: presence.status } : {})} />
+      <Avatar avatar={user.avatar} image={user.avatarImage} name={user.displayName} size={size} {...(presence ? { status: presence.status } : {})} />
       <div className="min-w-0 flex-1">
         {linkToProfile && !user.deleted ? (
           <Link to={`/u/${user.onlineId}`} className="block min-w-0 hover:underline">

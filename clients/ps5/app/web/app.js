@@ -144,6 +144,53 @@
     });
   }
 
+  // ---- Images -------------------------------------------------------------------------------
+  // Profile pictures and game artwork come from the AKENO server through the console app; icons
+  // of games installed on this console are read from its own metadata (read-only, never sent
+  // anywhere). Both arrive as small JSON documents and are shown as data: URLs, so the page keeps
+  // its strict policy (images only from itself or data:). Failures simply keep the initials.
+  var IMAGE_CACHE = {};
+  var IMAGE_WAITERS = {};
+  var IMAGE_ORDER = [];
+  var IMAGE_CACHE_MAX = 60;
+  function cacheImage(key, url) {
+    if (!(key in IMAGE_CACHE)) IMAGE_ORDER.push(key);
+    IMAGE_CACHE[key] = url;
+    while (IMAGE_ORDER.length > IMAGE_CACHE_MAX) delete IMAGE_CACHE[IMAGE_ORDER.shift()];
+  }
+  function loadImage(key, path, done) {
+    if (key in IMAGE_CACHE) { done(IMAGE_CACHE[key]); return; }
+    if (IMAGE_WAITERS[key]) { IMAGE_WAITERS[key].push(done); return; }
+    IMAGE_WAITERS[key] = [done];
+    api('GET', path).then(function (res) {
+      var ok = res.ok && /^image\/(png|jpeg|webp)$/.test(res.type || '') && /^[A-Za-z0-9+/=]+$/.test(res.data || '');
+      var url = ok ? 'data:' + res.type + ';base64,' + res.data : false;
+      // Missing images are remembered too (no retry storm); network failures are not.
+      if (ok || !res.offline) cacheImage(key, url);
+      var waiters = IMAGE_WAITERS[key] || [];
+      delete IMAGE_WAITERS[key];
+      waiters.forEach(function (cb) { cb(url); });
+    });
+  }
+  function fillImage(holder, key, path) {
+    loadImage(key, path, function (url) {
+      if (!url || !holder) return;
+      var img = h('img', { src: url, alt: '', draggable: 'false' });
+      holder.textContent = '';
+      holder.insertBefore(img, holder.firstChild);
+      holder.className += ' has-image';
+    });
+  }
+  function mediaPath(id) { return '/api/media?id=' + id + '&v=fallback'; }
+  function avatarNode(user, presence) {
+    var node = h('span', { className: 'avatar', text: initials(user.displayName || user.onlineId) });
+    if (presence) node.appendChild(h('span', { className: 'dot ' + presence }));
+    if (user.avatarImage && /^[0-9a-f]{32}$/.test(user.avatarImage)) {
+      fillImage(node, 'm:' + user.avatarImage, mediaPath(user.avatarImage));
+    }
+    return node;
+  }
+
   // ---- State --------------------------------------------------------------------------------
   var S = {
     app: null, view: 'friends', eventsNext: null,
@@ -479,11 +526,12 @@
     var game = user.presence && user.presence.game;
     var tag = onclick ? 'button' : 'div';
     return h(tag, { className: 'item', type: onclick ? 'button' : null, id: id, onclick: onclick },
-      h('span', { className: 'avatar', text: initials(user.displayName || user.onlineId) }, presence ? h('span', { className: 'dot ' + presence }) : null),
+      avatarNode(user, presence),
       h('span', { className: 'grow' },
         h('div', { className: 'name', text: user.displayName || user.onlineId }),
         h('div', { className: 'sub', text: '@' + user.onlineId + (presence ? ' · ' + presenceLabel(presence) : '') + (activity && !game ? ' · ' + activity : '') }),
-        game ? h('div', { className: 'playing', text: 'Playing ' + gameName(game) + ' · PlayStation 5 · ' + durationText(secondsSince(game.startedAt)) }) : null),
+        game ? h('div', { className: 'playing' }, gameIcon(gameName(game), game.titleId, game.art, true),
+          h('span', { text: 'Playing ' + gameName(game) + ' · PlayStation 5 · ' + durationText(secondsSince(game.startedAt)) })) : null),
       extra || null);
   }
 
@@ -699,9 +747,13 @@
   }
 
   // ---- Games: what this console detects, and the tracked history ----------------------------
-  function gameIcon(name) {
-    // A plain, local icon: no remote artwork, so nothing can fail to load.
-    return h('span', { className: 'game-icon', 'aria-hidden': 'true', text: initials(name) });
+  // Artwork from the server when the game is verified there, else the icon this console has for
+  // it (if installed), else the initials.
+  function gameIcon(name, titleId, art, small) {
+    var node = h('span', { className: 'game-icon' + (small ? ' tiny' : ''), 'aria-hidden': 'true', text: small ? '' : initials(name) });
+    if (art && art.icon && /^[0-9a-f]{32}$/.test(art.icon)) fillImage(node, 'm:' + art.icon, mediaPath(art.icon));
+    else if (titleId && /^[A-Z]{4}[0-9]{5}$/.test(titleId)) fillImage(node, 't:' + titleId, '/api/local-art?title=' + titleId);
+    return node;
   }
   var ACTIVITY_TITLES = {
     playing: 'Now playing', excluded: 'Not shared', 'permission-missing': 'Permission needed', 'disabled-on-server': 'Turned off on the website',
@@ -713,7 +765,7 @@
     var panel = h('section', { className: 'panel', id: 'now-playing' }, h('h2', { text: 'On this console' }));
     if ((a.state === 'playing' || a.state === 'excluded') && (a.name || a.titleId)) {
       var seconds = a.startedAt ? secondsSince(a.startedAt) : a.sinceSeconds;
-      panel.appendChild(h('div', { className: 'game-card' }, gameIcon(a.name || a.titleId),
+      panel.appendChild(h('div', { className: 'game-card' }, gameIcon(a.name || a.titleId, a.titleId, a.art),
         h('div', { className: 'grow' },
           h('div', { className: 'label', text: ACTIVITY_TITLES[a.state] }),
           h('div', { className: 'game-title', id: 'now-playing-title', text: a.name || a.titleId }),
@@ -742,7 +794,7 @@
     panel.appendChild(h('div', { className: 'list', id: 'recent-games' }, r.recentGames.map(function (g) {
       var detail = g.playingNow ? 'Playing now' : 'Last played ' + dayText(g.lastPlayedAt) +
         (g.lastSessionSeconds !== null ? ' · last session ' + durationText(g.lastSessionSeconds) : '');
-      return h('div', { className: 'item', tabindex: '0', id: 'game-' + g.titleId }, gameIcon(gameName(g)),
+      return h('div', { className: 'item', tabindex: '0', id: 'game-' + g.titleId }, gameIcon(gameName(g), g.titleId, g.art),
         h('span', { className: 'grow' },
           h('div', { className: 'name', text: gameName(g) + (g.excluded ? ' (excluded)' : '') }),
           h('div', { className: 'sub', text: detail + ' · ' + g.sessionCount + ' session' + (g.sessionCount === 1 ? '' : 's') })),

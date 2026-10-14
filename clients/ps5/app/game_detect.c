@@ -349,3 +349,29 @@ int akeno_game_meta_lookup(const char *root, const char *title_id, char *name, s
     }
     return -1;
 }
+
+/* Icon locations: the per-title metadata folders (read-only); the running package is not used. */
+static const char *const ICON_DIRS[] = { "/user/appmeta/", "/system_data/priv/appmeta/" };
+
+unsigned char *akeno_game_icon_lookup(const char *root, const char *title_id, size_t *len, char *source, size_t source_len) {
+    static const unsigned char png_signature[8] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n' };
+    *len = 0;
+    if (source_len) source[0] = '\0';
+    if (!root || !akeno_is_game_title_id(title_id)) return NULL; /* Also keeps the path free of traversal. */
+    for (size_t i = 0; i < sizeof(ICON_DIRS) / sizeof(ICON_DIRS[0]); i++) {
+        char path[600];
+        int n = snprintf(path, sizeof(path), "%s%s%s/icon0.png", root, ICON_DIRS[i], title_id);
+        if (n < 0 || (size_t)n >= sizeof(path)) continue;
+        size_t got = 0;
+        char *data = read_small_file(path, AKENO_ICON_MAX_BYTES, &got);
+        if (!data) continue;
+        if (got < sizeof(png_signature) || memcmp(data, png_signature, sizeof(png_signature)) != 0) {
+            free(data);
+            continue;
+        }
+        *len = got;
+        if (source_len) snprintf(source, source_len, "%s", path + strlen(root));
+        return (unsigned char *)data;
+    }
+    return NULL;
+}

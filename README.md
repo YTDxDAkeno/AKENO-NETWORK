@@ -12,12 +12,13 @@ directory — running on your own PC or a small Linux VPS.
 > no console modification. See [docs/PS5_FEASIBILITY.md](docs/PS5_FEASIBILITY.md) and
 > [docs/PS5_GAMEBASE_RESEARCH.md](docs/PS5_GAMEBASE_RESEARCH.md).
 
-## Features (V1)
+## Features
 
 | Area | What works |
 | --- | --- |
 | Accounts | Invitation-based registration (open mode for development), Argon2id passwords, opaque server-side sessions in HttpOnly cookies, CSRF protection, multi-device sign-in, session list and revocation, password change, account deletion |
-| Profiles | Display name, 16 original preset avatars, bio, status message, favorite games, self-reported activity, privacy settings |
+| Profiles (Alpha 0.3) | Uploaded profile pictures and banners with an in-browser crop/zoom editor (server-side validation, re-encoding and metadata removal), 16 preset avatars, profile themes with a custom accent and guaranteed contrast, administrator-granted badges with audit log, redesigned profile page, privacy settings ([docs/PROFILES.md](docs/PROFILES.md)) |
+| Game artwork (Alpha 0.3) | Canonical game catalogue with verified PlayStation title IDs, icon / cover / wide artwork with recorded source and licence, shown automatically wherever a mapped game appears; never matched by similar names ([docs/GAME_ARTWORK.md](docs/GAME_ARTWORK.md)) |
 | Friends | Search, requests (send/accept/decline/cancel), removal, blocking, race-safe relationship rules |
 | Presence | Online / Away / Do Not Disturb / Invisible / Offline from live WebSocket connections, multi-device aware, privacy-filtered, last seen |
 | Messaging | Persistent direct messages delivered in real time, idempotent retries, cursor pagination, unread counts, typing indicators, reconnect recovery |
@@ -26,9 +27,9 @@ directory — running on your own PC or a small Linux VPS.
 | Game sessions | Lobby directory with search and filters, visibility, instant or approval-based joining, invitations, capacity enforced under concurrency, connection details for participants only |
 | Paired devices | Code-based device pairing approved on the website (no password on the device), scoped and revocable device tokens for API and realtime, paired-device management in Settings |
 | Device client | Portable C11 client library + `akeno-cli` (`clients/ps5`): pairing, friends, presence, messages, invitations, parties, game sessions, realtime with bounded reconnects. Tested on Linux with OpenSSL and mbedTLS |
-| PS5 console app (Alpha 0.2 RC) | Payload for a jailbroken PS5: verified HTTPS/WSS, code pairing, a controller-friendly page in the system browser, system notifications, **automatic game activity and playtime**, quick access to messages ([docs/PS5_CLIENT.md](docs/PS5_CLIENT.md)). **Alpha 0.1 ran on a PS5 with firmware 12.20**; Alpha 0.2 is tested on Linux and awaits its hardware test |
+| PS5 console app | Payload for a jailbroken PS5: verified HTTPS/WSS, code pairing, a controller-friendly page in the system browser, system notifications, **automatic game activity and playtime**, quick access to messages ([docs/PS5_CLIENT.md](docs/PS5_CLIENT.md)). **Alpha 0.2 was confirmed by the user on a real PS5 with firmware 12.20** (pairing, realtime, notifications while gaming, game detection with full names, session duration, game switching, history, interactive message notifications). Alpha 0.3 adds profile pictures and game icons on the console page (Linux-tested, hardware pending) |
 | Administration | Invitation codes (shown once, stored hashed), member suspension and roles, audit log, system stats |
-| Operations | Docker Compose deployment, Caddy automatic HTTPS, health checks, backups and restore, structured logs |
+| Operations | Docker Compose deployment, Caddy automatic HTTPS, health checks, backups and restore of the database **and uploaded media**, structured logs ([docs/MEDIA_STORAGE.md](docs/MEDIA_STORAGE.md)) |
 
 ## Quick start
 

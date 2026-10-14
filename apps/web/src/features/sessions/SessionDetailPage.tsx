@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { GAME_SESSION_STATUS_LABELS, type GameSessionDetailDto, type JoinGameSessionResponse } from '@akeno/shared';
 import { Badge } from '../../components/Badge';
+import { GameArt } from '../../components/GameArt';
 import { Button, ButtonLink } from '../../components/Button';
 import { Card, CardHeader } from '../../components/Card';
 import { useConfirm } from '../../components/ConfirmDialog';
@@ -108,6 +109,7 @@ export function SessionDetailPage() {
         <Link to="/sessions" className="mt-1 rounded-lg p-1.5 text-muted hover:bg-surface-2" aria-label="Back to game sessions">
           <ArrowLeft aria-hidden className="size-5" />
         </Link>
+        <GameArt art={data.art} name={data.gameName} className="size-14 sm:size-16" sizes="64px" eager decorative />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-2xl font-semibold sm:text-3xl" data-testid="session-title">

@@ -66,6 +66,10 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
       SESSION_TTL_DAYS: ${SESSION_TTL_DAYS:-30}
       SESSION_IDLE_TIMEOUT_DAYS: ${SESSION_IDLE_TIMEOUT_DAYS:-7}
+      # Uploaded images live on their own persistent volume (back it up with backup.sh).
+      MEDIA_DIR: /data/media
+      MEDIA_MAX_TOTAL_MB: ${MEDIA_MAX_TOTAL_MB:-2048}
+      MEDIA_MIN_FREE_MB: ${MEDIA_MIN_FREE_MB:-512}
     ports:
       # Bound to localhost by default; Caddy (or an SSH tunnel) is the public entry point.
       - '${APP_BIND_ADDRESS:-127.0.0.1}:${APP_PORT:-8080}:3000'
@@ -73,6 +77,8 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+    volumes:
+      - media-data:/data/media
     cap_drop:
       - ALL
     security_opt:
@@ -108,6 +114,7 @@ services:
 
 volumes:
   postgres-data:
+  media-data:
   caddy-data:
   caddy-config:
 

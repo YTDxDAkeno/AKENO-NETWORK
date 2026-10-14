@@ -30,10 +30,17 @@ migrations (`apps/server/src/database/migrations/`). All timestamps are `timesta
 | `audit_events` | Security audit log | Never contains passwords, tokens, invitation codes or message bodies |
 | `device_pairings`, `device_credentials` | Code-based pairing and device tokens (migration `0001`) | Only SHA-256 hashes of codes and tokens; scopes per device |
 | `game_activity_sessions` | Tracked game sessions reported by paired devices (`0002`); `private` flag for sessions reported while invisible (`0003`) | Partial unique `(user_id, title_id)` while running (no double counting); server timestamps; CHECKs on heartbeat/end order and end reason |
-| `game_titles` | Curated game names (administrators) | PK `title_id` |
+| `game_titles` | Curated game names of Alpha 0.2 (kept in step for rollback; copied into `games` by `0004`) | PK `title_id` |
+| `media_objects` | Uploaded images (`0004`): kind, owner, source dimensions, variants (JSONB), byte size, SHA-256 of the upload, soft-delete time | PK = 32-hex random ID (also the storage key); `CHECK` on ID format and kind; purged 48 h after soft delete |
+| `games` | Canonical games (`0004`): name, aliases, icon/cover/banner media, artwork source, attribution and licence notes | Media FKs `ON DELETE SET NULL` |
+| `game_title_mappings` | Verified title ID → game (`0004`) | PK `title_id` (`CHECK [A-Z]{4}[0-9]{5}`); cascades with the game |
+| `user_badges` | Badges granted by administrators or the operator CLI (`0004`) | PK `(user_id, badge_id)`; the derived Administrator badge is never stored |
 
 `profiles` also holds the game-activity privacy settings: tracking on/off, audiences for the
-current game and the history (`0002`), playtime visibility and excluded title IDs (`0003`).
+current game and the history (`0002`), playtime visibility and excluded title IDs (`0003`), and
+since `0004` the profile customization: `avatar_media_id`, `banner_media_id` (FKs to
+`media_objects`, `SET NULL`), `banner_overlay`, `theme`, `accent_color`, `featured_badges`.
+Migration `0004` is additive: existing users keep their preset avatar and get the default theme.
 
 The suggested `direct_conversations`, `group_messages`, `party_messages`,
 `direct_conversation_members`, `message_read_state`, `group_invitations`,

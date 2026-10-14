@@ -92,7 +92,46 @@ async function request<T>(method: Method, path: string, body?: unknown, options:
   return data as T;
 }
 
+/** Uploads a file as the raw request body (image endpoints). */
+async function upload<T>(method: 'PUT' | 'POST', path: string, file: Blob): Promise<T> {
+  const send = (token: string | null) =>
+    fetch(`${API_PREFIX}${path}`, {
+      method,
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': file.type || 'application/octet-stream',
+        ...(token ? { [CSRF_HEADER]: token } : {}),
+      },
+      body: file,
+      credentials: 'same-origin',
+      cache: 'no-store',
+    });
+  let response: Response;
+  try {
+    response = await send(csrfToken);
+    if (response.status === 403 && csrfRefresher) {
+      const peek = (await response.clone().json().catch(() => null)) as ApiErrorBody | null;
+      if (peek?.error.code === 'CSRF_FAILED') {
+        const token = await csrfRefresher();
+        if (token) {
+          csrfToken = token;
+          response = await send(token);
+        }
+      }
+    }
+  } catch {
+    throw new ApiError(0, 'NETWORK_ERROR', 'The upload did not reach AKENO NETWORK. Check your connection and try again.');
+  }
+  const data = (await response.json().catch(() => null)) as (ApiErrorBody & T) | null;
+  if (!response.ok) {
+    if (response.status === 401) unauthorizedHandler?.();
+    throw new ApiError(response.status, data?.error?.code ?? 'UNKNOWN', data?.error?.message ?? `The upload failed (HTTP ${response.status}).`);
+  }
+  return data as T;
+}
+
 export const api = {
+  upload: <T>(path: string, file: Blob) => upload<T>('PUT', path, file),
   get: <T>(path: string, options?: RequestOptions) => request<T>('GET', path, undefined, options),
   post: <T>(path: string, body: unknown = {}, options?: RequestOptions) => request<T>('POST', path, body, options),
   put: <T>(path: string, body: unknown, options?: RequestOptions) => request<T>('PUT', path, body, options),

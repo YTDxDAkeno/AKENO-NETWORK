@@ -1,27 +1,88 @@
 # Project status
 
-_Last updated: 2026-10-14 (session 4)._ This file is the source of truth for continuing work
+_Last updated: 2026-10-14 (session 5)._ This file is the source of truth for continuing work
 across sessions. Do not mark anything complete that has not actually been run.
 
-Branches: **`claude/elegant-wright-4qi8gh`** (this session; fast-forwarded from Branch A
-`claude/adoring-johnson-6re0yl` @ `133775c`, then 5+ commits). Branch A, Branch B
-(`claude/epic-bell-s1psav`) and PR #1 (`chatgpt/ps5-http-backend`, open draft) are unchanged.
-`main` is untouched. Reconciliation decisions: [BRANCH_RECONCILIATION.md](BRANCH_RECONCILIATION.md).
+Branches: **`claude/vibrant-mendel-v55zqf`** (session 5; based on `claude/elegant-wright-4qi8gh`
+@ `9dcc192`, fast-forward, history preserved). `claude/elegant-wright-4qi8gh`, Branch A
+(`claude/adoring-johnson-6re0yl`), Branch B (`claude/epic-bell-s1psav`) and PR #1
+(`chatgpt/ps5-http-backend`) are unchanged. `main` is untouched. Earlier decisions:
+[BRANCH_RECONCILIATION.md](BRANCH_RECONCILIATION.md).
+
+**Production:** the user reports `af571eb` as deployed. That commit is **not on GitHub** (the VPS
+history was reconciled locally), and this container cannot reach the VPS (the egress proxy
+answers 403 for `85.190.112.10.sslip.io`; no SSH). Nothing was deployed. Before an upgrade the
+VPS-only commits must be pushed or merged (procedure in the session-2 section below).
 
 ## Summary
 
 | Area | Status |
 | --- | --- |
-| AKENO NETWORK web platform (V1) | Implemented and tested |
-| Device pairing + scoped device tokens | Implemented and tested; **owner can now change a device's permissions** (reauthorization) |
-| **PS5 console app Alpha 0.1** | **Ran on a real PS5, firmware 12.20** (user report, screenshots): browser opened, full page, HTTPS to production, pairing, sign-in, realtime connected, native notifications also during a game |
-| **PS5 console app Alpha 0.2** | **Release candidate**: implemented; all automated checks pass locally (see below); ELF builds with the pinned SDK; **not yet run on a PS5** |
-| Automatic game detection + playtime (console, server, website) | Implemented; tested on Linux with a simulated process list; hardware pending |
-| Activity privacy (exclusions, hidden playtime, invisible-safe history) | Implemented and tested (server, website) |
-| Quick access (banner, reopen at newest conversation, one-time links, opt-in button notifications) | Implemented and tested on Linux; button notification unverified on hardware |
-| Change Server bug (Alpha 0.1) | Fixed, regression-tested in Chromium |
-| Native Game Base / PSN, Control Center card, overlay | **Unsupported** (no safe documented mechanism); see QUICK_ACCESS.md, PS5_GAMEBASE_RESEARCH.md |
-| Production VPS | **Not verified, not deployed** this session: this container's network policy blocks `85.190.112.10.sslip.io` (proxy 403) and there is no SSH access |
+| AKENO NETWORK web platform | Implemented and tested |
+| **PS5 console app Alpha 0.2** | **Ran on a real PS5, firmware 12.20** (user report with screenshots): launch, browser page, HTTPS, pairing, realtime, friends/messages, notifications while gaming, game detection with full titles, session duration, switching games, recently played visible to a second account, interactive message notifications opening the right conversation |
+| **Alpha 0.3** (pictures, banners, themes, badges, game artwork, redesign, media backups) | **Release candidate**: implemented; all automated checks pass locally (session 5 below); not deployed |
+| Alpha 0.3 console-page images (profile pictures, artwork, local console icons) | Implemented, tested on Linux; **not run on a PS5** |
+| Alpha 0.4 (voice parties) | See session 5, part 2 (in progress at the time of the Alpha 0.3 checkpoint) |
+| Native Game Base / PSN, Control Center card, overlay | **Unsupported** (no safe documented mechanism) |
+| Production VPS | Not verified, not deployed (network policy, see above) |
+
+## Session 5 — Alpha 0.3
+
+### Built
+
+| Area | Where |
+| --- | --- |
+| Media storage: content-sniffed uploads, bounded decoding, EXIF orientation + metadata removal, WebP variants + JPEG fallback, random IDs, atomic writes, quotas, limits, orphan sweep, authenticated immutable serving, failure isolation | `apps/server/src/modules/media/`, docs/MEDIA_STORAGE.md |
+| Profile pictures and banners, appearance (themes, custom accent, banner overlay, featured badges) | `apps/server/src/modules/users/`, `apps/web/src/features/settings/ProfileCustomization.tsx`, `features/profile/ImageCropDialog.tsx`, docs/PROFILES.md |
+| Theme token system with enforced contrast | `packages/shared/src/themes.ts`, `apps/web/src/lib/theme.ts`, `styles/index.css` |
+| Badges: derived Administrator, admin grant/revoke with audit, no self-granted authority badges, operator CLI `grant-badge`/`revoke-badge` | `apps/server/src/modules/badges/`, `packages/shared/src/badges.ts`, `apps/web/src/components/BadgeIcon.tsx`, `features/admin/BadgesDialog.tsx` |
+| Game catalogue: canonical games, verified title-ID mappings, icon/cover/banner with provenance, detected-titles report, exact-name matching for favorites/sessions, catalogue cache | `apps/server/src/modules/games/`, `features/admin/GamesPanel.tsx`, docs/GAME_ARTWORK.md |
+| Artwork everywhere: presence, history, game sessions, favorites, parties, home, profile | `apps/web/src/components/GameArt.tsx`, `GameActivity.tsx` |
+| Redesign: profile page, party page, home "friends playing now", sessions, calmer tokens | `features/profile/ProfilePage.tsx`, `ProfileHeader.tsx`, `features/parties/PartiesPage.tsx`, … |
+| Console page: profile pictures and artwork through a bounded media fetch, local console icons (read-only), data: URLs (CSP unchanged) | `clients/ps5/src/client.c` (`akeno_fetch_media`), `app/app_routes.c`, `app/game_detect.c`, `app/web/app.js` |
+| Migration `0004` (additive, data migration of curated names) | `apps/server/src/database/migrations/0004_alpha03_profiles_media_games.sql` |
+| Docker media volume, media-aware backup/restore, upgrade check for 0.3 | `compose.yaml`, `infrastructure/docker/Dockerfile`, `infrastructure/scripts/` |
+
+### Key decisions
+
+1. **No external artwork provider.** PSN endpoints are excluded; IGDB's terms (commercial use
+   needs a partnership, attribution, unclear image redistribution rights) and the lack of
+   verifiable title-ID mapping rule out automatic use; artwork comes from administrators with
+   recorded source and licence. Console-local icons are shown on the console page only, never
+   uploaded. (GAME_ARTWORK.md)
+2. **Title IDs map to games only through verified mappings**; names never attach artwork.
+3. **Media on a Docker volume**, not object storage (fits the VPS; one service owns all file
+   access). Media IDs are capabilities, only disclosed through privacy-checked responses.
+4. **Client crops, server re-validates**: only the crop is uploaded (handles phone photos that
+   the server's decoder does not support, e.g. HEIC converted by the browser), and the server
+   re-encodes everything anyway.
+5. **Console page images as data: URLs** fetched by the payload with its device token: keeps the
+   console page's strict CSP and the per-launch secret header requirement unchanged; no new
+   PS5 system imports (only libc file reads and the existing transport).
+6. A browser-side signature check before decoding avoids Chrome's CSP-blocked `blob:` fetch for
+   non-image files (found by the E2E test) instead of loosening the CSP.
+
+### Tests executed (2026-10-14, Linux container, Node 22.22, PostgreSQL 16, Chromium 141)
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint`, `pnpm typecheck` | passed |
+| `pnpm test` | shared 8/8, **server 151/151** (35 new: media-profile 21, games-badges 14), web 27/27 |
+| Browser E2E (production builds) | **6/6** (new: profiles-artwork; mobile-parties updated for the new party UI) |
+| C client + console app (`pnpm test:client`) | 496 checks × 2 builds under ASan/UBSan (8 new), CLI and console E2E passed incl. the new image scenario and the Chromium console-page scenarios |
+| Upgrade check from Alpha 0.2 (`9dcc192`) with rollback | passed |
+| Docker image build (node:22-alpine), sharp on musl | passed |
+| Backup drill with the production image (upload → backup → restart → delete volumes → restore) | passed |
+
+Not executed: PS5 build of the Alpha 0.3 console app (needs the pinned SDK; CI builds it on
+push), anything on PS5 hardware for Alpha 0.3, the production server.
+
+### Next steps (Alpha 0.3)
+
+- User: approve the production upgrade (RELEASE_NOTES_ALPHA_0.3.md → Upgrading).
+- Hardware: check profile pictures and game icons on the console page (12.20).
+- Optional: animated avatars (with frame/size limits), an administrator-triggered provider
+  lookup if a suitably licensed provider is chosen.
 
 ## Session 4 — Alpha 0.2
 

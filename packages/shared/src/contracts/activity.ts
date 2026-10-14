@@ -62,6 +62,8 @@ export interface GameActivityResponse {
   recentSessions: GameSessionEntry[];
   /** First tracked session; playtime before this is not known to AKENO. */
   trackedSince: string | null;
+  /** All tracked (visible) sessions together; seconds is null when playtime is hidden. */
+  totals: { seconds: number | null; games: number; sessions: number };
   /** False when the owner hides playtime from this viewer (durations are then null). */
   playtimeVisible: boolean;
   /** Only for the owner: whether automatic tracking is on. */

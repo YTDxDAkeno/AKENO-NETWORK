@@ -6,10 +6,10 @@ the database or the API: they run against real PostgreSQL and real HTTP/WebSocke
 | Layer | Location | Runner | Count (last run) |
 | --- | --- | --- | --- |
 | Shared schema unit tests | `packages/shared/src/schemas/*.test.ts` | Vitest | 8 |
-| Server integration tests | `apps/server/test/*.test.ts` | Vitest + real PostgreSQL + real WebSockets | 101 |
-| Web unit/component tests | `apps/web/tests/unit/*.test.ts(x)` | Vitest + jsdom + Testing Library | 26 |
-| Browser end-to-end | `apps/web/tests/e2e/*.spec.ts` | Playwright (Chromium) against production builds | 3 scenarios (core acceptance with 22+ steps; mobile + parties; device pairing) |
-| Device client and PS5 console app (C) | `clients/ps5/tests` | C unit tests under ASan/UBSan (OpenSSL and mbedTLS builds) + Node runner against the production server build, incl. Chromium for the console page | 383 checks per build + 24 CLI and 15 console-app end-to-end scenarios |
+| Server integration tests | `apps/server/test/*.test.ts` | Vitest + real PostgreSQL + real WebSockets | 151 (Alpha 0.3) |
+| Web unit/component tests | `apps/web/tests/unit/*.test.ts(x)` | Vitest + jsdom + Testing Library | 27 |
+| Browser end-to-end | `apps/web/tests/e2e/*.spec.ts` | Playwright (Chromium) against production builds | 6 scenarios (core acceptance; device pairing; 2 × game activity; mobile + parties; profiles, uploads, themes, badges and game artwork) |
+| Device client and PS5 console app (C) | `clients/ps5/tests` | C unit tests under ASan/UBSan (OpenSSL and mbedTLS builds) + Node runner against the production server build, incl. Chromium for the console page | 496 checks per build + CLI and console-app end-to-end scenarios (74 end-to-end steps across the OpenSSL CLI run and the mbedTLS CLI + console-app run) |
 
 ## Running the tests
 
@@ -52,6 +52,45 @@ Chromium: `pnpm --filter @akeno/web exec playwright install chromium` (CI also i
 system dependencies with `--with-deps`). The Playwright version is pinned to 1.56.1.
 
 ## What is covered
+
+### Alpha 0.3 additions
+
+- **media-profile.test.ts** (21) — valid uploads become square WebP/JPEG variants served only to
+  signed-in users with immutable caching and `nosniff`; pictures appear in friends lists and
+  profiles; non-square sources are center-cropped and never enlarged; EXIF/GPS/XMP/ICC are
+  removed and EXIF orientation is applied; animated GIFs become still; text, SVG, HTML, PDF,
+  TIFF and ELF files are refused whatever their declared type; truncated, corrupted and
+  mislabelled images are refused; a 30000×30000 PNG header (decompression bomb) is refused from
+  the header; too-small images, oversized bodies (413) and wrong content types (415) are refused;
+  uploads need a session, an allowed Origin and the CSRF token; replacing and removing delete the
+  old files; media needs authentication and rejects traversal and malformed paths; media
+  survives a server restart; the daily quota and the global storage limit apply; an unwritable
+  media directory disables only uploads (messaging keeps working); orphans and old soft-deleted
+  rows are cleaned up; account deletion removes images; appearance validation; banners hidden
+  from viewers of friends-only profiles; preset avatars keep working.
+- **games-badges.test.ts** (14) — catalogue with verified title IDs and artwork (covers cropped
+  to 2:3); artwork appears automatically in presence and history for a mapped title; **an
+  unmapped title with an identical reported name gets no artwork**; detected-titles report;
+  mapping updates live presence; favorite games and sessions match only exact names or mapped
+  IDs; the Alpha 0.2 curated-name API still works and keeps `game_titles` in step; artwork files
+  are deleted with the artwork or game; catalogue changes are audited; admin-only access; badges:
+  derived Administrator badge, grant/revoke with audit, no self-granted authority badges, users
+  cannot grant or feature unearned badges, revoked badges leave the featured selection.
+- **profiles-artwork.spec.ts** (browser) — a non-image file is refused in the crop dialog; a
+  picture is cropped, zoomed, moved with the keyboard and saved; a banner is uploaded; a theme is
+  chosen with live preview; the administrator creates a game, maps a title ID and uploads icon and
+  cover through the UI and grants a badge; the user features it; a simulated console reports the
+  game and the friend sees the artwork in the friend list and on the themed profile (cover keeps
+  2:3); the profile and home page have no horizontal overflow on a phone; removing the picture
+  restores the preset; no browser errors or CSP violations.
+- **Console app** — new C unit test for the read-only icon lookup (traversal, non-PNG, missing);
+  console E2E: profile pictures reach the page through the bounded media fetch as data: images,
+  console icons are read from `user/appmeta`, non-PNG files and traversal are refused, nothing is
+  served without the page secret.
+- **Upgrade check** — from a real Alpha 0.2 checkout (`9dcc192`): row counts kept, profile
+  defaults, curated names migrated into verified title mappings, upload works on the upgraded
+  database, Alpha 0.2 still works on it (rollback).
+- **Backup drill** with the production Docker image (see MEDIA_STORAGE.md).
 
 ### Server integration tests (`apps/server/test`)
 

@@ -97,7 +97,7 @@ export function NotificationsMenu() {
                       !notification.readAt && 'bg-accent-soft/50',
                     )}
                   >
-                    <Avatar avatar={notification.data.actor.avatar} name={notification.data.actor.displayName} size="sm" />
+                    <Avatar avatar={notification.data.actor.avatar} image={notification.data.actor.avatarImage} name={notification.data.actor.displayName} size="sm" />
                     <span className="min-w-0 flex-1">
                       <span className="block text-sm text-ink">{text}</span>
                       <RelativeTime iso={notification.createdAt} className="text-xs text-subtle" />

@@ -394,6 +394,7 @@ export class ActivityService {
       recentGames: [],
       recentSessions: [],
       trackedSince: null,
+      totals: { seconds: playtimeVisible ? 0 : null, games: 0, sessions: 0 },
       playtimeVisible,
       ...(isSelf ? { trackingEnabled: row.gameActivityTracking } : {}),
     };
@@ -411,7 +412,7 @@ export class ActivityService {
   private async history(
     userId: string,
     view: { includeRunning: boolean; isSelf: boolean; playtimeVisible: boolean; excluded: readonly string[] },
-  ): Promise<Pick<GameActivityResponse, 'recentGames' | 'recentSessions' | 'trackedSince'>> {
+  ): Promise<Pick<GameActivityResponse, 'recentGames' | 'recentSessions' | 'trackedSince' | 'totals'>> {
     const s = gameActivitySessions;
     const end = sql`coalesce(${s.endedAt}, ${s.lastHeartbeatAt})`;
     const duration = sql<number>`greatest(0, extract(epoch from (${end} - ${s.startedAt})))::int`;
@@ -460,7 +461,15 @@ export class ActivityService {
       .orderBy(desc(s.startedAt))
       .limit(GAME_ACTIVITY.recentSessionsMax);
 
-    const [first] = await this.ctx.db.select({ since: sql<Date | null>`min(${s.startedAt})` }).from(s).where(visible);
+    const [first] = await this.ctx.db
+      .select({
+        since: sql<Date | null>`min(${s.startedAt})`,
+        seconds: sql<string>`coalesce(sum(${duration}), 0)::bigint`,
+        games: sql<number>`count(DISTINCT ${s.titleId})::int`,
+        sessions: sql<number>`count(*)::int`,
+      })
+      .from(s)
+      .where(visible);
 
     const recentGames: GameHistoryEntry[] = games.map((game) => ({
       titleId: game.titleId,
@@ -490,6 +499,11 @@ export class ActivityService {
       recentGames,
       recentSessions,
       trackedSince: first?.since ? new Date(first.since).toISOString() : null,
+      totals: {
+        seconds: view.playtimeVisible ? Number(first?.seconds ?? 0) : null,
+        games: Number(first?.games ?? 0),
+        sessions: Number(first?.sessions ?? 0),
+      },
     };
   }
 

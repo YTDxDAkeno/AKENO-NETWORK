@@ -5,9 +5,10 @@
 //   3. runs the production server build, which serves the production web build.
 // Requires `pnpm build` beforehand.
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 // pg is a dev dependency of the web package (used only by this test tooling).
@@ -34,6 +35,10 @@ await client.query(`DROP DATABASE IF EXISTS ${databaseName} WITH (FORCE)`);
 await client.query(`CREATE DATABASE ${databaseName}`);
 await client.end();
 
+// Uploaded images belong to the disposable database: start with an empty media directory too.
+const mediaDir = process.env.E2E_MEDIA_DIR ?? join(tmpdir(), `akeno-e2e-media-${databaseName}`);
+rmSync(mediaDir, { recursive: true, force: true });
+
 const databaseUrl = new URL(adminUrl);
 databaseUrl.pathname = `/${databaseName}`;
 const env = {
@@ -45,6 +50,7 @@ const env = {
   PUBLIC_ORIGIN: `http://localhost:${port}`,
   REGISTRATION_MODE: 'invite',
   WEB_DIST_DIR: resolve(root, 'apps/web/dist'),
+  MEDIA_DIR: mediaDir,
   MIGRATE_ON_START: 'true',
   LOG_LEVEL: process.env.E2E_LOG_LEVEL ?? 'warn',
   LOG_PRETTY: 'false',

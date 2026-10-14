@@ -171,9 +171,14 @@ during upgrades: `-v` deletes the database volume.
 ### Backups
 
 ```bash
-./infrastructure/scripts/backup.sh                 # → ./backups/akeno-<UTC timestamp>.dump
+./infrastructure/scripts/backup.sh                 # → ./backups/akeno-<stamp>.dump + akeno-media-<stamp>.tar.gz
 BACKUP_DIR=/var/backups/akeno KEEP=30 ./infrastructure/scripts/backup.sh
 ```
+
+Since Alpha 0.3 profiles can contain uploaded pictures and banners, stored on the `media-data`
+volume (not in PostgreSQL). **A database dump alone is no longer a complete backup**: keep the
+dump and the media archive of the same run together. The script dumps the database first and
+then archives the media volume, so the archive contains every image the dump refers to.
 
 Automate daily backups with cron (`crontab -e`):
 
@@ -188,11 +193,13 @@ the VPS. Backups contain private messages — store them encrypted and with rest
 ### Restore
 
 ```bash
-./infrastructure/scripts/restore.sh backups/akeno-20261013T031500Z.dump
+./infrastructure/scripts/restore.sh backups/akeno-20261013T031500Z.dump backups/akeno-media-20261013T031500Z.tar.gz
 ```
 
-The script asks for confirmation, stops the app, restores in a single transaction and starts
-the app again. Restoring onto a new server: install as above, start the stack once, then run
+The script asks for confirmation, stops the app, restores the database in a single transaction,
+replaces the media files (unpacked next to the old ones, then swapped) and starts the app again.
+Without a media archive only the database is restored; pictures whose files are missing then
+fall back to preset avatars. Restoring onto a new server: install as above, start the stack once, then run
 the restore script.
 
 ### Monitoring

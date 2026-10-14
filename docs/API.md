@@ -85,8 +85,12 @@ properties.
 | `GET /users/me` | — | `CurrentUser` (profile, privacy, presence preference) |
 | `DELETE /users/me` | `{ password, confirmation: "DELETE" }` | `204` (see account deletion in SECURITY.md) |
 | `GET /users/search?q=&limit=` | `q` 1–32 chars | `{ users: UserSearchResult[] }` (excludes self, blocked, inactive) |
-| `GET /users/:handle` | handle = Online ID or UUID | `PublicProfile` (privacy-filtered; 404 if the user blocked the caller) |
-| `PATCH /profile` | any of `displayName, avatar, bio, statusMessage, favoriteGames[], activity` | `CurrentUser` |
+| `GET /users/:handle` | handle = Online ID or UUID | `PublicProfile` (privacy-filtered; 404 if the user blocked the caller). Alpha 0.3 adds `appearance` (banner `null` when details are restricted), `badges`, `featuredBadges`, `favoriteGameDetails` (artwork for exact name matches), `mutualFriends` (≤ 6) and `party` (only while the user appears online to the viewer and the viewer may see the party) |
+| `PATCH /profile` | any of `displayName, avatar, bio, statusMessage, favoriteGames[], activity` | `CurrentUser` (`avatar` is the preset; an uploaded picture takes precedence) |
+| `PUT /profile/avatar` | raw image body (`image/jpeg`, `image/png`, `image/webp`, `image/gif` or `application/octet-stream`; ≤ 8 MB; website session + CSRF only) | `CurrentUser` with `profile.avatarImage`; `422 INVALID_IMAGE`, `413`, `415`, `429 MEDIA_QUOTA_EXCEEDED`, `507 MEDIA_STORAGE_FULL`, `503 MEDIA_UNAVAILABLE` |
+| `DELETE /profile/avatar` | — | `CurrentUser` (preset shown again; files deleted) |
+| `PUT /profile/banner`, `DELETE /profile/banner` | as above (3:1) | `CurrentUser` with `profile.appearance.bannerImage` |
+| `PATCH /profile/appearance` | any of `theme` (`default, purple, blue, crimson, midnight, sakura, emerald, custom`), `accentColor` (`#rrggbb`, custom theme), `bannerOverlay`, `featuredBadges[]` (≤ 3, earned only) | `CurrentUser` |
 | `PATCH /profile/privacy` | any of `profileVisibility, presenceVisibility, lastSeenVisibility, messagePrivacy, friendRequestPrivacy, gameActivityTracking, gameActivityVisibility, gameHistoryVisibility, gamePlaytimeVisible, gameExcludedTitles[]` (title IDs, max 50) | `CurrentUser` |
 | `PUT /presence` | `{ status: "online" \| "away" \| "dnd" \| "invisible" }` | `{ preference, status }` |
 
@@ -100,7 +104,21 @@ Details, lifecycle and privacy rules: [GAME_ACTIVITY.md](GAME_ACTIVITY.md).
 | `POST /activity/stop` | device with `activity:write` | `{ reason?: "closed" \| "shutdown" }` → `{ ended }` |
 | `GET /users/:handle/activity` | signed in (devices: `profile:read`) | `GameActivityResponse`: `current`, `historyVisible`, `playtimeVisible`, `recentGames` (durations `null` when playtime is hidden), `recentSessions`, `trackedSince`; owner only: `trackingEnabled`, `excluded`/`private` flags |
 | `DELETE /activity/history` | owner, website | `{ deleted }` |
-| `GET/PUT/DELETE /admin/game-titles[/:titleId]` | administrator | Curated game names |
+| `GET/PUT/DELETE /admin/game-titles[/:titleId]` | administrator | Curated game names (Alpha 0.2 API; maps the title ID to a canonical game) |
+
+Since Alpha 0.3 `current`, `recentGames[]` and `recentSessions[]` carry `art: GameArtwork | null`
+(`{ gameId, icon, cover, banner }` media IDs) for title IDs mapped to a verified game, and the
+response has `totals: { seconds | null, games, sessions }` over all visible sessions. Artwork is
+never attached by name similarity: see [GAME_ARTWORK.md](GAME_ARTWORK.md).
+
+## Media
+
+| Method & path | Caller | Response |
+| --- | --- | --- |
+| `GET /media/:id/:file` (outside `/api/v1`) | signed in, or device with `profile:read` | The image variant (`lg.webp`, `md.webp`, `sm.webp`, `fallback.jpg`) with a fixed `Content-Type`, `Cache-Control: private, max-age=31536000, immutable`, `ETag`; `404` for unknown or deleted IDs and anything that is not a valid ID and file name |
+
+Clients build URLs with `mediaUrl(id, variant)` from `@akeno/shared`; media IDs are 128-bit
+random values. Details: [MEDIA_STORAGE.md](MEDIA_STORAGE.md).
 
 ## Friends and blocks
 
@@ -217,7 +235,20 @@ concurrent joins can never exceed `maxParticipants`.
 | `GET /admin/users?q=&limit=` | Members with session counts and connection state |
 | `PATCH /admin/users/:id` | `{ status: "active" \| "suspended", role: "user" \| "admin" }`; not for the caller's own account; suspension signs the user out everywhere |
 | `GET /admin/audit-events?before=&limit=` | Security audit log |
-| `GET /admin/stats` | User counts, live connections, process memory, database pool |
+| `GET /admin/stats` | User counts, live connections, process memory, database pool, media storage (`media.bytes`, `objects`, `limitBytes`, `freeBytes`, `available`) |
+| `GET /admin/games?q=&missingArtwork=&limit=` | Canonical games with title IDs, artwork and provenance |
+| `POST /admin/games` | `{ name, aliases[], titleIds[], artworkSource, artworkAttribution, artworkLicense }` → `GameDto` |
+| `GET/PATCH/DELETE /admin/games/:id` | Read, edit (name, aliases, provenance), delete (artwork files are removed) |
+| `PUT/DELETE /admin/games/:id/titles/:titleId` | Map / unmap a PlayStation title ID (verified mapping) |
+| `PUT /admin/games/:id/artwork/:slot` | Raw image body; `slot` = `icon` (1:1), `cover` (2:3), `banner` (16:9); center-cropped, never enlarged |
+| `DELETE /admin/games/:id/artwork/:slot` | Remove artwork |
+| `GET /admin/games/detected-titles` | Title IDs reported by consoles: players, sessions, last played, reported name, mapping and artwork status (missing-artwork report) |
+| `POST /admin/games/reload` | Rebuild the in-memory catalogue cache |
+| `GET /admin/users/:id/badges` | Granted badges with grantor and note |
+| `POST /admin/users/:id/badges` | `{ badgeId, note }`; derived `administrator` cannot be granted; authority badges (`founder`, `developer`, `verified_contributor`) cannot be granted to the caller's own account |
+| `DELETE /admin/users/:id/badges/:badgeId` | Revoke (also removed from the featured selection) |
+
+All catalogue and badge changes are written to the audit log (`admin.game_*`, `admin.badge_*`).
 
 ## Health
 
