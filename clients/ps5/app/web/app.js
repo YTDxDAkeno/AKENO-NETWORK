@@ -6,21 +6,29 @@
  */
 'use strict';
 (function () {
-  // ---- Session secret (from the URL fragment the console app opened) ----------------------
+  // ---- Session secret and quick-open target (from the URL fragment the console app opened) -----
+  // "#t=<secret>[&open=<target>]". The target names a view or a conversation; the AKENO server
+  // still decides whether this account may open that conversation.
   var SESSION_KEY = 'akeno.session';
+  var OPEN_PATTERN = /^(messages|party|friends|games|invitations|conversation:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
   var token = '';
-  try {
-    var m = /[#&]t=([0-9a-f]{64})/.exec(window.location.hash);
+  var pendingOpen = '';
+  function readFragment() {
+    var hash = window.location.hash || '';
+    var m = /[#&]t=([0-9a-f]{64})/.exec(hash);
+    var o = /[#&]open=([a-z0-9:-]+)/.exec(hash);
+    if (o && OPEN_PATTERN.test(o[1])) pendingOpen = o[1];
     if (m) {
       token = m[1];
-      window.sessionStorage.setItem(SESSION_KEY, token);
-      window.history.replaceState(null, '', '/');
-    } else {
-      token = window.sessionStorage.getItem(SESSION_KEY) || '';
+      try { window.sessionStorage.setItem(SESSION_KEY, token); } catch (e) { /* storage unavailable */ }
+    } else if (!token) {
+      try { token = window.sessionStorage.getItem(SESSION_KEY) || ''; } catch (e) { token = ''; }
     }
-  } catch (e) {
-    if (m) token = m[1];
+    if (m || o) {
+      try { window.history.replaceState(null, '', '/'); } catch (e) { /* older browsers keep the fragment */ }
+    }
   }
+  readFragment();
 
   // ---- Small DOM helpers --------------------------------------------------------------------
   function h(tag, props) {
@@ -58,6 +66,32 @@
     if (isNaN(d.getTime())) return '';
     var today = new Date();
     return d.toDateString() === today.toDateString() ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : d.toLocaleDateString();
+  }
+  function durationText(seconds) {
+    var s = Math.max(0, Math.floor(seconds || 0));
+    if (s < 60) return 'under a minute';
+    var minutes = Math.floor(s / 60);
+    if (minutes < 60) return minutes + ' min';
+    var hours = Math.floor(minutes / 60), rest = minutes % 60;
+    return rest ? hours + ' h ' + rest + ' min' : hours + ' h';
+  }
+  function secondsSince(iso) {
+    var t = new Date(iso).getTime();
+    return isNaN(t) ? 0 : Math.max(0, Math.floor((Date.now() - t) / 1000));
+  }
+  function dayText(iso) {
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    var today = new Date();
+    var yesterday = new Date(today.getTime() - 86400000);
+    if (d.toDateString() === today.toDateString()) return 'today';
+    if (d.toDateString() === yesterday.toDateString()) return 'yesterday';
+    return d.toLocaleDateString();
+  }
+  function gameName(g) { return (g && (g.name || g.titleId)) || 'a game'; }
+  function isTyping() {
+    var t = document.activeElement;
+    return !!t && (t.tagName === 'TEXTAREA' || (t.tagName === 'INPUT' && t.type !== 'checkbox'));
   }
   function uuid() {
     var b = new Uint8Array(16);
@@ -115,7 +149,11 @@
     app: null, view: 'friends', eventsNext: null,
     friends: [], requests: { incoming: [], outgoing: [] }, conversations: [], invitations: [], notifications: [],
     party: null, parties: [], sessions: [], mine: [], openConversation: null, messages: [], partyMessages: [],
-    diagnostics: null, input: { keys: false, gamepad: false, pads: 0 }
+    diagnostics: null, input: { keys: false, gamepad: false, pads: 0 },
+    // Screens shown over the pairing view ('setup' = change server, 'diagnostics'); kept until the
+    // user saves or cancels, whatever the periodic state refresh reports.
+    overlay: null, setupDraft: null,
+    drafts: {}, myActivity: null, bannerDismissed: 0
   };
 
   function showExpired() {
@@ -158,20 +196,98 @@
       }
       if (appGone) return;
       var wasPaired = S.app && S.app.paired;
+      var before = S.app;
       S.app = st;
       if (S.eventsNext === null) S.eventsNext = st.eventsNext;
+      if (S.overlay === 'setup') return; // Never disturb the server form while it is open.
       setLive(st.paired ? st.realtime : { state: 'idle', detail: '' });
       if (!st.paired) $('live-text').textContent = 'Not paired';
       var shape = (st.configured ? 'c' : '') + (st.paired ? 'p' : '') + ':' + st.pairing.state;
       if (shape !== lastShape) {
         lastShape = shape;
-        if (st.paired && !wasPaired) { loadAll(); }
+        if (st.paired && !wasPaired) { loadAll().then(applyOpen); }
         render();
       } else if (!st.paired && st.pairing.state === 'waiting') {
         var left = $('pair-left');
         if (left) left.textContent = Math.floor(st.pairing.expiresIn / 60) + ':' + ('0' + (st.pairing.expiresIn % 60)).slice(-2);
+      } else if (st.paired && S.view === 'games' && before && activityKey(before.activity) !== activityKey(st.activity) && !isTyping()) {
+        render();
       }
+      renderBanner();
     });
+  }
+  function activityKey(a) { return a ? [a.enabled, a.state, a.titleId, a.name, a.startedAt].join('|') : ''; }
+
+  // ---- Quick access: newest message banner and "open" targets ------------------------------
+  function markInboxSeen(seq) {
+    var inbox = S.app && S.app.inbox;
+    if (!inbox || !seq || seq <= inbox.seenSeq) return;
+    inbox.seenSeq = seq;
+    inbox.unseen = 0;
+    api('POST', '/api/inbox/seen', { seq: seq });
+    renderBanner();
+  }
+  function renderBanner() {
+    var box = $('banner');
+    if (!box) return;
+    var inbox = S.app && S.app.paired && S.app.inbox;
+    var latest = inbox && inbox.latest;
+    var show = !!latest && inbox.unseen > 0 && latest.seq > inbox.seenSeq && latest.seq > S.bannerDismissed && !appGone;
+    if (!show) { if (!box.hidden) { clear(box); box.hidden = true; } return; }
+    if (box.getAttribute('data-seq') === String(latest.seq) && !box.hidden) return;
+    var hadFocus = box.contains(document.activeElement);
+    clear(box);
+    box.setAttribute('data-seq', String(latest.seq));
+    box.hidden = false;
+    box.appendChild(h('div', { className: 'grow' },
+      h('div', { className: 'name', text: 'New message from ' + latest.from + (latest.kind === 'party' ? ' (party)' : latest.kind === 'group' ? ' (group)' : '') }),
+      h('div', { className: 'sub', text: latest.preview })));
+    box.appendChild(h('button', { className: 'btn', id: 'banner-open', type: 'button', text: 'Open', onclick: function () {
+      markInboxSeen(latest.seq);
+      openTarget(latest.open);
+    } }));
+    box.appendChild(h('button', { className: 'btn ghost', id: 'banner-dismiss', type: 'button', text: 'Dismiss', onclick: function () {
+      S.bannerDismissed = latest.seq;
+      markInboxSeen(latest.seq);
+      focusFirst();
+    } }));
+    if (hadFocus) $('banner-open').focus();
+  }
+  // Coming back to the page (e.g. from a game): offer the newest message first, without
+  // interrupting typing.
+  function onReturn() {
+    if (appGone || !token) return;
+    refreshState().then(function () {
+      var open = $('banner-open');
+      if (open && !$('banner').hidden && !isTyping()) open.focus();
+    });
+  }
+  function openTarget(target) {
+    if (!target || !OPEN_PATTERN.test(target) || !S.app || !S.app.paired) return;
+    S.overlay = null;
+    if (target.indexOf('conversation:') === 0) {
+      var id = target.slice(13);
+      S.view = 'messages';
+      var known = null;
+      S.conversations.forEach(function (c) { if (c.id === id) known = c; });
+      if (known) openConversation(known);
+      else server('GET', '/conversations/' + id).then(function (conv) { if (conv) openConversation(conv); else render(); });
+      loadConversations();
+      return;
+    }
+    S.view = target;
+    var loaders = { messages: loadConversations, party: loadParty, friends: loadFriends, games: loadActivity, invitations: loadInvitations };
+    if (loaders[target]) loaders[target]();
+    render();
+    focusFirst();
+  }
+  function applyOpen() {
+    var target = pendingOpen;
+    pendingOpen = '';
+    if (!target) return;
+    var inbox = S.app && S.app.inbox;
+    if (inbox && inbox.latest && inbox.latest.open === target) markInboxSeen(inbox.latest.seq);
+    openTarget(target);
   }
 
   // ---- Data loading -------------------------------------------------------------------------
@@ -227,8 +343,15 @@
       $('self-dot').className = 'dot ' + (me.presence || 'online');
     });
   }
+  function loadActivity() {
+    if (!S.me) return Promise.resolve();
+    return server('GET', '/users/' + S.me.id + '/activity', undefined, true).then(function (r) {
+      if (r) S.myActivity = r;
+      if (S.view === 'games' && !isTyping()) render();
+    });
+  }
   function loadAll() {
-    return Promise.all([loadMe(), loadFriends(), loadConversations(), loadInvitations(), loadParty(), loadSessions()]);
+    return Promise.all([loadMe().then(loadActivity), loadFriends(), loadConversations(), loadInvitations(), loadParty(), loadSessions()]);
   }
 
   // ---- Rendering ----------------------------------------------------------------------------
@@ -240,35 +363,65 @@
     if (!st) return;
     $('tabs').hidden = !st.paired;
     $('who').hidden = !st.paired;
-    if (!st.configured) main.appendChild(viewSetup());
-    else if (!st.paired) main.appendChild(viewPairing());
+    if (!st.configured || S.overlay === 'setup') main.appendChild(viewSetup());
+    else if (!st.paired) main.appendChild(S.overlay === 'diagnostics' ? viewDiagnostics(true) : viewPairing());
     else {
       Array.prototype.forEach.call(document.querySelectorAll('.tab'), function (t) {
         t.classList.toggle('active', t.getAttribute('data-view') === S.view);
       });
-      var views = { friends: viewFriends, messages: viewMessages, invitations: viewInvitations, party: viewParty,
+      var views = { friends: viewFriends, messages: viewMessages, games: viewGames, invitations: viewInvitations, party: viewParty,
         sessions: viewSessions, diagnostics: viewDiagnostics, settings: viewSettings };
       main.appendChild((views[S.view] || viewFriends)());
     }
-    if (focusedId && $(focusedId)) $(focusedId).focus();
-    else if (!document.activeElement || document.activeElement === document.body) focusFirst();
+    var again = focusedId && $(focusedId);
+    if (again) {
+      again.focus();
+      if (again.tagName === 'INPUT' && again.type === 'text' && again.setSelectionRange) {
+        try { again.setSelectionRange(again.value.length, again.value.length); } catch (e) { /* not a text field */ }
+      }
+    } else if (!document.activeElement || document.activeElement === document.body) {
+      focusFirst();
+    }
+    renderBanner();
   }
 
+  // First run, or "Change server" from the pairing screen. What is typed lives in S.setupDraft,
+  // so re-rendering never loses it; nothing is saved until the user selects Save.
   function viewSetup() {
-    var server = h('input', { type: 'url', id: 'setup-server', placeholder: 'https://akeno.example.org', value: (S.app && S.app.server) || '' });
-    var name = h('input', { type: 'text', id: 'setup-name', maxlength: 48, value: (S.app && S.app.deviceName) || 'PlayStation 5' });
+    var st = S.app;
+    var changing = st.configured;
+    if (!S.setupDraft) S.setupDraft = { server: st.server || '', name: st.deviceName || 'PlayStation 5' };
+    var draft = S.setupDraft;
+    var server = h('input', { type: 'url', id: 'setup-server', placeholder: 'https://akeno.example.org', value: draft.server });
+    var name = h('input', { type: 'text', id: 'setup-name', maxlength: 48, value: draft.name });
+    server.value = draft.server;
+    name.value = draft.name;
+    server.addEventListener('input', function () { draft.server = server.value; });
+    name.addEventListener('input', function () { draft.name = name.value; });
+    function close() {
+      S.overlay = null;
+      S.setupDraft = null;
+      lastShape = '';
+    }
     return h('section', { className: 'panel' },
-      h('h1', { text: 'Welcome to AKENO NETWORK' }),
+      h('h1', { text: changing ? 'Change server' : 'Welcome to AKENO NETWORK' }),
       h('p', { className: 'muted', text: 'Enter the address of your AKENO NETWORK server. The connection is always encrypted and the server certificate is verified.' }),
+      changing ? h('p', { className: 'muted small', text: 'Currently: ' + st.server + '. Nothing changes until you select Save.' }) : null,
       h('label', { for: 'setup-server', text: 'Server address' }), server,
       h('label', { for: 'setup-name', text: 'Name of this console (shown when you approve pairing)' }), name,
       h('div', { className: 'row mt' },
-        h('button', { className: 'btn', id: 'setup-save', type: 'button', text: 'Continue', onclick: function () {
-          api('POST', '/api/settings', { server: server.value.trim(), deviceName: name.value.trim() }).then(function (res) {
+        h('button', { className: 'btn', id: 'setup-save', type: 'button', text: changing ? 'Save' : 'Continue', onclick: function () {
+          api('POST', '/api/settings', { server: draft.server.trim(), deviceName: draft.name.trim() }).then(function (res) {
             if (!res.ok) return toast(res.error.message, true);
+            close();
             refreshState();
           });
-        } })));
+        } }),
+        changing ? h('button', { className: 'btn secondary', id: 'setup-cancel', type: 'button', text: 'Cancel', onclick: function () {
+          close();
+          render();
+          focusFirst();
+        } }) : null));
   }
 
   function viewPairing() {
@@ -306,15 +459,15 @@
         });
       } }),
       h('button', { className: 'btn secondary', id: 'change-server', type: 'button', text: 'Change server', onclick: function () {
-        S.app.configured = false;
-        lastShape = '';
-        clear($('main'));
-        $('main').appendChild(viewSetup());
+        S.overlay = 'setup';
+        S.setupDraft = null;
+        render();
         focusFirst();
       } }),
       h('button', { className: 'btn ghost', id: 'pair-diag', type: 'button', text: 'Diagnostics', onclick: function () {
-        clear($('main'));
-        $('main').appendChild(viewDiagnostics(true));
+        S.overlay = 'diagnostics';
+        S.diagnostics = null;
+        render();
         focusFirst();
       } })));
     return box;
@@ -323,12 +476,14 @@
   function personRow(user, extra, onclick, id) {
     var presence = user.presence ? user.presence.status : null;
     var activity = user.presence && user.presence.activity;
+    var game = user.presence && user.presence.game;
     var tag = onclick ? 'button' : 'div';
     return h(tag, { className: 'item', type: onclick ? 'button' : null, id: id, onclick: onclick },
       h('span', { className: 'avatar', text: initials(user.displayName || user.onlineId) }, presence ? h('span', { className: 'dot ' + presence }) : null),
       h('span', { className: 'grow' },
         h('div', { className: 'name', text: user.displayName || user.onlineId }),
-        h('div', { className: 'sub', text: '@' + user.onlineId + (presence ? ' · ' + presenceLabel(presence) : '') + (activity ? ' · ' + activity : '') })),
+        h('div', { className: 'sub', text: '@' + user.onlineId + (presence ? ' · ' + presenceLabel(presence) : '') + (activity && !game ? ' · ' + activity : '') }),
+        game ? h('div', { className: 'playing', text: 'Playing ' + gameName(game) + ' · PlayStation 5 · ' + durationText(secondsSince(game.startedAt)) }) : null),
       extra || null);
   }
 
@@ -373,6 +528,8 @@
   function openConversation(conv) {
     S.openConversation = conv;
     S.messages = [];
+    var inbox = S.app && S.app.inbox;
+    if (inbox && inbox.latest && inbox.latest.open === 'conversation:' + conv.id) markInboxSeen(inbox.latest.seq);
     render();
     server('GET', '/conversations/' + conv.id + '/messages?limit=50').then(function (page) {
       if (!page || !S.openConversation || S.openConversation.id !== conv.id) return;
@@ -402,16 +559,20 @@
     return box;
   }
 
-  function composer(onSend) {
+  // The text being written survives re-renders (new messages, presence updates) per conversation.
+  function composer(key, onSend) {
     var input = h('input', { type: 'text', id: 'composer-input', maxlength: 2000, placeholder: 'Write a message' });
+    input.value = S.drafts[key] || '';
+    input.addEventListener('input', function () { S.drafts[key] = input.value; });
     function send() {
       var text = input.value.trim();
       if (!text) return;
       input.disabled = true;
       onSend(text).then(function (ok) {
-        input.disabled = false;
-        if (ok) input.value = '';
-        input.focus();
+        var current = $('composer-input') || input;
+        current.disabled = false;
+        if (ok) { current.value = ''; S.drafts[key] = ''; }
+        current.focus();
       });
     }
     input.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') { ev.preventDefault(); send(); } });
@@ -436,7 +597,7 @@
       chat.appendChild(h('h2', { text: c.otherUser.displayName || c.otherUser.onlineId }));
       chat.appendChild(messageBubbles(S.messages));
       if (c.canSend === false) chat.appendChild(h('p', { className: 'muted', text: 'You cannot send messages in this conversation.' }));
-      else chat.appendChild(composer(function (text) {
+      else chat.appendChild(composer('conversation:' + c.id, function (text) {
         return server('POST', '/conversations/' + c.id + '/messages', { body: text, clientMessageId: uuid() }).then(function (res) {
           if (!res) return false;
           if (res.message) addMessage(S.messages, res.message);
@@ -508,7 +669,7 @@
         })));
       wrap.appendChild(party);
       var chat = h('section', { className: 'panel chat' }, h('h2', { text: 'Party chat' }), messageBubbles(S.partyMessages),
-        composer(function (text) {
+        composer('party:' + p.id, function (text) {
           return server('POST', '/parties/' + p.id + '/messages', { body: text, clientMessageId: uuid() }).then(function (res) {
             if (!res) return false;
             if (res.message) addMessage(S.partyMessages, res.message);
@@ -535,6 +696,68 @@
           } }));
       })) : h('p', { className: 'muted', text: 'No open parties from your friends right now.' })));
     return wrap;
+  }
+
+  // ---- Games: what this console detects, and the tracked history ----------------------------
+  function gameIcon(name) {
+    // A plain, local icon: no remote artwork, so nothing can fail to load.
+    return h('span', { className: 'game-icon', 'aria-hidden': 'true', text: initials(name) });
+  }
+  var ACTIVITY_TITLES = {
+    playing: 'Now playing', excluded: 'Not shared', 'permission-missing': 'Permission needed', 'disabled-on-server': 'Turned off on the website',
+    unsupported: 'Game detection unavailable', idle: 'No game running', off: 'Game activity is off', starting: 'Starting', 'signed-out': 'Not paired'
+  };
+  function nowPlayingPanel() {
+    var a = (S.app && S.app.activity) || { state: 'off', detail: '' };
+    var panel = h('section', { className: 'panel', id: 'now-playing' }, h('h2', { text: 'On this console' }));
+    if ((a.state === 'playing' || a.state === 'excluded') && (a.name || a.titleId)) {
+      var seconds = a.startedAt ? secondsSince(a.startedAt) : a.sinceSeconds;
+      panel.appendChild(h('div', { className: 'game-card' }, gameIcon(a.name || a.titleId),
+        h('div', { className: 'grow' },
+          h('div', { className: 'label', text: ACTIVITY_TITLES[a.state] }),
+          h('div', { className: 'game-title', id: 'now-playing-title', text: a.name || a.titleId }),
+          h('div', { className: 'sub', text: 'PlayStation 5 · ' + (a.state === 'playing' ? 'playing for ' : 'running for ') + durationText(seconds) + ' · ' + a.titleId }),
+          h('div', { className: 'small muted', text: a.detail }))));
+      panel.appendChild(h('p', { className: 'muted small', text: 'AKENO sees that this game is running on the console. It cannot tell whether the game is on screen.' }));
+    } else {
+      panel.appendChild(h('div', { className: 'name', id: 'now-playing-title', text: ACTIVITY_TITLES[a.state] || a.state }));
+      panel.appendChild(h('p', { className: 'muted', text: a.detail || '' }));
+      if (a.state === 'off' && S.app && S.app.paired) {
+        panel.appendChild(h('button', { className: 'btn', id: 'activity-on', type: 'button', text: 'Share the game I am playing', onclick: function () {
+          api('POST', '/api/settings', { activityEnabled: true }).then(function () { refreshState().then(render); });
+        } }));
+      }
+    }
+    return panel;
+  }
+  function historyPanel() {
+    var r = S.myActivity;
+    var panel = h('section', { className: 'panel' }, h('h2', { text: 'Recently played' }));
+    if (!r) { panel.appendChild(h('p', { className: 'muted', text: 'Loading...' })); return panel; }
+    if (!r.recentGames.length) {
+      panel.appendChild(h('p', { className: 'muted', text: 'No games tracked yet. Games appear here when this console detects them.' }));
+      return panel;
+    }
+    panel.appendChild(h('div', { className: 'list', id: 'recent-games' }, r.recentGames.map(function (g) {
+      var detail = g.playingNow ? 'Playing now' : 'Last played ' + dayText(g.lastPlayedAt) +
+        (g.lastSessionSeconds !== null ? ' · last session ' + durationText(g.lastSessionSeconds) : '');
+      return h('div', { className: 'item', tabindex: '0', id: 'game-' + g.titleId }, gameIcon(gameName(g)),
+        h('span', { className: 'grow' },
+          h('div', { className: 'name', text: gameName(g) + (g.excluded ? ' (excluded)' : '') }),
+          h('div', { className: 'sub', text: detail + ' · ' + g.sessionCount + ' session' + (g.sessionCount === 1 ? '' : 's') })),
+        h('span', { className: 'total' },
+          h('div', { className: 'name', text: g.totalSeconds === null ? 'hidden' : durationText(g.totalSeconds) }),
+          h('div', { className: 'sub', text: 'total tracked' })));
+    })));
+    if (r.trackedSince) {
+      panel.appendChild(h('p', { className: 'muted small', text: 'Tracked by AKENO since ' + new Date(r.trackedSince).toLocaleDateString() +
+        '. Earlier playtime is not known and is never estimated.' }));
+    }
+    return panel;
+  }
+  function viewGames() {
+    return h('div', {}, nowPlayingPanel(), historyPanel(),
+      h('p', { className: 'muted small', text: 'Who sees your game and history is set in the privacy settings on the AKENO NETWORK website.' }));
   }
 
   function sessionRows(list) {
@@ -579,11 +802,15 @@
           api('POST', '/api/realtime/reconnect').then(function () { toast('Reconnecting live updates.'); setTimeout(refreshState, 800); });
         } }),
         h('button', { className: 'btn secondary', type: 'button', id: 'diag-refresh', text: 'Refresh', onclick: loadDiagnostics }),
-        standalone ? h('button', { className: 'btn ghost', type: 'button', id: 'diag-back', text: 'Back', onclick: function () { lastShape = ''; refreshState(); } }) : null),
+        standalone ? h('button', { className: 'btn ghost', type: 'button', id: 'diag-back', text: 'Back', onclick: function () {
+          S.overlay = null;
+          lastShape = '';
+          refreshState();
+        } }) : null),
       result));
     if (!d) {
       wrap.appendChild(h('p', { className: 'muted', text: 'Loading...' }));
-      loadDiagnostics(standalone);
+      loadDiagnostics();
       return wrap;
     }
     wrap.appendChild(h('section', { className: 'panel' }, h('h2', { text: 'Console app' }), kv([
@@ -600,6 +827,38 @@
       ['Controller input', (S.input.keys ? 'arrow keys seen' : 'no arrow keys seen yet') + ' · Gamepad API ' + (navigator.getGamepads ? 'available' : 'not available') +
         (S.input.pads ? ' (' + S.input.pads + ' connected)' : '')],
       ['Browser engine', navigator.userAgent]])));
+    if (d.activity) {
+      var act = d.activity, scan = act.lastScan || {};
+      wrap.appendChild(h('section', { className: 'panel' }, h('h2', { text: 'Game detection' }), kv([
+        ['State', act.state + (act.detail ? ' — ' + act.detail : '')], ['Method', act.method],
+        ['Current', act.titleId ? act.titleId + (act.name ? ' (' + act.name + ', from ' + (act.nameSource || 'server') + ')' : '') : 'none'],
+        ['Last scan', scan.result + ' · ' + scan.processes + ' processes, ' + scan.appProcesses + ' with a title ID, ' + scan.stoppedGames + ' stopped games' +
+          (act.lastScanSecondsAgo >= 0 ? ' · ' + act.lastScanSecondsAgo + ' s ago' : '')],
+        ['Candidates', (scan.candidates || []).join(', ') || 'none'],
+        ['App info layout', scan.layout + ' (votes: offset 20 = ' + (scan.layoutVotes ? scan.layoutVotes.offset20 : 0) + ', offset 16 = ' +
+          (scan.layoutVotes ? scan.layoutVotes.offset16 : 0) + ')'],
+        ['Raw probes', (scan.probes || []).join('\n') || 'none'],
+        ['Focus', act.focus],
+        ['Heartbeats', act.heartbeatsOk + ' ok, ' + act.heartbeatsFailed + ' failed · every ' + Math.round(act.heartbeatIntervalMs / 1000) + ' s' +
+          (act.lastHeartbeatSecondsAgo >= 0 ? ' · last ' + act.lastHeartbeatSecondsAgo + ' s ago' : '')],
+        ['Errors', scan.error || 'none']])));
+    }
+    if (d.notifications.actionable) {
+      var an = d.notifications.actionable;
+      var testResult = h('p', { id: 'actionable-result', className: 'muted small', text: '' });
+      wrap.appendChild(h('section', { className: 'panel' }, h('h2', { text: 'Notifications with a button (experimental)' }), kv([
+        ['Enabled', an.enabled ? 'yes' : 'no (Settings)'], ['Method', an.method], ['Status', an.status],
+        ['Results', 'shown ' + an.sent + ', refused ' + an.refused + ', unavailable ' + an.unavailable + ' (a plain notification is sent instead)']]),
+        h('div', { className: 'row mt' }, h('button', { className: 'btn secondary', type: 'button', id: 'diag-actionable-test', text: 'Send a test notification with a button',
+          onclick: function (ev) {
+            ev.target.disabled = true;
+            api('POST', '/api/diagnostics/actionable-test').then(function (res) {
+              ev.target.disabled = false;
+              testResult.textContent = res.ok ? 'The system accepted it. Does it show a button, and does the button open AKENO? Please report what you see.'
+                : 'Not shown (result ' + res.result + ': ' + res.status + '). Plain notifications keep working.';
+            });
+          } })), testResult));
+    }
     wrap.appendChild(h('section', { className: 'panel' }, h('h2', { text: 'Features' }),
       h('dl', { className: 'kv' }, d.capabilities.map(function (c) {
         return [h('dt', { text: c.feature }), h('dd', {}, h('span', { className: 'state-' + c.state, text: c.state }), ' — ' + c.reason)];
@@ -608,12 +867,11 @@
       h('div', { className: 'log mono', text: d.log.join('\n') })));
     return wrap;
   }
-  function loadDiagnostics(standalone) {
+  function loadDiagnostics() {
     api('GET', '/api/diagnostics').then(function (d) {
       if (!d.ok) return;
       S.diagnostics = d;
-      if (standalone === true || !(S.app && S.app.paired)) { clear($('main')); $('main').appendChild(viewDiagnostics(true)); focusFirst(); }
-      else if (S.view === 'diagnostics') render();
+      if (S.overlay === 'diagnostics' || (S.app && S.app.paired && S.view === 'diagnostics')) render();
     });
   }
 
@@ -629,11 +887,19 @@
       });
       return h('label', { className: 'check', for: id }, box, label);
     }
+    var act = S.app.activity || {};
     return h('div', {},
       h('section', { className: 'panel' }, h('h2', { text: 'Notifications' }),
-        h('p', { className: 'muted small', text: 'Shown as system notifications while AKENO NETWORK runs, also when this page is closed.' }),
+        h('p', { className: 'muted small', text: 'Shown as system notifications while AKENO NETWORK runs, also when this page is closed and while you play.' }),
         toggle('set-notify-messages', 'New messages', 'notifyMessages', n.messages),
-        toggle('set-notify-social', 'Friend requests and invitations', 'notifySocial', n.social)),
+        toggle('set-notify-social', 'Friend requests and invitations', 'notifySocial', n.social),
+        toggle('set-notify-actionable', 'Experimental: message notifications with an "Open in AKENO" button', 'actionableNotifications', n.actionable),
+        h('p', { className: 'muted small', text: 'Not yet verified on a console. If notifications stop appearing or the button does nothing, turn this off; ' +
+          'AKENO then uses the plain notifications again. Starting AKENO again (or the newest-message banner) also opens the latest conversation.' })),
+      h('section', { className: 'panel' }, h('h2', { text: 'Game activity' }),
+        toggle('set-activity', 'Share the game I am playing from this console', 'activityEnabled', act.enabled),
+        h('p', { className: 'muted small', text: 'AKENO looks for a running PS5 or PS4 game (read-only) and tells your AKENO server, which records the time ' +
+          'you play. Who sees it is set in the privacy settings on the website, where you can also exclude games or turn tracking off.' })),
       h('section', { className: 'panel' }, h('h2', { text: 'This console' }), kv([
         ['Paired as', '@' + S.app.onlineId], ['Console name', S.app.deviceName], ['Server', S.app.server]]),
         h('div', { className: 'row mt' },
@@ -665,7 +931,14 @@
         break;
       case 'presence.updated':
         S.friends.forEach(function (f) { if (f.id === d.userId) f.presence = d.presence; });
-        if (S.view === 'friends') render();
+        if (S.view === 'friends' && !isTyping()) render();
+        break;
+      case 'activity.local':
+        if (S.app) S.app.activity = d;
+        if (S.view === 'games' && !isTyping()) render();
+        break;
+      case 'activity.self':
+        loadActivity();
         break;
       case 'self.presence':
         $('self-dot').className = 'dot ' + d.status;
@@ -724,6 +997,7 @@
     }
   }
   function back() {
+    if (S.overlay && S.app && S.app.configured) { S.overlay = null; S.setupDraft = null; lastShape = ''; render(); focusFirst(); return; }
     if (S.view === 'messages' && S.openConversation) { S.openConversation = null; render(); return; }
     if (S.app && S.app.paired && S.view !== 'friends') { S.view = 'friends'; render(); focusFirst(); }
   }
@@ -738,7 +1012,8 @@
       lastKeyNav = Date.now();
       ev.preventDefault();
       move(dirs[ev.key]);
-    } else if ((ev.key === 'Escape' || ev.key === 'Backspace') && !typing) {
+    } else if (ev.key === 'Escape' || (ev.key === 'Backspace' && !typing)) {
+      // Escape (Circle on many controllers) also leaves a text field; Backspace keeps deleting text.
       ev.preventDefault();
       back();
     }
@@ -781,6 +1056,7 @@
       if (S.view === 'invitations') loadInvitations();
       if (S.view === 'party') loadParty();
       if (S.view === 'sessions') loadSessions();
+      if (S.view === 'games') loadActivity();
       render();
       tab.focus();
     });
@@ -795,11 +1071,26 @@
     api('POST', '/api/exit').then(function () { showGone(); });
   });
 
+  // A second launch of AKENO opens the same page with a new fragment: only "hashchange" fires.
+  window.addEventListener('hashchange', function () {
+    var previous = token;
+    readFragment();
+    if (appGone && token && token !== previous) { window.location.reload(); return; }
+    if (pendingOpen && S.app && S.app.paired) applyOpen();
+    else onReturn();
+  });
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) onReturn(); });
+  window.addEventListener('focus', onReturn);
+
   if (!token) {
     showExpired();
   } else {
-    refreshState().then(function () { if (S.app && S.app.paired) loadAll(); });
+    refreshState(); // Loads everything (and applies an "open" target) once the console is paired.
     setInterval(function () { if (!appGone) refreshState(); }, 3000);
     setInterval(function () { if (!appGone) pollEvents(); }, 2000);
+    // Running durations ("Playing ... · 47 min") stay current without disturbing typing.
+    setInterval(function () {
+      if (!appGone && S.app && S.app.paired && (S.view === 'friends' || S.view === 'games') && !isTyping() && !S.overlay) render();
+    }, 30000);
   }
 })();

@@ -806,6 +806,7 @@ if (appBinary) {
       await page.locator('.bubble', { hasText: 'Live reply from bob' }).waitFor({ timeout: 15_000 });
 
       for (const [tab, check, file] of [
+        ['Games', 'On this console', '3-games.png'],
         ['Invitations', 'Recent activity', '3-invitations.png'],
         ['Party', 'Party chat', '4-party.png'],
         ['Game sessions', 'My game sessions', '5-sessions.png'],
@@ -943,6 +944,32 @@ if (appBinary) {
       if (shots) await page.screenshot({ path: join(shots, '0-pairing-code.png') });
       await page.locator('#pair-cancel').click();
       await page.getByText('Pairing was cancelled.').waitFor({ timeout: 10_000 });
+
+      // "Change server" stays open through the periodic state refreshes and keeps what was typed.
+      await page.locator('#change-server').click();
+      await page.getByRole('heading', { name: 'Change server' }).waitFor();
+      await page.locator('#setup-server').fill('https://typed-but-not-saved.example');
+      await page.waitForTimeout(7000); // more than two refresh cycles (every 3 s)
+      await page.getByRole('heading', { name: 'Change server' }).waitFor({ timeout: 100 });
+      assert.equal(await page.locator('#setup-server').inputValue(), 'https://typed-but-not-saved.example');
+      if (shots) await page.screenshot({ path: join(shots, '0-change-server.png') });
+      await page.locator('#setup-cancel').click();
+      await page.getByRole('heading', { name: 'Pair this console with your account' }).waitFor();
+      assert.equal((await appState(fresh)).server, server, 'cancel changes nothing');
+      // Circle / Escape also closes it without saving.
+      await page.locator('#change-server').click();
+      await page.locator('#setup-server').fill('https://also-not-saved.example');
+      await page.locator('#setup-name').focus();
+      await page.keyboard.press('Escape');
+      await page.getByRole('heading', { name: 'Pair this console with your account' }).waitFor();
+      assert.equal((await appState(fresh)).server, server);
+      // Diagnostics from the pairing screen also stays until Back.
+      await page.locator('#pair-diag').click();
+      await page.getByRole('heading', { name: 'Secure connection' }).waitFor();
+      await page.waitForTimeout(3500);
+      await page.getByRole('heading', { name: 'Secure connection' }).waitFor({ timeout: 100 });
+      await page.locator('#diag-back').click();
+      await page.getByRole('heading', { name: 'Pair this console with your account' }).waitFor();
       assert.deepEqual(errors, [], 'no script errors');
       await page.locator('#exit-btn').click({ noWaitAfter: true }).catch(() => {});
     } finally {
@@ -1176,6 +1203,89 @@ if (appBinary) {
     assert.equal((await third.exited).code, 0);
     await waitFor(() => opens().length === before + 2, 'the page to be reopened again');
     assert.match(opens().at(-1), /^http:\/\/127\.0\.0\.1:\d+\/#t=[0-9a-f]{64}$/);
+  });
+
+  await step('console app (browser): quick-open link, drafts, newest-message banner, games and friends playing', async () => {
+    let chromium;
+    try {
+      ({ chromium } = createRequire(resolve(root, 'apps/web/package.json'))('@playwright/test'));
+    } catch {
+      chromium = null;
+    }
+    if (!chromium) {
+      if (process.env.AKENO_REQUIRE_BROWSER) throw new Error('Playwright is not installed (pnpm install)');
+      log('       (skipped: Playwright not installed)');
+      return;
+    }
+    // bob plays a game on his own paired device: carol's console shows it in the friend list.
+    const bobCredential = join(work, 'bob-device.json');
+    assert.equal((await pair(bobCredential, bob, { name: 'Bob PS5' })).code, 0);
+    const bobToken = JSON.parse(readFileSync(bobCredential, 'utf8')).accessToken;
+    // Games are only shown while the player appears online: keep bob's device connected.
+    const bobOnline = startCli(['--server', server, '--ca-file', caFile, '--credentials', bobCredential, 'listen']);
+    await waitFor(() => bobOnline.stderr.includes('realtime.connected'), 'bob to be online', 20_000);
+    const bobBeat = await fetch(`http://127.0.0.1:${backendPort}/api/v1/activity/heartbeat`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${bobToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ titleId: 'CUSA00042', titleName: 'Bob Adventure', platform: 'PS5' }),
+    });
+    assert.equal(bobBeat.status, 200, await bobBeat.text());
+
+    const shots = process.env.AKENO_UI_SCREENSHOTS;
+    const browser = await chromium.launch();
+    try {
+      const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+      const errors = [];
+      page.on('pageerror', (error) => errors.push(String(error)));
+      page.on('console', (message) => message.type() === 'error' && !/^Failed to load resource: the server responded with a status of 4\d\d/.test(message.text()) && errors.push(message.text()));
+
+      // The link a second launch or a notification button opens: straight into the conversation.
+      await page.goto(`http://127.0.0.1:${player.port}/#t=${player.token}&open=conversation:${conversationId}`);
+      await page.locator('.bubble', { hasText: 'Are you playing?' }).waitFor({ timeout: 15_000 });
+      assert.equal(new URL(page.url()).hash, '', 'the secret and the target are removed from the address bar');
+      if (shots) await page.screenshot({ path: join(shots, '8-quick-open.png') });
+
+      // A half-written reply survives an incoming message (the view re-renders).
+      await page.locator('#composer-input').fill('half-written reply');
+      await bob.request('POST', `/conversations/${conversationId}/messages`, { body: 'Another one', clientMessageId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' });
+      await page.locator('.bubble', { hasText: 'Another one' }).waitFor({ timeout: 15_000 });
+      assert.equal(await page.locator('#composer-input').inputValue(), 'half-written reply');
+      await page.keyboard.press('Enter');
+      await page.locator('.bubble.mine', { hasText: 'half-written reply' }).waitFor();
+
+      // Elsewhere in the app, a new message shows a banner that opens the conversation.
+      await page.locator('.tab', { hasText: 'Friends' }).click();
+      await page.locator('.playing', { hasText: 'Playing Bob Adventure · PlayStation 5' }).waitFor({ timeout: 15_000 });
+      if (shots) await page.screenshot({ path: join(shots, '9-friend-playing.png') });
+      await bob.request('POST', `/conversations/${conversationId}/messages`, { body: 'Banner test', clientMessageId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' });
+      await page.locator('#banner', { hasText: 'New message from it_bob' }).waitFor({ timeout: 15_000 });
+      if (shots) await page.screenshot({ path: join(shots, '10-banner.png') });
+      await page.locator('#banner-open').click();
+      await page.locator('.bubble', { hasText: 'Banner test' }).waitFor({ timeout: 15_000 });
+      await page.waitForFunction('document.getElementById("banner").hidden === true');
+      assert.equal((await appState(player)).inbox.unseen, 0);
+
+      // Games: what this console detects and the tracked history.
+      await page.locator('.tab', { hasText: 'Games' }).click();
+      await page.locator('#now-playing-title', { hasText: 'Racing Game' }).waitFor({ timeout: 15_000 });
+      await page.locator('#recent-games .name', { hasText: 'Racing Game' }).first().waitFor();
+      await page.getByText('AKENO sees that this game is running on the console').waitFor();
+      if (shots) await page.screenshot({ path: join(shots, '11-games.png'), fullPage: true });
+      await page.locator('.tab', { hasText: 'Diagnostics' }).click();
+      await page.getByRole('heading', { name: 'Game detection', exact: true }).waitFor();
+      await page.getByRole('heading', { name: 'Notifications with a button (experimental)' }).waitFor();
+      if (shots) await page.screenshot({ path: join(shots, '12-diagnostics-activity.png'), fullPage: true });
+      assert.deepEqual(errors, [], 'no script errors');
+    } finally {
+      await browser.close();
+      bobOnline.child.kill('SIGTERM');
+      await bobOnline.exited;
+      await fetch(`http://127.0.0.1:${backendPort}/api/v1/activity/stop`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${bobToken}`, 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+    }
   });
 
   await step('console app: button notifications carry one-time links, never the page secret', async () => {

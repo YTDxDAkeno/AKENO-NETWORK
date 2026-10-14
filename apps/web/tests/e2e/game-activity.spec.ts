@@ -177,3 +177,85 @@ test('a paired console shares the game being played; friends see it live and pri
   await frank.close();
   await grace.close();
 });
+
+test('an older console is allowed to share games later; excluded games and hidden playtime', async ({ browser, baseURL }) => {
+  const [henryCode, ivyCode] = await createInvitationCodes(baseURL!, 2);
+  const henry = await openUser(browser);
+  const ivy = await openUser(browser);
+  const henryId = `henry_${RUN}`;
+  let console_: APIRequestContext;
+  let auth: Record<string, string> = {};
+  const heartbeat = (titleId = GAME.titleId) => console_.post('/api/v1/activity/heartbeat', { headers: auth, data: { ...GAME, titleId } });
+
+  await test.step('Henry pairs a console without the game activity permission (as Alpha 0.1 consoles were)', async () => {
+    await register(henry.page, henryCode!, henryId, 'Henry');
+    await register(ivy.page, ivyCode!, `ivy_${RUN}`, 'Ivy');
+    const ivyUser = await apiCall(ivy.page, 'GET', '/users/me');
+    const sent = await apiCall(henry.page, 'POST', '/friends/requests', { userId: ivyUser.json.id });
+    expect((await apiCall(ivy.page, 'POST', `/friends/requests/${sent.json.request.id}/accept`)).status).toBe(200);
+
+    console_ = await playwrightRequest.newContext({ baseURL });
+    const started = await console_.post('/api/v1/devices/pairings', {
+      data: { deviceName: 'Old PS5', platform: 'PlayStation 5 (homebrew)', clientVersion: '0.1.0' },
+    });
+    const pairing = (await started.json()) as { deviceCode: string; verificationUriComplete: string };
+    await henry.page.goto(pairing.verificationUriComplete);
+    await henry.page.getByRole('button', { name: 'Continue' }).click();
+    await henry.page.getByLabel('Share the game you are playing, detected by this device').uncheck();
+    await henry.page.getByRole('button', { name: 'Approve device' }).click();
+    await expect(henry.page.getByRole('heading', { name: 'Old PS5 is paired' })).toBeVisible();
+    const redeemed = await console_.post('/api/v1/devices/pairings/token', { data: { deviceCode: pairing.deviceCode } });
+    auth = { Authorization: `Bearer ${((await redeemed.json()) as { accessToken: string }).accessToken}` };
+    const denied = await heartbeat();
+    expect(denied.status()).toBe(403);
+    expect(((await denied.json()) as { error: { code: string } }).error.code).toBe('DEVICE_SCOPE_DENIED');
+  });
+
+  await test.step('Henry allows game activity on the website, without pairing again', async () => {
+    await henry.page.goto('/settings?tab=security');
+    await henry.page.getByRole('button', { name: 'Allow game activity' }).click();
+    await expect(henry.page.getByRole('dialog')).toContainText('Allow Old PS5 to share game activity?');
+    await henry.page.getByRole('dialog').getByRole('button', { name: 'Allow' }).click();
+    await expect(henry.page.getByText('Permission granted.')).toBeVisible();
+    await expect(henry.page.getByRole('button', { name: 'Allow game activity' })).toHaveCount(0);
+    expect((await heartbeat()).status()).toBe(200);
+    await console_.post('/api/v1/activity/stop', { headers: auth, data: {} });
+  });
+
+  await test.step('Henry hides his playtime: Ivy sees the game but not how long', async () => {
+    await henry.page.goto('/settings?tab=privacy');
+    await henry.page.getByRole('switch', { name: 'Show my playtime' }).click();
+    await henry.page.getByRole('button', { name: 'Save privacy settings' }).click();
+    await expect(henry.page.getByText('Privacy settings saved.')).toBeVisible();
+    await ivy.page.goto(`/u/${henryId}`);
+    const history = ivy.page.getByTestId('game-history');
+    await expect(history).toContainText('Astro Test Drive');
+    await expect(history).toContainText('hidden');
+  });
+
+  await test.step('Henry excludes the game: never tracked again and hidden from Ivy', async () => {
+    await henry.page.goto('/settings?tab=privacy');
+    const excluded = henry.page.getByTestId('excluded-games');
+    await excluded.getByRole('button', { name: 'Exclude Astro Test Drive' }).click();
+    await expect(excluded.getByRole('listitem').filter({ hasText: GAME.titleId })).toBeVisible();
+    await henry.page.getByRole('button', { name: 'Save privacy settings' }).click();
+    await expect(henry.page.getByText('Privacy settings saved.')).toBeVisible();
+    const refused = await heartbeat();
+    expect(refused.status()).toBe(409);
+    expect(((await refused.json()) as { error: { code: string } }).error.code).toBe('ACTIVITY_TITLE_EXCLUDED');
+
+    await ivy.page.goto(`/u/${henryId}`);
+    await expect(ivy.page.getByText('No tracked games yet.')).toBeVisible();
+    await henry.page.goto(`/u/${henryId}`);
+    await expect(henry.page.getByTestId('game-history')).toContainText('Excluded');
+  });
+
+  await test.step('no browser errors or CSP violations occurred', async () => {
+    expect(henry.errors).toEqual([]);
+    expect(ivy.errors).toEqual([]);
+  });
+
+  await console_!.dispose();
+  await henry.close();
+  await ivy.close();
+});

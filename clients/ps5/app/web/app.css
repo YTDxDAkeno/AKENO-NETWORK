@@ -105,6 +105,18 @@ button.item { cursor: pointer; }
 .log { max-height: 18rem; overflow: auto; background: #070a12; border-radius: .7rem; padding: .7rem; white-space: pre-wrap; }
 .state-enabled { color: #7ee2a1; } .state-disabled { color: #ffcf70; } .state-unsupported { color: var(--muted); }
 
+.banner { display: flex; align-items: center; gap: .9rem; max-width: calc(1500px - 2.8rem); width: calc(100% - 2.8rem); margin: 1rem auto 0; padding: .8rem 1.1rem;
+  background: linear-gradient(90deg, rgba(79, 124, 255, .22), rgba(139, 92, 246, .22)); border: 1px solid var(--accent); border-radius: 1rem; }
+.playing { color: #7ee2a1; font-size: .8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.game-card { display: flex; align-items: center; gap: 1.2rem; background: var(--surface-2); border-radius: 1rem; padding: 1rem 1.2rem; }
+.game-card .label { color: #7ee2a1; font-size: .75rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+.game-title { font-size: 1.5rem; font-weight: 800; }
+.game-icon { width: 4.2rem; height: 4.2rem; border-radius: 1rem; display: grid; place-items: center; flex: none; font-weight: 800; font-size: 1.2rem;
+  color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+.item .game-icon { width: 2.6rem; height: 2.6rem; border-radius: .8rem; font-size: .9rem; }
+.total { text-align: right; flex: none; }
+div.item:focus-visible, div.item.focused { outline: 4px solid var(--focus); }
+
 .toast { position: fixed; left: 50%; bottom: 3.2rem; transform: translateX(-50%); background: var(--surface-3); border: 1px solid var(--line); padding: .7rem 1.2rem; border-radius: .9rem; max-width: 80vw; }
 .toast.bad { border-color: var(--danger); }
 .hint { text-align: center; color: var(--muted); font-size: .7rem; padding: .5rem; }

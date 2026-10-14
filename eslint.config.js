@@ -34,9 +34,25 @@ export default defineConfig(
   },
   {
     // Console page served by the PS5 app: a classic browser script for older WebKit builds.
+    // The console page runs in the PS5 system browser: syntax newer than ES2017 is refused, so an
+    // older WebKit can always parse it (the TypeScript parser itself accepts everything).
     files: ['clients/ps5/app/web/**/*.js'],
     languageOptions: { sourceType: 'script', globals: { ...globals.browser } },
-    rules: { '@typescript-eslint/no-unused-vars': ['error', { caughtErrors: 'none' }] },
+    rules: {
+      '@typescript-eslint/no-unused-vars': ['error', { caughtErrors: 'none' }],
+      'no-restricted-syntax': [
+        'error',
+        { selector: 'ChainExpression', message: 'Optional chaining is newer than ES2017.' },
+        { selector: "LogicalExpression[operator='??']", message: 'Nullish coalescing is newer than ES2017.' },
+        { selector: "AssignmentExpression[operator=/^(\\?\\?|\\|\\||&&)=$/]", message: 'Logical assignment is newer than ES2017.' },
+        { selector: 'ObjectExpression > SpreadElement', message: 'Object spread is newer than ES2017.' },
+        { selector: 'ObjectPattern > RestElement', message: 'Object rest is newer than ES2017.' },
+        { selector: 'CatchClause[param=null]', message: 'Optional catch binding is newer than ES2017.' },
+        { selector: 'ForOfStatement[await=true]', message: 'for await is newer than ES2017.' },
+        { selector: 'PropertyDefinition, PrivateIdentifier, StaticBlock', message: 'Class fields are newer than ES2017.' },
+        { selector: 'Literal[bigint]', message: 'BigInt is newer than ES2017.' },
+      ],
+    },
   },
   {
     files: ['apps/web/**/*.{ts,tsx}'],

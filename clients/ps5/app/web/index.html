@@ -17,7 +17,7 @@
       <circle cx="32" cy="44" r="4" fill="#e9edf8"/>
     </svg>
     <div class="wordmark">AKENO<span>NETWORK</span></div>
-    <span class="badge alpha">Alpha 0.1</span>
+    <span class="badge alpha">Alpha 0.2</span>
   </div>
   <div class="who" id="who" hidden>
     <span class="dot" id="self-dot"></span>
@@ -36,12 +36,15 @@
 <nav class="tabs" id="tabs" hidden>
   <button type="button" data-view="friends" class="tab">Friends <span class="count" id="count-friends"></span></button>
   <button type="button" data-view="messages" class="tab">Messages <span class="count" id="count-messages"></span></button>
+  <button type="button" data-view="games" class="tab">Games</button>
   <button type="button" data-view="invitations" class="tab">Invitations <span class="count" id="count-invitations"></span></button>
   <button type="button" data-view="party" class="tab">Party</button>
   <button type="button" data-view="sessions" class="tab">Game sessions</button>
   <button type="button" data-view="diagnostics" class="tab">Diagnostics</button>
   <button type="button" data-view="settings" class="tab">Settings</button>
 </nav>
+
+<div class="banner" id="banner" role="status" aria-live="polite" hidden></div>
 
 <main id="main" tabindex="-1">
   <section class="panel center" id="boot"><p class="muted">Connecting to the AKENO console app...</p></section>
