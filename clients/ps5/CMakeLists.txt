@@ -26,13 +26,13 @@ endif()
 
 # Platform-neutral core (no sockets, no TLS).
 add_library(akeno_core STATIC
-  src/buf.c src/json.c src/crypto_util.c src/url.c src/backoff.c src/caps.c src/http.c src/ws.c)
+  src/buf.c src/json.c src/crypto_util.c src/url.c src/backoff.c src/caps.c src/events.c src/http.c src/ws.c)
 target_include_directories(akeno_core PUBLIC include PRIVATE src)
 target_compile_options(akeno_core PRIVATE ${AKENO_WARNINGS} ${AKENO_HARDENING})
 target_link_libraries(akeno_core PUBLIC m)
 
 # Client with the POSIX + OpenSSL transport.
-add_library(akeno_client STATIC src/client.c src/realtime.c src/transport_openssl.c)
+add_library(akeno_client STATIC src/client.c src/realtime.c src/transport_openssl.c src/httpclient_posix.c)
 target_include_directories(akeno_client PUBLIC include PRIVATE src)
 target_compile_options(akeno_client PRIVATE ${AKENO_WARNINGS} ${AKENO_HARDENING})
 target_link_libraries(akeno_client PUBLIC akeno_core OpenSSL::SSL OpenSSL::Crypto)
@@ -42,7 +42,7 @@ target_compile_options(akeno-cli PRIVATE ${AKENO_WARNINGS} ${AKENO_HARDENING})
 target_link_libraries(akeno-cli PRIVATE akeno_client)
 
 enable_testing()
-add_executable(akeno_unit_tests tests/unit/test_main.c tests/unit/test_core.c)
+add_executable(akeno_unit_tests tests/unit/test_main.c tests/unit/test_core.c tests/unit/test_events.c)
 target_include_directories(akeno_unit_tests PRIVATE src)
 target_compile_options(akeno_unit_tests PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(akeno_unit_tests PRIVATE akeno_client)

@@ -33,3 +33,8 @@ Thumbs.db
 # Local backups created by the backup script
 backups/
 clients/ps5/build-*/
+
+# PS5 client build outputs (reproducible from source via clients/ps5/payload/Makefile)
+clients/ps5/**/*.o
+clients/ps5/payload/*.elf
+clients/ps5/payload/*.elf.sha256

@@ -29,7 +29,6 @@ void akeno_log(const akeno_client *client, akeno_log_level level, const char *ev
 #endif
     ;
 void akeno_redact(const char *text, char *out, size_t out_len);
-int akeno_build_host_header(const akeno_client *client, char *out, size_t out_len);
 akeno_status akeno_request_raw(akeno_client *client, const char *method, const char *path, const char *json_body,
                                int with_token, akeno_response *response);
 

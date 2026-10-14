@@ -1,10 +1,16 @@
 # Project status
 
-_Last updated: 2026-10-13 (second session)._ This file is the source of truth for continuing
-work across sessions. Do not mark anything complete that has not actually been run.
+_Last updated: 2026-10-14 (third session, work-in-progress checkpoint)._ This file is the source
+of truth for continuing work across sessions. Do not mark anything complete that has not actually
+been run.
 
 Branch: `claude/epic-bell-s1psav`. See `git log` for the latest commit; the last commit with a
 fully green GitHub Actions run is noted below.
+
+> **Resume here (third session).** The PS5 console build now exists and compiles to a real ELF
+> with the ps5-payload SDK. This was saved as a checkpoint ("save everything, continue later").
+> Nothing has run on a console. The next steps are listed under
+> [Session 3 — in progress](#session-3--ps5-console-build-in-progress).
 
 ## Summary
 
@@ -13,9 +19,72 @@ fully green GitHub Actions run is noted below.
 | AKENO NETWORK web platform (V1) | Implemented and tested (unchanged scope, one realtime bug fixed) |
 | Device pairing + scoped device tokens (server, web UI) | **Implemented and tested** |
 | Device client core `clients/ps5` (C11, Linux) | **Implemented and tested on Linux** against the real server |
-| Console (PS5) build of the client | **Not started** — needs SDK/loader review, a console TLS transport, a UI and your approval |
-| Native Game Base / PSN integration | **Unsupported** — no documented interface; see PS5_GAMEBASE_RESEARCH.md |
+| PS5 console payload (`clients/ps5/payload`) | **Builds to a real ELF** with the ps5-payload SDK; REST over libSceHttp2, native toasts, controller input. **Not run on hardware.** |
+| HTTP backend split (POSIX / PS5) | **Done and tested on Linux** (23/23 integration, 273 unit checks) |
+| WebSocket (WSS) on the console | **Not built** — no verified TLS byte-stream binding yet; the console uses bounded polling instead |
+| Native Game Base / PSN integration | **Unsupported** — but a non-invasive native touchpoint was found: system toast notifications (`sceKernelSendNotificationRequest`, `sceNotificationSend`). See PS5_GAMEBASE_RESEARCH.md |
+| Separate `AKENO-NETWORK-PS5` repository | **Not created yet** (planned after the VPS reconcile; see Session 3 steps) |
 | Any test on PS5 hardware (12.20 / 13.60) | **None performed** |
+
+## Session 3 — PS5 console build (in progress)
+
+**Done and verified in a cloud container (Linux, clang/lld 18, ps5-payload SDK built from source):**
+
+- **Source-level SDK review.** Reviewed `ps5-payload-dev/sdk` and `EchoStretch/kstuff-lite`
+  sources (cloned into a scratch dir; not vendored). Findings:
+  - The SDK builds userland ELF payloads for an already-jailbroken console via `prospero-clang`
+    (host clang-18 + lld targeting `x86_64-sie-ps5`). It installs and builds here; `hello_world`,
+    `http2_get`, `notify` samples all compile to real ELFs.
+  - Networking/TLS is the system stack: `libSceNet` (BSD sockets), `libSceSsl` (TLS with the
+    console's own root CA store; verification on by default), `libSceHttp2`/`libSceHttp`. No
+    bundled OpenSSL, no custom trust anchors. The SDK ships symbol stubs, not headers; the
+    samples declare prototypes inline, which is where ours come from (`src/ps5/sce.h`).
+  - **Native notification interface found:** `sceKernelSendNotificationRequest` (plain toast) and
+    `sceNotificationSend` (interactive JSON toast with DeepLink actions) — userland, with working
+    SDK samples. This is a genuine, non-invasive way to surface AKENO events in the system UI.
+    It is **not** the friends list / Game Base; those remain unsupported (PS5_GAMEBASE_RESEARCH).
+  - kstuff-lite was reviewed only to understand the loader/firmware boundary; the client uses no
+    kstuff functions and no kernel interfaces.
+
+- **HTTP backend seam.** `src/httpclient.h` + `src/httpclient_posix.c` (host) and
+  `src/ps5/httpclient_ps5.c` (console, libSceHttp2). `client.c` is now backend-agnostic, so the
+  pairing/credential/JSON/capability logic is shared and exercised by the Linux tests.
+
+- **PS5 payload** (`clients/ps5/payload/akeno_ps5.c` + `src/ps5/*`): pairing (code shown as a
+  native toast + klog), bounded notification polling with native toasts for new events,
+  controller input (Cross=refresh, Triangle=cycle presence, Options=sign out, Circle=quit),
+  clean shutdown. Builds with `clients/ps5/payload/Makefile`:
+  `PS5_PAYLOAD_SDK=/opt/ps5-payload-sdk make` → `akeno-network-ps5.elf` (PIE x86-64, SCE imports
+  left for the loader). `make checksum` writes the SHA-256.
+
+- **New shared, tested module** `src/events.c` (notification watermark + English formatter),
+  wired into the core library and covered by `tests/unit/test_events.c` (30 checks).
+
+**Next steps (not done):**
+
+1. **Reconcile the VPS commits and create the repo** — still the first priority (see Phase 0
+   below). The PS5 payload will move to `AKENO-NETWORK-PS5` only after that; keep the backend
+   (pairing, device tokens) in this repo.
+2. **Console TLS byte-stream for WSS.** Either verify `libSceSsl` raw-stream signatures from a
+   working source (not invented) so `ws.c` can run over it, or use a system WebSocket binding if
+   one is confirmed. Until then the console polls.
+3. **On-screen controller UI.** v0.1 renders through system toasts only; a drawn UI needs a
+   renderer/overlay (evaluate the SDK `browser` sample or an overlay lib).
+4. **Per-message toasts.** The poll loop surfaces `/notifications` (social events). Direct/group
+   messages are not in that stream; add unread-transition detection for message toasts.
+5. **Hardware test** — only with explicit approval, following the SAFETY.md checklist on a
+   non-primary console. Record results in FIRMWARE_COMPATIBILITY.md.
+
+**How to rebuild the SDK + payload in a fresh session:**
+
+```bash
+# 1. Build/install the SDK (needs clang-18 + lld-18; both present here as llvm-18).
+git clone --depth 1 https://github.com/ps5-payload-dev/sdk ps5-sdk-src
+PATH=/usr/lib/llvm-18/bin:$PATH make -C ps5-sdk-src DESTDIR=/opt/ps5-payload-sdk install
+# 2. Build the AKENO payload.
+export PS5_PAYLOAD_SDK=/opt/ps5-payload-sdk
+PATH=/usr/lib/llvm-18/bin:$PATH make -C clients/ps5/payload checksum
+```
 
 ## Phase 0 — deployment continuity (this session)
 
