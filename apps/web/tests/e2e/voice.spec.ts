@@ -246,6 +246,8 @@ test('party voice with a real LiveKit server', async ({ browser, baseURL }) => {
     await expect(suppression).toHaveAttribute('aria-checked', 'false');
     const test = ana.page.getByTestId('mic-test');
     await test.getByRole('button', { name: 'Test microphone' }).click();
+    // First the processing itself (open microphone: the gate reports "sent"), then the signal level.
+    await expect(test.getByText('Your voice would be sent')).toBeVisible();
     await expect.poll(async () => Number(await test.getByRole('meter', { name: 'Microphone level' }).getAttribute('aria-valuenow')), { timeout: 15_000 }).toBeGreaterThan(0);
     await test.getByRole('button', { name: 'Stop test' }).click();
     await suppression.click();

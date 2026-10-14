@@ -70,6 +70,7 @@ function MicrophoneTest({ prefs }: { prefs: VoicePreferences }) {
   const stream = useRef<MediaStream | null>(null);
   const processor = useRef<MicProcessor | null>(null);
   const audio = useRef<HTMLAudioElement | null>(null);
+  const context = useRef<AudioContext | null>(null);
 
   const stop = useCallback(async () => {
     audio.current?.pause();
@@ -78,6 +79,8 @@ function MicrophoneTest({ prefs }: { prefs: VoicePreferences }) {
     processor.current = null;
     for (const track of stream.current?.getTracks() ?? []) track.stop();
     stream.current = null;
+    await context.current?.close().catch(() => {});
+    context.current = null;
     setRunning(false);
     setLevel(0);
   }, []);
@@ -103,6 +106,11 @@ function MicrophoneTest({ prefs }: { prefs: VoicePreferences }) {
 
   const start = async () => {
     setError(null);
+    // Created during the click, before any await: browsers (Safari in particular) only let audio
+    // start from a user gesture, and a suspended context would leave the meter at zero.
+    const audioContext = new AudioContext({ latencyHint: 'interactive' });
+    void audioContext.resume().catch(() => {});
+    context.current = audioContext;
     try {
       const media = await navigator.mediaDevices.getUserMedia({ audio: captureOptions(prefs) });
       stream.current = media;
@@ -111,7 +119,7 @@ function MicrophoneTest({ prefs }: { prefs: VoicePreferences }) {
         setLevel(value);
         setOpen(gateOpen);
       };
-      await next.init({ track: media.getAudioTracks()[0]! });
+      await next.init({ track: media.getAudioTracks()[0]!, audioContext });
       processor.current = next;
       setRunning(true);
     } catch (failure) {
