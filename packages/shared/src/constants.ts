@@ -235,6 +235,7 @@ export const DEVICE_SCOPES = [
   'invitations:read',
   'invitations:write',
   'realtime',
+  'activity:write',
 ] as const;
 export type DeviceScope = (typeof DEVICE_SCOPES)[number];
 
@@ -252,7 +253,32 @@ export const DEVICE_SCOPE_LABELS: Record<DeviceScope, string> = {
   'invitations:read': 'See your invitations and notifications',
   'invitations:write': 'Accept and decline invitations',
   'realtime': 'Receive live updates and appear online while connected',
+  'activity:write': 'Share the game you are playing, detected by this device',
 };
+
+/**
+ * Automatic game activity reported by paired devices (see docs/GAME_ACTIVITY.md).
+ * Timestamps are always the server's; devices only report what is running now.
+ */
+export const GAME_ACTIVITY = {
+  /** Devices send a heartbeat this often while a game is running. */
+  heartbeatIntervalSeconds: 60,
+  /** A session without a heartbeat for this long ends at its last heartbeat. */
+  staleAfterSeconds: 180,
+  /** PlayStation title IDs: four letters and five digits (e.g. PPSA01234, CUSA01234). */
+  titleIdPattern: /^[A-Z]{4}[0-9]{5}$/,
+  titleNameMax: 128,
+  recentGamesMax: 10,
+  recentSessionsMax: 10,
+} as const;
+
+/** Console platforms a device may report activity from. */
+export const GAME_ACTIVITY_PLATFORMS = ['PS5'] as const;
+export type GameActivityPlatform = (typeof GAME_ACTIVITY_PLATFORMS)[number];
+
+/** Why a tracked session ended. */
+export const GAME_SESSION_END_REASONS = ['stopped', 'switched', 'stale', 'tracking_disabled', 'device_revoked'] as const;
+export type GameSessionEndReason = (typeof GAME_SESSION_END_REASONS)[number];
 
 export const DEVICE_LIMITS = {
   nameMax: 48,

@@ -1,3 +1,4 @@
+import type { CurrentGameActivity } from './activity.js';
 import type {
   AccountStatus,
   FriendRequestPrivacy,
@@ -27,6 +28,8 @@ export interface PresenceView {
   lastSeenAt: string | null;
   /** Self-reported activity text (for example "Playing a racing game"). Never verified by the server. */
   activity: string | null;
+  /** Game detected by the user's paired device; null when none or hidden by privacy settings. */
+  game: CurrentGameActivity | null;
 }
 
 export interface UserWithPresence extends UserSummary {
@@ -39,6 +42,12 @@ export interface PrivacySettings {
   lastSeenVisibility: PresenceVisibility;
   messagePrivacy: MessagePrivacy;
   friendRequestPrivacy: FriendRequestPrivacy;
+  /** Whether paired devices may report the games this user plays. */
+  gameActivityTracking: boolean;
+  /** Who may see the game this user is playing right now. */
+  gameActivityVisibility: PresenceVisibility;
+  /** Who may see recently played games and tracked playtime. */
+  gameHistoryVisibility: PresenceVisibility;
 }
 
 export interface OwnProfile {

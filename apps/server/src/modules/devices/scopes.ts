@@ -64,6 +64,11 @@ const API_ROUTES: Record<string, DeviceScope | null> = {
   'POST /invitations/:id/accept': 'invitations:write',
   'POST /invitations/:id/decline': 'invitations:write',
   'POST /notifications/read': 'invitations:write',
+
+  // Automatic game activity: only the device's own detection, never history management.
+  'POST /activity/heartbeat': 'activity:write',
+  'POST /activity/stop': 'activity:write',
+  'GET /users/:handle/activity': 'profile:read',
 };
 
 const DEVICE_ROUTES = new Map<string, DeviceScope | null>([

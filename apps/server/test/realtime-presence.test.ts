@@ -49,7 +49,7 @@ describe('presence rules', () => {
 
   it('applies audience rules', () => {
     expect(computePresenceView(base, friend).status).toBe('online');
-    expect(computePresenceView(base, stranger)).toEqual({ status: 'offline', lastSeenAt: null, activity: null });
+    expect(computePresenceView(base, stranger)).toEqual({ status: 'offline', lastSeenAt: null, activity: null, game: null });
     expect(computePresenceView({ ...base, presenceVisibility: 'everyone' }, stranger).status).toBe('online');
     expect(computePresenceView({ ...base, presenceVisibility: 'nobody' }, friend).status).toBe('offline');
     expect(computePresenceView(base, { ...friend, blocked: true }).status).toBe('offline');
@@ -64,6 +64,21 @@ describe('presence rules', () => {
     const hiddenLastSeen = computePresenceView({ ...base, connected: false, lastSeenVisibility: 'nobody' }, friend);
     expect(hiddenLastSeen.lastSeenAt).toBeNull();
     expect(computePresenceView(base, friend).lastSeenAt).toBeNull(); // online users show no last seen
+  });
+
+  it('shows a detected game only to the game audience while the user appears online', () => {
+    const game = { titleId: 'PPSA01234', name: 'Racing Game', platform: 'PS5' as const, startedAt: '2026-01-01T00:00:00.000Z' };
+    const playing = { ...base, game };
+    expect(computePresenceView(playing, friend).game).toEqual(game); // default audience: friends
+    expect(computePresenceView({ ...playing, presenceVisibility: 'everyone' }, stranger).game).toBeNull();
+    expect(
+      computePresenceView({ ...playing, presenceVisibility: 'everyone', gameActivityVisibility: 'everyone' }, stranger).game,
+    ).toEqual(game);
+    expect(computePresenceView({ ...playing, gameActivityVisibility: 'nobody' }, friend).game).toBeNull();
+    expect(computePresenceView({ ...playing, preference: 'invisible' }, friend).game).toBeNull();
+    expect(computePresenceView({ ...playing, connected: false }, friend).game).toBeNull();
+    expect(computePresenceView(playing, { ...friend, blocked: true }).game).toBeNull();
+    expect(computePresenceView({ ...playing, preference: 'invisible' }, { isSelf: true, isFriend: false, blocked: false }).game).toEqual(game);
   });
 
   it('treats users viewing their own presence as active', () => {
@@ -190,7 +205,7 @@ describe('realtime presence', () => {
     const stranger = await registerUser(server, 'np_stranger');
     const aliceSocket = await connectRealtime(url, alice);
     const profile = await stranger.get('/users/np_alice');
-    expect(profile.body.presence).toEqual({ status: 'offline', lastSeenAt: null, activity: null });
+    expect(profile.body.presence).toEqual({ status: 'offline', lastSeenAt: null, activity: null, game: null });
     await alice.patch('/profile/privacy', { presenceVisibility: 'everyone' });
     expect((await stranger.get('/users/np_alice')).body.presence.status).toBe('online');
     await aliceSocket.close();

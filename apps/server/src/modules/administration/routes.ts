@@ -1,6 +1,9 @@
 import type { FastifyPluginAsync } from 'fastify';
+import { z } from 'zod';
 import {
   adminUpdateUserSchema,
+  gameTitleIdSchema,
+  gameTitleNameSchema,
   adminUserListQuerySchema,
   createRegistrationInvitationSchema,
   cursorPageQuerySchema,
@@ -16,6 +19,20 @@ export function administrationRoutes(ctx: AppContext): FastifyPluginAsync {
     app.addHook('preHandler', requireAdmin(ctx));
 
     app.get('/admin/invitations', async () => ({ invitations: await ctx.admin.listInvitations() }));
+
+    // Curated game names; they override names reported by devices for everyone.
+    const titleParams = z.object({ titleId: gameTitleIdSchema });
+    app.get('/admin/game-titles', async () => ({ titles: await ctx.activity.listTitles() }));
+    app.put('/admin/game-titles/:titleId', async (request) => {
+      const { titleId } = parseInput(titleParams, request.params);
+      const { name } = parseInput(gameTitleNameSchema, request.body);
+      return ctx.activity.setTitle(authOf(request).userId, titleId, name);
+    });
+    app.delete('/admin/game-titles/:titleId', async (request, reply) => {
+      const { titleId } = parseInput(titleParams, request.params);
+      await ctx.activity.removeTitle(titleId);
+      return reply.status(204).send();
+    });
 
     app.post('/admin/invitations', async (request, reply) => {
       const input = parseInput(createRegistrationInvitationSchema, request.body);

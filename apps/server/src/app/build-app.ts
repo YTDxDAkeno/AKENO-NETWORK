@@ -12,6 +12,7 @@ import { registerAuthentication } from '../middleware/auth.js';
 import { registerErrorHandling } from '../middleware/error-handler.js';
 import { registerOriginCheck } from '../middleware/origin.js';
 import { administrationRoutes } from '../modules/administration/routes.js';
+import { activityRoutes } from '../modules/activity/routes.js';
 import { authRoutes } from '../modules/auth/routes.js';
 import { devicesRoutes } from '../modules/devices/routes.js';
 import { friendsRoutes } from '../modules/friends/routes.js';
@@ -136,6 +137,7 @@ export async function buildApp(options: BuildAppOptions): Promise<BuiltApp> {
       await api.register(invitationsRoutes(ctx));
       await api.register(notificationsRoutes(ctx));
       await api.register(administrationRoutes(ctx));
+      await api.register(activityRoutes(ctx));
     },
     { prefix: API_PREFIX },
   );
@@ -164,12 +166,22 @@ export async function buildApp(options: BuildAppOptions): Promise<BuiltApp> {
   }, 15 * 60_000);
   housekeeping.unref();
 
+  let activitySweep: NodeJS.Timeout | null = null;
   app.addHook('onReady', async () => {
-    if (options.maintenance !== false) stopMaintenance = startRealtimeMaintenance(ctx);
+    await ctx.activity.load();
+    if (options.maintenance !== false) {
+      stopMaintenance = startRealtimeMaintenance(ctx);
+      // Game sessions whose device stopped sending heartbeats end at their last heartbeat.
+      activitySweep = setInterval(() => {
+        ctx.activity.endStale().catch((error: unknown) => ctx.log.error({ err: error }, 'Game activity sweep failed'));
+      }, 30_000);
+      activitySweep.unref();
+    }
   });
 
   app.addHook('preClose', async () => {
     clearInterval(housekeeping);
+    if (activitySweep) clearInterval(activitySweep);
     stopMaintenance?.();
     try {
       await ctx.presence.flushLastSeen();

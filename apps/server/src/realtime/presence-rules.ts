@@ -1,4 +1,5 @@
 import type {
+  CurrentGameActivity,
   PresencePreference,
   PresenceView,
   PresenceVisibility,
@@ -15,6 +16,10 @@ export interface PresenceSubject {
   lastSeenVisibility: PresenceVisibility;
   lastSeenAt: Date | null;
   activity: string | null;
+  /** Game detected by a paired device right now (already filtered for staleness). */
+  game?: CurrentGameActivity | null;
+  /** Who may see the detected game; defaults to friends. */
+  gameActivityVisibility?: PresenceVisibility;
   deleted?: boolean;
 }
 
@@ -34,7 +39,7 @@ export function effectiveSelfStatus(subject: Pick<PresenceSubject, 'connected' |
   return 'online';
 }
 
-function audienceAllows(visibility: PresenceVisibility, viewer: PresenceViewer): boolean {
+export function audienceAllows(visibility: PresenceVisibility, viewer: Pick<PresenceViewer, 'isFriend'>): boolean {
   if (visibility === 'everyone') return true;
   if (visibility === 'friends') return viewer.isFriend;
   return false;
@@ -49,7 +54,7 @@ function audienceAllows(visibility: PresenceVisibility, viewer: PresenceViewer):
  * - Last seen is only revealed when both the presence and last-seen audiences include the viewer.
  */
 export function computePresenceView(subject: PresenceSubject, viewer: PresenceViewer): PresenceView {
-  const hidden: PresenceView = { status: 'offline', lastSeenAt: null, activity: null };
+  const hidden: PresenceView = { status: 'offline', lastSeenAt: null, activity: null, game: null };
   if (subject.deleted) return hidden;
   if (viewer.isSelf) {
     // A user looking at their own presence is active right now, even if their WebSocket is
@@ -59,6 +64,7 @@ export function computePresenceView(subject: PresenceSubject, viewer: PresenceVi
       status: self === 'invisible' ? 'offline' : self,
       lastSeenAt: subject.lastSeenAt ? subject.lastSeenAt.toISOString() : null,
       activity: subject.activity,
+      game: subject.game ?? null,
     };
   }
   if (viewer.blocked) return hidden;
@@ -67,9 +73,13 @@ export function computePresenceView(subject: PresenceSubject, viewer: PresenceVi
   const self = effectiveSelfStatus(subject);
   const status: VisiblePresenceStatus = self === 'invisible' ? 'offline' : self;
   const canSeeLastSeen = audienceAllows(subject.lastSeenVisibility, viewer);
+  // The detected game is shown only while the user appears online (never while invisible) and
+  // only to the audience chosen for game activity.
+  const canSeeGame = status !== 'offline' && audienceAllows(subject.gameActivityVisibility ?? 'friends', viewer);
   return {
     status,
     lastSeenAt: status === 'offline' && canSeeLastSeen && subject.lastSeenAt ? subject.lastSeenAt.toISOString() : null,
     activity: status === 'offline' ? null : subject.activity,
+    game: canSeeGame ? (subject.game ?? null) : null,
   };
 }

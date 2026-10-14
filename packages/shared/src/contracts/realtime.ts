@@ -1,4 +1,5 @@
 import type { REALTIME_PROTOCOL_VERSION, SelfPresenceStatus } from '../constants.js';
+import type { CurrentGameActivity } from './activity.js';
 import type { ConversationKind, MessageDto } from './messages.js';
 import type { NotificationDto } from './notifications.js';
 import type { PresenceView } from './users.js';
@@ -46,7 +47,9 @@ export type ServerEvent =
   | { type: 'party.changed'; data: { partyId: string; removed: boolean } }
   | { type: 'game-session.changed'; data: { sessionId: string } }
   | { type: 'profile.changed'; data: { userId: string } }
-  | { type: 'session.revoked'; data: { reason: string } };
+  | { type: 'session.revoked'; data: { reason: string } }
+  /** Sent to the user's own connections when their detected game changes. */
+  | { type: 'activity.self'; data: { game: CurrentGameActivity | null } };
 
 export type ServerEventType = ServerEvent['type'];
 

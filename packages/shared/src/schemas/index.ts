@@ -9,3 +9,4 @@ export * from './admin.js';
 export * from './notifications.js';
 export * from './realtime.js';
 export * from './devices.js';
+export * from './activity.js';

@@ -33,6 +33,9 @@ export const updatePrivacySchema = z
     lastSeenVisibility: z.enum(PRESENCE_VISIBILITY),
     messagePrivacy: z.enum(MESSAGE_PRIVACY),
     friendRequestPrivacy: z.enum(FRIEND_REQUEST_PRIVACY),
+    gameActivityTracking: z.boolean(),
+    gameActivityVisibility: z.enum(PRESENCE_VISIBILITY),
+    gameHistoryVisibility: z.enum(PRESENCE_VISIBILITY),
   })
   .partial();
 export type UpdatePrivacyInput = z.infer<typeof updatePrivacySchema>;

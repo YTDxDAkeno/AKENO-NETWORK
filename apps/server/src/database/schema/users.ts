@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
   type AnyPgColumn,
+  boolean,
   check,
   index,
   integer,
@@ -74,6 +75,10 @@ export const profiles = pgTable(
     lastSeenVisibility: presenceVisibilityEnum('last_seen_visibility').notNull().default('friends'),
     messagePrivacy: messagePrivacyEnum('message_privacy').notNull().default('friends'),
     friendRequestPrivacy: friendRequestPrivacyEnum('friend_request_privacy').notNull().default('everyone'),
+    /** Paired devices may report the games this user plays (automatic game activity). */
+    gameActivityTracking: boolean('game_activity_tracking').notNull().default(true),
+    gameActivityVisibility: presenceVisibilityEnum('game_activity_visibility').notNull().default('friends'),
+    gameHistoryVisibility: presenceVisibilityEnum('game_history_visibility').notNull().default('friends'),
     ...timestamps,
   },
   (t) => [index('profiles_display_name_idx').on(sql`lower(${t.displayName})`)],

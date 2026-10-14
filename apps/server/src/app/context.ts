@@ -2,6 +2,7 @@ import type { FastifyBaseLogger } from 'fastify';
 import type { AppConfig } from '../config/env.js';
 import type { Database } from '../database/client.js';
 import { AccountService } from '../modules/accounts/service.js';
+import { ActivityService } from '../modules/activity/service.js';
 import { AdminService } from '../modules/administration/service.js';
 import { AuthService } from '../modules/auth/service.js';
 import { DevicesService } from '../modules/devices/service.js';
@@ -44,6 +45,7 @@ export interface AppContext {
   invitations: InvitationsService;
   accounts: AccountService;
   admin: AdminService;
+  activity: ActivityService;
 }
 
 export function createContext(config: AppConfig, db: Database, log: FastifyBaseLogger): AppContext {
@@ -65,5 +67,6 @@ export function createContext(config: AppConfig, db: Database, log: FastifyBaseL
   ctx.invitations = new InvitationsService(ctx);
   ctx.accounts = new AccountService(ctx);
   ctx.admin = new AdminService(ctx);
+  ctx.activity = new ActivityService(ctx);
   return ctx;
 }

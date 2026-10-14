@@ -13,6 +13,7 @@ interface SubjectRow {
   presencePreference: PresencePreference;
   presenceVisibility: PresenceSubject['presenceVisibility'];
   lastSeenVisibility: PresenceSubject['lastSeenVisibility'];
+  gameActivityVisibility: NonNullable<PresenceSubject['gameActivityVisibility']>;
 }
 
 /**
@@ -52,6 +53,8 @@ export class PresenceService {
       lastSeenVisibility: row.lastSeenVisibility,
       lastSeenAt: row.lastSeenAt,
       activity: row.activity,
+      game: this.ctx.activity.currentOf(row.id),
+      gameActivityVisibility: row.gameActivityVisibility,
       deleted: row.status === 'deleted',
     };
   }
@@ -150,6 +153,7 @@ export class PresenceService {
         presencePreference: profiles.presencePreference,
         presenceVisibility: profiles.presenceVisibility,
         lastSeenVisibility: profiles.lastSeenVisibility,
+        gameActivityVisibility: profiles.gameActivityVisibility,
       })
       .from(users)
       .innerJoin(profiles, eq(profiles.userId, users.id))

@@ -15,6 +15,13 @@
       "when": 1791925940124,
       "tag": "0001_devices",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791938037444,
+      "tag": "0002_game_activity",
+      "breakpoints": true
     }
   ]
 }

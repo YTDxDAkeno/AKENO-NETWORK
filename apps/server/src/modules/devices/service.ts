@@ -382,6 +382,8 @@ export class DevicesService {
   }
 
   async revoke(userId: string, deviceId: string, meta: RequestMeta, reason = 'This device was unpaired.'): Promise<void> {
+    // A game reported by this device stops counting at its last heartbeat.
+    await this.ctx.activity.endForDevice(userId, deviceId);
     const deleted = await this.ctx.db
       .delete(deviceCredentials)
       .where(and(eq(deviceCredentials.id, deviceId), eq(deviceCredentials.userId, userId)))

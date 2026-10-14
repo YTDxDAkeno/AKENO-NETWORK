@@ -11,3 +11,4 @@ export * from './admin.js';
 export * from './errors.js';
 export * from './realtime.js';
 export * from './devices.js';
+export * from './activity.js';

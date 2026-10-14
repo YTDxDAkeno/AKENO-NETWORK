@@ -319,7 +319,7 @@ export class FriendsService {
     // The other side is told the friendship ended, never that they were blocked.
     this.ctx.hub.sendToUser(otherId, { type: 'friends.changed', data: { reason: 'friend_removed', userId } });
     // Former friends must no longer see presence: send them an explicit offline view.
-    const offline = { status: 'offline' as const, lastSeenAt: null, activity: null };
+    const offline = { status: 'offline' as const, lastSeenAt: null, activity: null, game: null };
     this.ctx.hub.sendToUser(otherId, { type: 'presence.updated', data: { userId, presence: offline } });
     this.ctx.hub.sendToUser(userId, { type: 'presence.updated', data: { userId: otherId, presence: offline } });
   }

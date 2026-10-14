@@ -34,6 +34,7 @@ export const userCardColumns = {
   presencePreference: profiles.presencePreference,
   presenceVisibility: profiles.presenceVisibility,
   lastSeenVisibility: profiles.lastSeenVisibility,
+  gameActivityVisibility: profiles.gameActivityVisibility,
 };
 
 export interface UserCardRow {
@@ -50,6 +51,7 @@ export interface UserCardRow {
   presencePreference: PresencePreference;
   presenceVisibility: PresenceVisibility;
   lastSeenVisibility: PresenceVisibility;
+  gameActivityVisibility: PresenceVisibility;
 }
 
 export function toUserSummary(row: Pick<UserCardRow, 'id' | 'onlineId' | 'displayName' | 'avatar' | 'status'>): UserSummary {
@@ -156,6 +158,9 @@ export class UsersService {
         lastSeenVisibility: p.lastSeenVisibility,
         messagePrivacy: p.messagePrivacy,
         friendRequestPrivacy: p.friendRequestPrivacy,
+        gameActivityTracking: p.gameActivityTracking,
+        gameActivityVisibility: p.gameActivityVisibility,
+        gameHistoryVisibility: p.gameHistoryVisibility,
       },
       presencePreference: p.presencePreference,
       // The request itself proves the user is active, so they count as connected here.
@@ -198,6 +203,8 @@ export class UsersService {
       .update(profiles)
       .set({ ...input, updatedAt: new Date() })
       .where(eq(profiles.userId, userId));
+    // Turning automatic tracking off also ends a running session immediately.
+    if (input.gameActivityTracking === false) await this.ctx.activity.trackingDisabled(userId);
     this.ctx.presence.invalidate(userId);
     await this.afterProfileChange(userId);
     return this.getCurrentUser(userId);
