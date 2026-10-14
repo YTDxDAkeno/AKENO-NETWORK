@@ -84,8 +84,10 @@ Not executed: anything on PS5 hardware for Alpha 0.2; firmware 13.60; the produc
 
 ### Next steps (for the user)
 
-1. **Approve and test Alpha 0.2 on 12.20**: download `akeno-network-ps5-alpha-0.2-rc` from the
-   latest green "PS5 console build" run, verify `SHA256SUMS`, follow
+1. **Approve and test Alpha 0.2 on 12.20**: download `akeno-network-ps5-alpha-0.2-rc` from PS5
+   console build **run 38500880488** (commit `e4e1a28`; ELF SHA-256 `06765c7b…b217`, see the table
+   above). Later runs contain the same code but embed their own commit ID, so their ELF has a
+   different checksum; approve the one you actually test. Verify `SHA256SUMS`, follow
    [HARDWARE_TEST_PLAN_ALPHA_0.2.md](HARDWARE_TEST_PLAN_ALPHA_0.2.md). The verified Alpha 0.1 ELF
    is in the same download as the fallback.
 2. **Server update (needed for game activity)**, from your PC or the VPS, never with
