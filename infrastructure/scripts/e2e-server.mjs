@@ -52,6 +52,10 @@ const env = {
   WEB_DIST_DIR: resolve(root, 'apps/web/dist'),
   MEDIA_DIR: mediaDir,
   MIGRATE_ON_START: 'true',
+  // Rate limiting stays on (per-route limits such as registration behave as in production), but
+  // the general per-user budget is raised: the specs reuse the same few accounts back to back,
+  // far faster than a person, and the voice spec alone makes hundreds of requests a minute.
+  RATE_LIMIT_MAX_PER_MINUTE: process.env.E2E_RATE_LIMIT_MAX_PER_MINUTE ?? '1200',
   // Voice is off unless a LiveKit server is given for the voice spec (never inherited by accident).
   LIVEKIT_URL: process.env.E2E_LIVEKIT_URL ?? '',
   LIVEKIT_API_URL: process.env.E2E_LIVEKIT_API_URL ?? '',

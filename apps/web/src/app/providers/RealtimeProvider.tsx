@@ -75,6 +75,19 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     const client = new RealtimeClient();
     clientRef.current = client;
 
+    // Party events come in bursts (a voice join is reported by the voice server and the party
+    // service; members joining and leaving in quick succession): refetch once per burst.
+    const pending = new Map<string, readonly unknown[]>();
+    let flushTimer: ReturnType<typeof setTimeout> | null = null;
+    const invalidateSoon = (queryKey: readonly unknown[]) => {
+      pending.set(JSON.stringify(queryKey), queryKey);
+      flushTimer ??= setTimeout(() => {
+        flushTimer = null;
+        for (const key of pending.values()) void queryClient.invalidateQueries({ queryKey: key });
+        pending.clear();
+      }, 150);
+    };
+
     const handle = (event: ServerEventEnvelope, meta: { reconnected: boolean }) => {
       const invalidate = (queryKey: readonly unknown[]) => void queryClient.invalidateQueries({ queryKey });
       switch (event.type) {
@@ -135,9 +148,9 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
           invalidate(queryKeys.group(event.data.groupId));
           break;
         case 'party.changed':
-          invalidate(queryKeys.currentParty);
-          invalidate(queryKeys.joinableParties);
-          invalidate(queryKeys.party(event.data.partyId));
+          invalidateSoon(queryKeys.currentParty);
+          invalidateSoon(queryKeys.joinableParties);
+          invalidateSoon(queryKeys.party(event.data.partyId));
           break;
         case 'game-session.changed':
           invalidate(queryKeys.allGameSessions);
@@ -168,6 +181,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     client.start();
 
     return () => {
+      if (flushTimer) clearTimeout(flushTimer);
       offEvent();
       offStatus();
       window.removeEventListener('online', onOnline);

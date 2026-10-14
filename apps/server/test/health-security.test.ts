@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { TestClient, createTestServer, registerUser, type TestServer } from './helpers.js';
 
@@ -100,6 +103,26 @@ describe('health and HTTP hardening', () => {
       payload: '{"bio":"x","__proto__":{"isAdmin":true}}',
     });
     expect(polluted.statusCode).toBe(400);
+  });
+
+  it('does not rate limit the web client files, only the API', async () => {
+    const web = mkdtempSync(join(tmpdir(), 'akeno-web-'));
+    mkdirSync(join(web, 'assets'));
+    writeFileSync(join(web, 'index.html'), '<!doctype html><title>AKENO</title>');
+    writeFileSync(join(web, 'assets', 'gate-worklet-abc.js'), 'registerProcessor("x", class {});');
+    const limited = await createTestServer({ RATE_LIMIT_ENABLED: 'true', RATE_LIMIT_MAX_PER_MINUTE: '10', WEB_DIST_DIR: web });
+    try {
+      for (let i = 0; i < 25; i += 1) {
+        expect((await limited.app.inject({ method: 'GET', url: '/assets/gate-worklet-abc.js' })).statusCode).toBe(200);
+        expect((await limited.app.inject({ method: 'GET', url: '/' })).statusCode).toBe(200);
+      }
+      const api: number[] = [];
+      for (let i = 0; i < 15; i += 1) api.push((await limited.app.inject({ method: 'GET', url: '/api/v1/auth/session' })).statusCode);
+      expect(api).toContain(429);
+    } finally {
+      await limited.close();
+      rmSync(web, { recursive: true, force: true });
+    }
   });
 
   it('rate limits requests when enabled', async () => {

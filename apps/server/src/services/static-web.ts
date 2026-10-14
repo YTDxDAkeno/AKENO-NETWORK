@@ -44,3 +44,12 @@ export function isApiLikePath(url: string): boolean {
     url.startsWith('/media/')
   );
 }
+
+/**
+ * Requests for files of the built web client: the page (any non-API path) and hashed assets.
+ * API, WebSocket, media and health requests are not.
+ */
+export function isStaticWebRequest(method: string, url: string): boolean {
+  if (method !== 'GET' && method !== 'HEAD') return false;
+  return url.startsWith('/assets/') || !isApiLikePath(url);
+}

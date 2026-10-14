@@ -2,7 +2,7 @@ import type * as LiveKitModule from 'livekit-client';
 import type { LocalAudioTrack, RemoteParticipant, RemoteTrack, Room, Track, TrackProcessor } from 'livekit-client';
 import type { VoiceTokenResponse } from '@akeno/shared';
 import { ApiError, api } from '../../lib/api';
-import { MicProcessor } from './mic-processor';
+import { MicProcessor, loadMicWorklet } from './mic-processor';
 import { captureOptions, loadVoicePreferences, onVoicePreferences, type VoicePreferences } from './voice-preferences';
 
 type LiveKit = typeof LiveKitModule;
@@ -88,6 +88,8 @@ export class VoiceController {
   private room: Room | null = null;
   private track: LocalAudioTrack | null = null;
   private processor: MicProcessor | null = null;
+  /** The microphone processor could not be loaded: the plain microphone is used (push-to-talk mutes it instead). */
+  private unprocessed = false;
   private audioContext: AudioContext | null = null;
   private readonly audioElements = new Map<string, HTMLMediaElement>();
   private prefs: VoicePreferences = loadVoicePreferences();
@@ -186,15 +188,10 @@ export class VoiceController {
     try {
       await room.connect(grant.url, grant.token, { autoSubscribe: true });
       if (generation !== this.generation) return;
-      // A reconnect reuses the microphone: replace any processor from the previous connection.
-      await this.processor?.destroy().catch(() => {});
-      if (this.track.getProcessor()) await this.track.stopProcessor();
-      if (this.audioContext) this.track.setAudioContext(this.audioContext);
-      this.processor = new MicProcessor({ gain: this.prefs.inputGain, mode: this.prefs.mode, sensitivity: this.prefs.sensitivity, pttOpen: this.snapshot.pttHeld });
-      this.processor.onLevel = (level, open) => this.onMicLevel(level, open);
-      await this.track.setProcessor(this.processor as unknown as TrackProcessor<Track.Kind.Audio>);
+      await this.attachProcessor(this.track);
+      if (generation !== this.generation) return;
       await room.localParticipant.publishTrack(this.track, { source: lk.Track.Source.Microphone, dtx: true, red: true });
-      if (this.snapshot.micMuted || this.snapshot.deafened) await this.track.mute();
+      if (this.desiredMuted()) await this.track.mute();
       await room.startAudio().catch(() => {});
     } catch (error) {
       if (generation !== this.generation) return;
@@ -204,6 +201,46 @@ export class VoiceController {
       return this.scheduleReconnect(generation, error instanceof Error ? error.message : 'Could not connect to the voice server.');
     }
     this.set({ status: 'connected', reconnectAttempt: 0, canPlaybackAudio: room.canPlaybackAudio, error: null });
+    this.refreshParticipants();
+  }
+
+  /**
+   * Puts the gain/gate processor on the microphone. If it cannot be loaded (old browser, the
+   * module could not be fetched) voice still works with the plain microphone: voice activity
+   * detection is off and push-to-talk mutes and unmutes the microphone instead.
+   */
+  private async attachProcessor(track: LocalAudioTrack): Promise<void> {
+    // A reconnect reuses the microphone: replace any processor from the previous connection.
+    await this.processor?.destroy().catch(() => {});
+    this.processor = null;
+    if (track.getProcessor()) await track.stopProcessor().catch(() => {});
+    try {
+      if (!this.audioContext) throw new Error('No audio context');
+      await loadMicWorklet(this.audioContext);
+      track.setAudioContext(this.audioContext);
+      const processor = new MicProcessor({ gain: this.prefs.inputGain, mode: this.prefs.mode, sensitivity: this.prefs.sensitivity, pttOpen: this.snapshot.pttHeld });
+      processor.onLevel = (level, open) => this.onMicLevel(level, open);
+      await track.setProcessor(processor as unknown as TrackProcessor<Track.Kind.Audio>);
+      this.processor = processor;
+      this.unprocessed = false;
+    } catch {
+      if (track.getProcessor()) await track.stopProcessor().catch(() => {});
+      this.unprocessed = true;
+      this.set({
+        transmitting: true,
+        notice: 'Microphone processing could not start, so your plain microphone is used (voice activity detection is off; push-to-talk still works).',
+      });
+    }
+  }
+
+  /** Muted by the user, deafened, or push-to-talk not held while the processor is unavailable. */
+  private desiredMuted(): boolean {
+    return this.snapshot.micMuted || this.snapshot.deafened || (this.unprocessed && this.prefs.mode === 'ptt' && !this.snapshot.pttHeld);
+  }
+
+  private async syncMicMute(): Promise<void> {
+    if (!this.track) return;
+    await (this.desiredMuted() ? this.track.mute() : this.track.unmute());
     this.refreshParticipants();
   }
 
@@ -320,6 +357,7 @@ export class VoiceController {
     this.track = null;
     await this.processor?.destroy().catch(() => {});
     this.processor = null;
+    this.unprocessed = false;
     for (const element of this.audioElements.values()) element.remove();
     this.audioElements.clear();
     await this.audioContext?.close().catch(() => {});
@@ -337,23 +375,21 @@ export class VoiceController {
 
   async setMicMuted(muted: boolean): Promise<void> {
     this.set({ micMuted: muted });
-    if (!this.track || this.snapshot.deafened) return;
-    await (muted ? this.track.mute() : this.track.unmute());
-    this.refreshParticipants();
+    await this.syncMicMute();
   }
 
   /** Deafen: you hear nobody and your microphone is muted. */
   async setDeafened(deafened: boolean): Promise<void> {
     this.set({ deafened });
     for (const participant of this.room?.remoteParticipants.values() ?? []) this.applyVolume(participant);
-    if (this.track) await (deafened || this.snapshot.micMuted ? this.track.mute() : this.track.unmute());
-    this.refreshParticipants();
+    await this.syncMicMute();
   }
 
   setPushToTalk(held: boolean): void {
     if (this.snapshot.pttHeld === held) return;
     this.processor?.update({ pttOpen: held });
     this.set({ pttHeld: held });
+    if (this.unprocessed) void this.syncMicMute();
   }
 
   /** After an autoplay block (common on phones) audio starts on the next tap. */
@@ -408,6 +444,7 @@ export class VoiceController {
     this.processor?.update({ gain: prefs.inputGain, mode: prefs.mode, sensitivity: prefs.sensitivity });
     for (const participant of this.room?.remoteParticipants.values() ?? []) this.applyVolume(participant);
     if (!this.track || !this.room) return;
+    if (this.unprocessed && prefs.mode !== previous.mode) void this.syncMicMute();
     if (prefs.inputDeviceId !== previous.inputDeviceId && prefs.inputDeviceId) void this.switchDevice('audioinput', prefs.inputDeviceId);
     if (prefs.outputDeviceId !== previous.outputDeviceId && prefs.outputDeviceId) void this.switchDevice('audiooutput', prefs.outputDeviceId);
     if (

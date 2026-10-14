@@ -46,6 +46,9 @@ With `compose.dev.yaml` the `akeno` user is a superuser:
 2. applies migrations and creates the administrator `e2e_admin` through the real CLI,
 3. runs the **production** server bundle (`NODE_ENV=production`, rate limiting and
    production Argon2 parameters enabled) serving the **production** web build on port 3200.
+   Route limits (registration, login, voice tokens) are as in production; the general per-user
+   budget is raised to 1200 requests a minute (`E2E_RATE_LIMIT_MAX_PER_MINUTE`) because the specs
+   reuse the same accounts back to back much faster than people do.
 
 Configure with `E2E_DATABASE_ADMIN_URL`, `E2E_PORT` and `E2E_ADMIN_PASSWORD`. Playwright needs
 Chromium: `pnpm --filter @akeno/web exec playwright install chromium` (CI also installs the

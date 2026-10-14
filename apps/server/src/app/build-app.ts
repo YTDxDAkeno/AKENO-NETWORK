@@ -27,7 +27,7 @@ import { partiesRoutes } from '../modules/parties/routes.js';
 import { usersRoutes } from '../modules/users/routes.js';
 import { voiceRoutes } from '../modules/voice/routes.js';
 import { realtimeGateway, startRealtimeMaintenance } from '../realtime/gateway.js';
-import { isApiLikePath, registerStaticWeb } from '../services/static-web.js';
+import { isApiLikePath, isStaticWebRequest, registerStaticWeb } from '../services/static-web.js';
 import { AppError } from '../utils/errors.js';
 import { type AppContext, createContext } from './context.js';
 import { createLogger } from './logger.js';
@@ -123,6 +123,9 @@ export async function buildApp(options: BuildAppOptions): Promise<BuiltApp> {
       max: config.rateLimit.maxPerMinute,
       timeWindow: '1 minute',
       keyGenerator: (request) => (request.auth ? `user:${request.auth.userId}` : `ip:${request.ip}`),
+      // The built web client (page, hashed scripts, fonts, the microphone worklet) is not
+      // limited: reloading a few times must never break the app or a voice connection.
+      allowList: (request) => isStaticWebRequest(request.method, request.url),
       errorResponseBuilder: (_request, context) =>
         new AppError(429, 'RATE_LIMITED', `Too many requests. Please try again in ${context.after}.`),
     });

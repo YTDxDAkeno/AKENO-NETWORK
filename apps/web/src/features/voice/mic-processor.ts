@@ -21,6 +21,23 @@ export function meterPositionFor(sensitivity: number): number {
 
 const loaded = new WeakSet<BaseAudioContext>();
 
+/** Loads the processor module into context once; fails after timeoutMs (for example when the file cannot be fetched). */
+export async function loadMicWorklet(context: BaseAudioContext, timeoutMs = 8000): Promise<void> {
+  if (loaded.has(context)) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      context.audioWorklet.addModule(workletUrl),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('The microphone processor did not load in time.')), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+  loaded.add(context);
+}
+
 /**
  * Builds the microphone processing graph: source → AudioWorklet (gain + gate) → destination.
  * Implements LiveKit's TrackProcessor contract so it can sit on the published microphone track,
@@ -46,10 +63,7 @@ export class MicProcessor {
     this.ownsContext = !opts.audioContext;
     const context = opts.audioContext ?? new AudioContext({ latencyHint: 'interactive' });
     this.context = context;
-    if (!loaded.has(context)) {
-      await context.audioWorklet.addModule(workletUrl);
-      loaded.add(context);
-    }
+    await loadMicWorklet(context);
     this.source = context.createMediaStreamSource(new MediaStream([opts.track]));
     this.node = new AudioWorkletNode(context, 'akeno-gate', { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1, channelCountMode: 'explicit' });
     this.node.port.onmessage = (event: MessageEvent<{ level: number; open: boolean }>) => {

@@ -119,9 +119,12 @@ function watchErrors(page: Page, errors: string[]): void {
   page.on('console', (message) => {
     consoleLogs.push(`${new Date().toISOString()} [${message.type()}] ${message.text().slice(0, 300)}`);
     if (consoleLogs.length > 400) consoleLogs.shift();
-    if (message.type() === 'error' && !message.text().startsWith('Failed to load resource')) errors.push(message.text());
+    if (message.type() === 'error' && !message.text().startsWith('Failed to load resource') && !LIVEKIT_TEARDOWN.test(message.text())) errors.push(message.text());
   });
 }
+
+/** livekit-client logs these at error level when a peer connection closes during a normal leave (timing dependent). */
+const LIVEKIT_TEARDOWN = /^DataChannel error on \w+: User-Initiated Abort|^publisher data channel '\w+' closed unexpectedly/;
 
 // Playwright requires the fixtures argument to be an object pattern.
 // eslint-disable-next-line no-empty-pattern
@@ -231,6 +234,8 @@ function member(page: Page, userId: string) {
 }
 
 test('party voice with a real LiveKit server', async ({ browser, baseURL }) => {
+  // Many real connections in one scenario; CI runners are slower than a workstation.
+  test.setTimeout(300_000);
   const ana = await openDesktop(browser, baseURL!);
   const ben = await openDesktop(browser, baseURL!);
   let anaId = '';
@@ -359,7 +364,13 @@ test('party voice with a real LiveKit server', async ({ browser, baseURL }) => {
     expect(await signIn(cid.page, 'e2e_admin', ADMIN_PASSWORD)).toBe(true);
     const cidId = (await apiCall(cid.page, 'GET', '/users/me')).json.id;
     await befriend(ana.page, cid.page, cidId);
-    // Joins straight from the invitation: accepting and connecting to voice in one tap.
+    // Joins straight from the invitation: accepting and connecting to voice in one tap. The
+    // microphone processor module is made unavailable here: voice must still work, plainly.
+    // (Page routing does not see AudioWorklet module loads, so the load is made to fail in the page.)
+    await cid.page.context().addInitScript(() => {
+      AudioWorklet.prototype.addModule = () => Promise.reject(new DOMException('Blocked by the test', 'AbortError'));
+    });
+    const anaBefore = await inboundAudio(ana.page);
     const party = await apiCall(ana.page, 'GET', '/parties/current');
     expect((await apiCall(ana.page, 'POST', `/parties/${party.json.party.id}/invitations`, { userId: cidId })).status).toBe(201);
     await cid.page.goto('/');
@@ -368,6 +379,8 @@ test('party voice with a real LiveKit server', async ({ browser, baseURL }) => {
     await expect(cid.page).toHaveURL(/\/parties$/);
     await expect(cid.page.getByTestId('party-voice')).toHaveAttribute('data-voice-status', 'connected', VOICE_WAIT);
     await expect(member(cid.page, anaId).getByTestId('member-voice-state')).toBeVisible();
+    await expect(cid.page.getByTestId('party-voice')).toContainText('plain microphone is used');
+    await expect.poll(async () => (await inboundAudio(ana.page)).energy, VOICE_WAIT).toBeGreaterThan(anaBefore.energy);
     await expect.poll(async () => (await inboundAudio(cid.page)).energy, VOICE_WAIT).toBeGreaterThan(0);
     await cid.page.getByRole('navigation', { name: 'Quick navigation' }).getByRole('link', { name: 'Friends' }).click();
     const bar = cid.page.getByTestId('voice-bar').last();
