@@ -44,7 +44,8 @@ static void usage(void) {
             "  --ca-file PEM    trust these CA certificates instead of the built-in roots\n"
             "  --port N         local page port on 127.0.0.1 (default %d, 0 = any free port)\n"
             "  --open-browser   ask the platform to open the page (host: prints the URL)\n\n"
-            "Environment (tests): AKENO_IO_TIMEOUT_MS, AKENO_BACKOFF_BASE_MS, AKENO_MAX_RECONNECTS\n",
+            "Environment (tests): AKENO_IO_TIMEOUT_MS, AKENO_BACKOFF_BASE_MS, AKENO_MAX_RECONNECTS,\n"
+            "  AKENO_ACTIVITY_SCAN_MS, AKENO_ACTIVITY_HEARTBEAT_MS, AKENO_SIM_PROCESSES, AKENO_SIM_METADATA_ROOT\n",
             AKENO_DEFAULT_PORT);
 }
 
@@ -72,6 +73,10 @@ int main(int argc, char **argv) {
     if (env) options.backoff_base_ms = atoi(env);
     env = getenv("AKENO_MAX_RECONNECTS");
     if (env) options.max_reconnects = atoi(env);
+    env = getenv("AKENO_ACTIVITY_SCAN_MS");
+    if (env) options.activity_scan_ms = atoi(env);
+    env = getenv("AKENO_ACTIVITY_HEARTBEAT_MS");
+    if (env) options.activity_heartbeat_ms = atoi(env);
     signal(SIGPIPE, SIG_IGN);
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);

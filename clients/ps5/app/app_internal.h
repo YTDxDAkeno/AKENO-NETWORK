@@ -6,6 +6,7 @@
  *   main thread      local UI server loop, all local API requests, every thread start/join
  *   realtime thread  akeno_realtime_run() with its own akeno_client
  *   pairing thread   akeno_pairing_wait() with its own akeno_client
+ *   activity thread  game detection and activity heartbeats with its own akeno_client
  * Worker threads never touch another thread's client. They report through fields guarded by
  * app->lock and the main thread applies the consequences in app_tick().
  */
@@ -18,9 +19,10 @@
 #include "akeno/akeno.h"
 #include "app.h"
 #include "buf.h"
+#include "game_detect.h"
 #include "platform.h"
 
-#define AKENO_APP_VERSION "0.1.0-alpha"
+#define AKENO_APP_VERSION "0.2.0-alpha"
 #ifndef AKENO_BUILD_ID
 #define AKENO_BUILD_ID "dev"
 #endif
@@ -36,6 +38,33 @@ typedef struct {
     unsigned long long seq;
     char *json; /* {"seq":N,"type":"...","data":...} */
 } app_event;
+
+/* What the activity worker last saw and reported (app->lock). */
+typedef struct {
+    char state[24];   /* off, starting, unsupported, idle, playing, permission-missing, disabled-on-server, signed-out */
+    char detail[200];
+    char title_id[AKENO_TITLE_ID_MAX];
+    char name[AKENO_TITLE_NAME_MAX];
+    char name_source[160];
+    char started_at[40]; /* Server time the session started, after the first accepted heartbeat. */
+    long long since;     /* Local time the game was confirmed. */
+    long long last_scan_at;
+    long long last_heartbeat_at;
+    int heartbeats_ok;
+    int heartbeats_failed;
+    int scan_ms;
+    int heartbeat_ms;
+    akeno_game_scan scan;
+} app_activity;
+
+/* One-time links for notification buttons: exchange for the page secret once, then expire. */
+#define APP_TICKETS 8
+#define APP_TICKET_MS (15 * 60 * 1000)
+typedef struct {
+    char id[33];
+    char open[64];  /* What the page should show, e.g. "conversation:<id>" or "". */
+    long long expires_at;
+} app_ticket;
 
 struct akeno_app {
     akeno_app_options opt;
@@ -59,6 +88,8 @@ struct akeno_app {
     char device_name[64];
     int notify_messages;
     int notify_social;
+    int activity_enabled;          /* Detect and share the game being played. */
+    int actionable_notifications;  /* Experimental button notifications. */
 
     /* Local UI (immutable after start). */
     int port;
@@ -99,6 +130,20 @@ struct akeno_app {
     char rt_detail[200];
     long long rt_changed_at;
 
+    /* Game activity (lock). */
+    pthread_t act_thread;
+    int act_thread_running; /* main thread only */
+    int act_thread_done;
+    volatile int act_stop;
+    int act_wanted;
+    app_activity act;
+
+    /* Quick access to the last message notification (lock). */
+    char quick_open[64];  /* "conversation:<id>" or "party:<id>" */
+    char quick_from[80];
+    long long quick_at;
+    app_ticket tickets[APP_TICKETS];
+
     /* Events for the UI (lock). */
     app_event events[APP_EVENT_RING];
     unsigned long long next_seq;
@@ -134,6 +179,21 @@ void app_pair_cancel(akeno_app *app);
 void app_mark_unpaired(akeno_app *app, const char *why);
 /* Opens the page in the system browser; returns 0 when the system accepted the request. */
 int app_open_ui(akeno_app *app);
+void app_copy_str(char *dst, size_t dst_len, const char *src);
+/* Starts a worker thread with an explicit stack size. Returns 0 on success. */
+int app_start_worker(pthread_t *thread, void *(*fn)(void *), void *arg);
+int app_exit_requested(void);
+/* Creates a one-time link to the page that opens `open` (may be ""); writes the URL. */
+int app_ticket_url(akeno_app *app, const char *open, char *url, size_t url_len);
+/* Redeems a ticket: copies its target and returns 0 once; -1 when unknown, used or expired. */
+int app_ticket_redeem(akeno_app *app, const char *id, char *open, size_t open_len);
+
+/* activity.c (main thread) */
+void app_activity_init(akeno_app *app);
+void app_activity_tick(akeno_app *app);
+void app_activity_shutdown(akeno_app *app);
+/* Appends the activity state as JSON; caller holds app->lock. */
+void app_activity_json(const akeno_app *app, akeno_buf *b, int diagnostics);
 
 /* app_routes.c */
 typedef struct {

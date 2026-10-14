@@ -13,6 +13,8 @@ typedef struct {
     int io_timeout_ms;      /* 0 = library default. */
     int backoff_base_ms;    /* Realtime reconnect tuning; 0 = defaults. */
     int max_reconnects;
+    int activity_scan_ms;      /* Game detection interval; 0 = default (10 s). */
+    int activity_heartbeat_ms; /* Activity heartbeat interval; 0 = what the server asks for (60 s). */
 } akeno_app_options;
 
 /* Runs the app until it is asked to exit. Returns a process exit code. */
