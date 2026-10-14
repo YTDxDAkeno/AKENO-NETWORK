@@ -78,6 +78,20 @@ jobs:
           export PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk"
           clients/ps5/console/check-imports.sh clients/ps5/build-ps5 | tee imports.txt
 
+      # Experimental PS5 voice research (docs/PS5_AUDIO_RESEARCH.md): a separate ELF, never the
+      # release one. It must pass the same gate and import exactly what the release ELF imports.
+      - name: Build the experimental audio lab and check its imports
+        run: |
+          export PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk"
+          make -C clients/ps5/console -j"$(nproc)" EXPERIMENTAL_AUDIO=1 GIT_COMMIT="$(git rev-parse --short=12 HEAD)"
+          clients/ps5/console/check-imports.sh clients/ps5/build-ps5-audiolab | tee imports-audiolab.txt
+          nm="$PS5_PAYLOAD_SDK/bin/prospero-nm"
+          diff <("$nm" -D --undefined-only clients/ps5/build-ps5/akeno-network-ps5.elf | awk '{print $2}' | sort) \
+               <("$nm" -D --undefined-only clients/ps5/build-ps5-audiolab/akeno-network-ps5-audiolab.elf | awk '{print $2}' | sort)
+          if "$nm" clients/ps5/build-ps5/akeno-network-ps5.debug.elf | grep -qE 'audio_lab|akeno_platform_audio'; then
+            echo "The release ELF contains audio lab code" >&2; exit 1
+          fi
+
       - name: Inspect, checksum and describe the build
         shell: bash
         run: |
@@ -92,12 +106,15 @@ jobs:
           cp docs/PS5_CLIENT.md "$out/README.md"
           cp docs/RELEASE_NOTES_ALPHA_0.2.md "$out/RELEASE_NOTES.md"
           cp docs/HARDWARE_TEST_PLAN_ALPHA_0.2.md "$out/HARDWARE_TEST_PLAN.md"
-          for elf in "$out"/*.elf "$out"/fallback-alpha-0.1/*.elf; do
+          mkdir -p "$out/experimental-audio-lab"
+          cp clients/ps5/build-ps5-audiolab/akeno-network-ps5-audiolab.elf "$out/experimental-audio-lab/"
+          cp docs/PS5_AUDIO_RESEARCH.md "$out/experimental-audio-lab/README.md"
+          for elf in "$out"/*.elf "$out"/fallback-alpha-0.1/*.elf "$out"/experimental-audio-lab/*.elf; do
             readelf -h "$elf" | grep -q 'ELF64'
             readelf -h "$elf" | grep -q 'Advanced Micro Devices X86-64'
             readelf -h "$elf" | grep -q 'DYN (Position-Independent Executable file)'
           done
-          (cd "$out" && sha256sum *.elf fallback-alpha-0.1/*.elf > SHA256SUMS)
+          (cd "$out" && sha256sum *.elf fallback-alpha-0.1/*.elf experimental-audio-lab/*.elf > SHA256SUMS)
           {
             echo "AKENO NETWORK console app $version (Alpha 0.2 release candidate)"
             echo "Source commit:   $(git rev-parse HEAD)"
@@ -121,6 +138,9 @@ jobs:
             echo "  fallback-alpha-0.1/akeno-network-ps5-alpha-0.1.elf is Alpha 0.1, rebuilt from"
             echo "  $ALPHA_01_COMMIT and verified byte-identical to the build that ran on a PS5"
             echo "  with firmware 12.20 (user report: browser, pairing, HTTPS/WSS, notifications)."
+            echo "  experimental-audio-lab/akeno-network-ps5-audiolab.elf is an EXPERIMENTAL research build"
+            echo "  (PS5 voice prototypes A and C). It has never run on a PS5. Use it only for the audio"
+            echo "  test plan in its README, after approval; it is not a release and not needed for AKENO."
           } > "$out/BUILDINFO.txt"
           cat "$out/BUILDINFO.txt"
 

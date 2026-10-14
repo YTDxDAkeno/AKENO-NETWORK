@@ -157,7 +157,8 @@ jobs:
           AKENO_UI_SCREENSHOTS: ${{ runner.temp }}/console-ui
         run: |
           mkdir -p "$AKENO_UI_SCREENSHOTS"
-          node clients/ps5/tests/integration/run.mjs clients/ps5/build-asan/akeno-cli-mbedtls --app clients/ps5/build-asan/akeno-app
+          node clients/ps5/tests/integration/run.mjs clients/ps5/build-asan/akeno-cli-mbedtls --app clients/ps5/build-asan/akeno-app \
+            --audiolab clients/ps5/build-asan/akeno-app-audiolab
 
       - name: Upload console page screenshots
         if: always()

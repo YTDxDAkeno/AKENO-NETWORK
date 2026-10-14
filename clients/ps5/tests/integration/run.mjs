@@ -9,7 +9,9 @@
 // Hostile-server cases (garbage, oversized and stalled responses) use small local fake servers.
 //
 // Usage: node clients/ps5/tests/integration/run.mjs <path-to-akeno-cli> [--app <path-to-akeno-app>]
-// With --app, the console app (host build) is also tested against the same server.
+//        [--audiolab <path-to-akeno-app-audiolab>]
+// With --app, the console app (host build) is also tested against the same server; with
+// --audiolab, the experimental audio lab build (PS5 voice research, simulated audio).
 // Requires: `pnpm build`, PostgreSQL (TEST_DATABASE_ADMIN_URL), openssl on PATH.
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
@@ -27,6 +29,8 @@ const pg = createRequire(resolve(root, 'apps/server/package.json'))('pg');
 const cli = resolve(process.argv[2] ?? 'clients/ps5/build/akeno-cli');
 const appIndex = process.argv.indexOf('--app');
 const appBinary = appIndex > 0 ? resolve(process.argv[appIndex + 1]) : null;
+const audioLabIndex = process.argv.indexOf('--audiolab');
+const audioLabBinary = audioLabIndex > 0 ? resolve(process.argv[audioLabIndex + 1]) : null;
 const adminUrl = process.env.TEST_DATABASE_ADMIN_URL ?? 'postgres://akeno:akeno_dev_password@127.0.0.1:5432/postgres';
 const databaseName = 'akeno_client_it';
 const ADMIN_PASSWORD = 'client-it-admin-password-1';
@@ -581,8 +585,8 @@ await step('gives up after a bounded number of reconnect attempts', async () => 
 // ---- Console app (host build of the PS5 app) ------------------------------------------------
 
 /** Starts the console app; resolves once it has printed its page URL. */
-async function startApp(dataDir, args = [], env = {}) {
-  const child = spawn(appBinary, ['--data-dir', dataDir, ...args], { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+async function startApp(dataDir, args = [], env = {}, binary = appBinary) {
+  const child = spawn(binary, ['--data-dir', dataDir, ...args], { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
   children.add(child);
   const state = { child, stdout: '', stderr: '', events: [], exit: null, port: 0, token: '' };
   child.stdout.on('data', (chunk) => {
@@ -1430,6 +1434,137 @@ if (appBinary) {
     assert.doesNotMatch(logs, /akd_[A-Za-z0-9_-]{10,}/);
     assert.doesNotMatch(logs, /akp_[A-Za-z0-9_-]{10,}/);
     assert.match(logs, /pairing.started/);
+  });
+}
+
+// ---- Audio lab: experimental PS5 voice research (simulated audio on Linux) --------------------
+
+if (audioLabBinary) {
+  if (!existsSync(audioLabBinary)) throw new Error(`Missing audio lab binary ${audioLabBinary}`);
+  log(`AKENO console app audio lab (host build) tests (${audioLabBinary})`);
+  // Stands in for /system/common/lib on the console.
+  const libDir = join(work, 'system-lib');
+  spawnSync('mkdir', ['-p', libDir]);
+  for (const name of ['libkernel.sprx', 'libSceAudioOut.sprx', 'libSceAudioIn.sprx', 'libSceVoiceQoS.sprx', 'libSceNet.sprx']) writeFileSync(join(libDir, name), '');
+  const audioEnv = { AKENO_SIM_AUDIO: 'out', AKENO_SIM_AUDIO_LIBDIR: libDir };
+  let lab = null;
+  const waitUntil = async (predicate, what, timeoutMs = 20_000) => {
+    const deadline = Date.now() + timeoutMs;
+    while (!(await predicate())) {
+      if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`);
+      await sleep(100);
+    }
+  };
+
+  await step('audio lab: the release build has no audio routes and no audio section', async () => {
+    if (!appBinary) {
+      log('       (skipped: --app not given)');
+      return;
+    }
+    const release = await startApp(join(work, 'app-release-audio'), ['--port', '0'], audioEnv);
+    try {
+      assert.equal((await appApi(release, 'GET', '/api/diagnostics/audio')).status, 404);
+      assert.equal((await appApi(release, 'POST', '/api/diagnostics/audio/tone', { confirm: 'play' })).status, 404);
+      assert.equal((await appApi(release, 'GET', '/api/diagnostics')).body.experimentalAudio, undefined);
+      assert.ok(!release.events.some((e) => e.event === 'audio-tone'));
+    } finally {
+      release.child.kill('SIGTERM');
+      await release.exited;
+    }
+  });
+
+  await step('audio lab: nothing runs until the user asks; the probe reports libraries and symbols read-only', async () => {
+    lab = await startApp(join(work, 'app-audiolab'), ['--port', '0'], audioEnv, audioLabBinary);
+    assert.equal(lab.exit, null, lab.stderr);
+    assert.equal((await appApi(lab, 'GET', '/api/diagnostics')).body.experimentalAudio, true);
+    const idle = (await appApi(lab, 'GET', '/api/diagnostics/audio')).body.audio;
+    assert.equal(idle.probe, null);
+    assert.equal(idle.tone.result, 'none');
+    assert.ok(!lab.events.some((e) => e.event === 'audio-tone'), 'no tone without a request');
+    assert.equal((await appApi(lab, 'POST', '/api/diagnostics/audio/probe', undefined, { 'X-Akeno-Token': 'wrong' })).status, 403);
+
+    const probe = (await appApi(lab, 'POST', '/api/diagnostics/audio/probe')).body.audio.probe;
+    assert.equal(probe.libraryDir, libDir);
+    assert.deepEqual(probe.audioFiles, ['libSceAudioOut.sprx', 'libSceAudioIn.sprx', 'libSceVoiceQoS.sprx']);
+    assert.equal(probe.filesChecked, 6);
+    const out = probe.libraries.find((lib) => lib.name === 'libSceAudioOut.sprx');
+    assert.equal(out.loaded, true);
+    assert.deepEqual(out.symbols.map((sym) => sym.name), ['sceAudioOutInit', 'sceAudioOutOpen', 'sceAudioOutOutput', 'sceAudioOutClose']);
+    assert.ok(out.symbols.every((sym) => sym.exported));
+    const input = probe.libraries.find((lib) => lib.name === 'libSceAudioIn.sprx');
+    assert.equal(input.loaded, false);
+    assert.match(input.error, /not available/);
+    assert.ok(input.symbols.every((sym) => !sym.exported));
+    assert.match(probe.microphoneEnumeration, /not attempted/);
+  });
+
+  await step('audio lab: the test tone needs an explicit confirmation, plays once at a time and reports the result', async () => {
+    const unconfirmed = await appApi(lab, 'POST', '/api/diagnostics/audio/tone', {});
+    assert.equal(unconfirmed.status, 400);
+    assert.equal(unconfirmed.body.error.code, 'CONFIRMATION_REQUIRED');
+    const started = await appApi(lab, 'POST', '/api/diagnostics/audio/tone', { confirm: 'play' });
+    assert.equal(started.status, 200);
+    assert.equal(started.body.audio.tone.result, 'playing');
+    assert.equal((await appApi(lab, 'POST', '/api/diagnostics/audio/tone', { confirm: 'play' })).status, 409);
+    await waitUntil(async () => (await appApi(lab, 'GET', '/api/diagnostics/audio')).body.audio.tone.result === 'accepted', 'the tone to finish');
+    const tone = lab.events.filter((e) => e.event === 'audio-tone');
+    assert.deepEqual(tone, [{ event: 'audio-tone', frequency: 440, durationMs: 1000, amplitude: 0.1 }]);
+    const status = (await appApi(lab, 'GET', '/api/diagnostics/audio')).body.audio.tone;
+    assert.equal(status.runs, 1);
+    assert.match(status.detail, /Did you hear/);
+  });
+
+  await step('audio lab: without an audio output the tone reports "unavailable" and the app keeps running', async () => {
+    lab.child.kill('SIGTERM');
+    assert.equal((await lab.exited).code, 0, lab.stderr);
+    lab = await startApp(join(work, 'app-audiolab'), ['--port', '0'], { AKENO_SIM_AUDIO_LIBDIR: join(work, 'missing') }, audioLabBinary);
+    await appApi(lab, 'POST', '/api/diagnostics/audio/tone', { confirm: 'play' });
+    await waitUntil(async () => (await appApi(lab, 'GET', '/api/diagnostics/audio')).body.audio.tone.result === 'unavailable', 'the tone result');
+    const probe = (await appApi(lab, 'POST', '/api/diagnostics/audio/probe')).body.audio.probe;
+    assert.equal(probe.libraryDirReadable, false);
+    assert.ok(probe.libraries.every((lib) => !lib.loaded));
+    assert.equal((await appApi(lab, 'GET', '/api/state')).status, 200, 'the rest of the app is unaffected');
+  });
+
+  await step('audio lab: the diagnostics page shows the experimental section and runs the checks', async () => {
+    let chromium;
+    try {
+      ({ chromium } = createRequire(resolve(root, 'apps/web/package.json'))('@playwright/test'));
+    } catch {
+      chromium = null;
+    }
+    if (!chromium) {
+      if (process.env.AKENO_REQUIRE_BROWSER) throw new Error('Playwright is not installed (pnpm install)');
+      log('       (skipped: Playwright not installed)');
+      return;
+    }
+    lab.child.kill('SIGTERM');
+    await lab.exited;
+    // With a server address set the page shows the pairing screen and its Diagnostics button.
+    lab = await startApp(join(work, 'app-audiolab'), ['--port', '0', '--server', 'https://audio-lab.invalid'], audioEnv, audioLabBinary);
+    const browser = await chromium.launch();
+    try {
+      const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+      const errors = [];
+      page.on('pageerror', (error) => errors.push(String(error)));
+      await page.goto(`http://127.0.0.1:${lab.port}/#t=${lab.token}`);
+      await page.locator('#pair-diag').click();
+      const section = page.locator('#audio-lab');
+      await section.getByRole('heading', { name: 'Audio research (experimental build)' }).waitFor();
+      await section.getByRole('button', { name: 'Check audio libraries' }).click();
+      await section.getByText(/libSceAudioOut\.sprx.*loads/).waitFor();
+      await section.getByRole('button', { name: 'Play a test tone' }).click();
+      await section.getByText(/Run it from the home screen/).waitFor();
+      await section.getByRole('button', { name: 'Play', exact: true }).click();
+      await section.getByText(/accepted \(1 run\)/).waitFor({ timeout: 10_000 });
+      if (process.env.AKENO_UI_SCREENSHOTS) await page.screenshot({ path: join(process.env.AKENO_UI_SCREENSHOTS, 'audio-lab.png'), fullPage: true });
+      assert.deepEqual(errors, []);
+      assert.equal(lab.events.filter((e) => e.event === 'audio-tone').length, 1);
+    } finally {
+      await browser.close();
+      lab.child.kill('SIGTERM');
+      await lab.exited;
+    }
   });
 }
 

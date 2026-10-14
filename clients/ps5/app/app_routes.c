@@ -13,6 +13,9 @@
 
 #include "akeno/caps.h"
 #include "app_internal.h"
+#ifdef AKENO_EXPERIMENTAL_AUDIO
+#include "audio_lab.h"
+#endif
 #include "crypto_util.h"
 #include "json_write.h"
 #include "transport.h"
@@ -512,6 +515,9 @@ static void route_diagnostics(akeno_app *app, ui_response *r) {
     json_kv_str(b, "detail", app->rt_detail, 1);
     akeno_buf_append_str(b, "}");
     pthread_mutex_unlock(&app->lock);
+#ifdef AKENO_EXPERIMENTAL_AUDIO
+    json_kv_bool(b, "experimentalAudio", 1, 1); /* audio lab build: the page shows its section */
+#endif
 
     akeno_buf_append_str(b, ",\"capabilities\":[");
     for (int f = 0; f < AKENO_FEATURE_COUNT; f++) {
@@ -566,6 +572,34 @@ static void route_connection_test(akeno_app *app, ui_response *r) {
     app_log(app, status == AKENO_OK ? AKENO_LOG_INFO : AKENO_LOG_WARN, "diagnostics.connection", "%s in %lld ms %s %s",
             akeno_status_name(status), elapsed, tls, status == AKENO_OK ? "" : err);
 }
+
+#ifdef AKENO_EXPERIMENTAL_AUDIO
+/* ---- Audio lab (experimental builds only) -------------------------------------------------- */
+
+static void respond_audio_status(ui_response *r) {
+    akeno_buf_append_str(&r->body, "{\"ok\":true,\"audio\":");
+    audio_lab_status_json(&r->body);
+    akeno_buf_append_str(&r->body, "}");
+    respond_json(r, 200);
+}
+
+/* POST /api/diagnostics/audio/tone {"confirm":"play"}: the explicit confirmation is required. */
+static void route_audio_tone(akeno_app *app, const akeno_json *root, ui_response *r) {
+    const char *confirm = akeno_json_get_string(root, "confirm", NULL);
+    if (!confirm || strcmp(confirm, "play") != 0) {
+        respond_error(r, 400, "CONFIRMATION_REQUIRED", "Confirm the experimental test tone first.");
+        return;
+    }
+    int rc = audio_lab_tone_start();
+    if (rc == 1) {
+        respond_error(r, 409, "BUSY", "The test tone is already playing.");
+        return;
+    }
+    app_log(app, rc == 0 ? AKENO_LOG_INFO : AKENO_LOG_WARN, "audio.tone", rc == 0 ? "Experimental test tone started by the user."
+                                                                                  : "The experimental test tone could not start.");
+    respond_audio_status(r);
+}
+#endif
 
 /* ---- /t/<ticket>: one-time links from notification buttons ------------------------------- */
 
@@ -694,6 +728,17 @@ void app_route(akeno_app *app, const ui_request *req, const char *body, size_t b
         akeno_buf_printf(&r->body, "{\"ok\":%s,\"result\":%d", rc == 0 ? "true" : "false", rc);
         json_kv_str(&r->body, "status", akeno_platform_actionable_status(), 1);
         akeno_buf_append_str(&r->body, "}");
+#ifdef AKENO_EXPERIMENTAL_AUDIO
+    } else if (is(req, "GET", "/api/diagnostics/audio")) {
+        respond_audio_status(r);
+    } else if (is(req, "POST", "/api/diagnostics/audio/probe")) {
+        audio_lab_probe();
+        app_log(app, AKENO_LOG_INFO, "audio.probe", "Experimental audio probe run by the user.");
+        respond_audio_status(r);
+    } else if (is(req, "POST", "/api/diagnostics/audio/tone")) {
+        doc = akeno_json_parse(body ? body : "", body_len, NULL, 0);
+        route_audio_tone(app, akeno_json_root(doc), r);
+#endif
     } else if (is(req, "POST", "/api/exit")) {
         app_log(app, AKENO_LOG_INFO, "app.exit_requested", "Exit requested from the console page.");
         app->stop = 1;

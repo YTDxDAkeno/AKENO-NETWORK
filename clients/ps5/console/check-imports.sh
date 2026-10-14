@@ -5,12 +5,15 @@
 # at run time, or if AKENO's own object files reference the SDK's kernel memory helpers.
 #
 #   check-imports.sh <build-ps5 directory> [nm]
+# The audio lab build (build-ps5-audiolab, EXPERIMENTAL_AUDIO=1) is checked by the same rules:
+# its audio functions are resolved at run time by platform_ps5.o and are never imported.
 set -euo pipefail
 build="${1:?usage: check-imports.sh <build-ps5 dir> [nm]}"
 nm="${2:-}"
 if [[ -z "$nm" && -n "${PS5_PAYLOAD_SDK:-}" ]]; then nm="$PS5_PAYLOAD_SDK/bin/prospero-nm"; fi
 nm="${nm:-llvm-nm-18}"
-elf="$build/akeno-network-ps5.elf"
+elf="$(find "$build" -maxdepth 1 -name 'akeno-network-ps5*.elf' ! -name '*.debug.elf' | head -1)"
+[[ -n "$elf" ]] || { echo "No akeno-network-ps5*.elf in $build" >&2; exit 1; }
 
 # Reviewed system functions (see app/platform_ps5.c and docs/PS5_CLIENT.md).
 allowed_sce='^(sceKernelSendNotificationRequest|sceSystemServiceLaunchWebBrowser|sceUserServiceInitialize|sceUserServiceTerminate|sceNetErrnoLoc|sceNetPoolCreate|sceNetPoolDestroy|sceNetResolverCreate|sceNetResolverDestroy|sceNetResolverStartAton|sceNetResolverStartNtoa)$'
@@ -21,6 +24,8 @@ optional_sce='^(sceKernelGetAppInfo)$'
 
 # Functions resolved at run time with dlopen/dlsym by app/platform_ps5.c only (never imported):
 #   libSceNotification.sprx: sceNotificationSend (experimental button notifications, opt-in)
+#   audio lab build only: libSceAudioOut.sprx (sceAudioOutInit/Open/Output/Close, test tone) and
+#   symbol lookups in libSceAudioOut.sprx / libSceAudioIn.sprx (prototype A, nothing called)
 
 status=0
 imports="$("$nm" -D --undefined-only "$elf" | awk '{print $2}')"
@@ -74,5 +79,8 @@ if [[ $status -eq 0 ]]; then
     if grep -qx "$symbol" <<< "$weak_imports"; then echo "  $symbol (weak, optional)"; else echo "  $symbol"; fi
   done
   echo "Loaded at run time by platform_ps5.o (opt-in): sceNotificationSend from libSceNotification.sprx"
+  if [[ "$(basename "$elf")" == *audiolab* ]]; then
+    echo "Audio lab build: libSceAudioOut.sprx / libSceAudioIn.sprx loaded at run time only when the user starts a check"
+  fi
 fi
 exit $status

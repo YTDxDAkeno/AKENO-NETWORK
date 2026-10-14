@@ -95,6 +95,15 @@ if(AKENO_HAVE_MBEDTLS)
   set_source_files_properties(app/ui_assets.c PROPERTIES OBJECT_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/app/web/index.html;${CMAKE_CURRENT_SOURCE_DIR}/app/web/app.js;${CMAKE_CURRENT_SOURCE_DIR}/app/web/app.css")
   target_link_libraries(akeno-app PRIVATE akeno_client_mbedtls)
+
+  # Audio lab: the same app with the experimental PS5 audio research (simulated on Linux).
+  add_executable(akeno-app-audiolab app/main.c app/platform_host.c app/audio_lab.c ${AKENO_APP_SOURCES})
+  target_include_directories(akeno-app-audiolab PRIVATE src app)
+  target_compile_options(akeno-app-audiolab PRIVATE ${AKENO_WARNINGS} ${AKENO_HARDENING})
+  target_compile_definitions(akeno-app-audiolab PRIVATE AKENO_EXPERIMENTAL_AUDIO
+    "AKENO_UI_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/app/web\""
+    "AKENO_BUILD_ID=\"${AKENO_GIT_COMMIT}-linux-audiolab\"")
+  target_link_libraries(akeno-app-audiolab PRIVATE akeno_client_mbedtls)
 endif()
 
 enable_testing()

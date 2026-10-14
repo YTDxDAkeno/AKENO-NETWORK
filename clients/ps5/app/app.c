@@ -6,6 +6,9 @@
 #define _POSIX_C_SOURCE 200809L
 #endif
 #include "app_internal.h"
+#ifdef AKENO_EXPERIMENTAL_AUDIO
+#include "audio_lab.h"
+#endif
 
 #include <errno.h>
 #include <fcntl.h>
@@ -921,6 +924,9 @@ int akeno_app_main(const akeno_app_options *options) {
     ui_server_loop(app, listen_fd);
 
     app_log(app, AKENO_LOG_INFO, "app.stopping", "Stopping.");
+#ifdef AKENO_EXPERIMENTAL_AUDIO
+    audio_lab_shutdown();
+#endif
     shutdown_workers(app);
     close(listen_fd);
     unlink(app->instance_path);

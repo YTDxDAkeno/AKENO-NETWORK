@@ -912,6 +912,7 @@
             });
           } })), testResult));
     }
+    if (d.experimentalAudio) wrap.appendChild(audioLabSection());
     wrap.appendChild(h('section', { className: 'panel' }, h('h2', { text: 'Features' }),
       h('dl', { className: 'kv' }, d.capabilities.map(function (c) {
         return [h('dt', { text: c.feature }), h('dd', {}, h('span', { className: 'state-' + c.state, text: c.state }), ' — ' + c.reason)];
@@ -919,6 +920,49 @@
     wrap.appendChild(h('section', { className: 'panel' }, h('h2', { text: 'Recent log (tokens are redacted)' }),
       h('div', { className: 'log mono', text: d.log.join('\n') })));
     return wrap;
+  }
+  // Audio lab builds only (PS5 voice research, docs/PS5_AUDIO_RESEARCH.md): a read-only check of
+  // the console's audio libraries and a short, quiet test tone. Nothing is recorded.
+  function audioLabSection() {
+    var out = h('div', { id: 'audio-lab-result' });
+    var confirmRow = h('div', { className: 'row mt', id: 'audio-tone-confirm' });
+    confirmRow.hidden = true;
+    function show(res) {
+      clear(out);
+      if (!res || !res.ok) {
+        out.appendChild(h('p', { className: 'error', text: (res && res.error && res.error.message) || 'The console app did not answer.' }));
+        return;
+      }
+      var a = res.audio, p = a.probe, t = a.tone;
+      if (p) {
+        var rows = [['Library folder', p.libraryDir + (p.libraryDirReadable ? '' : ' (not readable: ' + (p.libraryDirError || '') + ')')],
+          ['Audio-related files', (p.audioFiles || []).join(', ') || 'none found']];
+        p.libraries.forEach(function (lib) {
+          rows.push([lib.name, (lib.loaded ? 'loads' : 'does not load: ' + lib.error) + ' · ' + lib.symbols.map(function (sym) {
+            return sym.name + (sym.exported ? ' ✓' : ' ✗');
+          }).join(', ') + ' (names from ' + lib.namesFrom + ')']);
+        });
+        rows.push(['Microphones', p.microphoneEnumeration]);
+        out.appendChild(kv(rows));
+      }
+      out.appendChild(kv([['Test tone', t.result + (t.runs ? ' (' + t.runs + ' run' + (t.runs === 1 ? '' : 's') + ')' : '') + (t.detail ? ' — ' + t.detail : '')]]));
+      if (t.result === 'playing') setTimeout(function () { api('GET', '/api/diagnostics/audio').then(show); }, 500);
+    }
+    confirmRow.appendChild(h('span', { className: 'small', text: 'Play a one-second, quiet 440 Hz tone on the console\'s audio output? Run it from the home screen, not during a game.' }));
+    confirmRow.appendChild(h('button', { className: 'btn', type: 'button', id: 'audio-tone-play', text: 'Play', onclick: function () {
+      confirmRow.hidden = true;
+      api('POST', '/api/diagnostics/audio/tone', { confirm: 'play' }).then(show);
+    } }));
+    confirmRow.appendChild(h('button', { className: 'btn ghost', type: 'button', text: 'Cancel', onclick: function () { confirmRow.hidden = true; } }));
+    api('GET', '/api/diagnostics/audio').then(show);
+    return h('section', { className: 'panel', id: 'audio-lab' }, h('h2', { text: 'Audio research (experimental build)' }),
+      h('p', { className: 'muted small', text: 'For testing PS5 voice support only. Each check runs when you start it; no audio is recorded or sent anywhere.' }),
+      h('div', { className: 'row' },
+        h('button', { className: 'btn secondary', type: 'button', id: 'audio-probe', text: 'Check audio libraries', onclick: function () {
+          api('POST', '/api/diagnostics/audio/probe').then(show);
+        } }),
+        h('button', { className: 'btn secondary', type: 'button', id: 'audio-tone', text: 'Play a test tone', onclick: function () { confirmRow.hidden = false; } })),
+      confirmRow, out);
   }
   function loadDiagnostics() {
     api('GET', '/api/diagnostics').then(function (d) {

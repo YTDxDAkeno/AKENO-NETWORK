@@ -17,7 +17,7 @@
     "test": "pnpm -r run test",
     "test:e2e": "pnpm build && pnpm --filter @akeno/web run test:e2e",
     "client:build": "clients/ps5/scripts/fetch-deps.sh && cmake -S clients/ps5 -B clients/ps5/build-asan -DAKENO_SANITIZE=ON -DAKENO_REQUIRE_MBEDTLS=ON -DCMAKE_BUILD_TYPE=Debug && cmake --build clients/ps5/build-asan -j",
-    "test:client": "pnpm build && pnpm client:build && clients/ps5/build-asan/akeno_unit_tests && clients/ps5/build-asan/akeno_unit_tests_mbedtls && node clients/ps5/tests/integration/run.mjs clients/ps5/build-asan/akeno-cli && node clients/ps5/tests/integration/run.mjs clients/ps5/build-asan/akeno-cli-mbedtls --app clients/ps5/build-asan/akeno-app",
+    "test:client": "pnpm build && pnpm client:build && clients/ps5/build-asan/akeno_unit_tests && clients/ps5/build-asan/akeno_unit_tests_mbedtls && node clients/ps5/tests/integration/run.mjs clients/ps5/build-asan/akeno-cli && node clients/ps5/tests/integration/run.mjs clients/ps5/build-asan/akeno-cli-mbedtls --app clients/ps5/build-asan/akeno-app --audiolab clients/ps5/build-asan/akeno-app-audiolab",
     "db:generate": "pnpm --filter @akeno/server run db:generate",
     "db:migrate": "pnpm --filter @akeno/server run db:migrate",
     "db:seed": "pnpm --filter @akeno/server run db:seed",

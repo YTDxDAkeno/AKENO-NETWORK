@@ -119,6 +119,7 @@ platform layer loads libraries at run time (`console/check-imports.sh`).
 | `sceKernelGetAppInfo` | Title ID per process (read-only) | **weak**: missing → detection "unavailable", app still starts | Not tested |
 | `sceNotificationSend` | Button notifications (opt-in) | **not linked**: `dlopen("libSceNotification.sprx")` + `dlsym` when enabled | Not tested |
 | `kernel_get_fw_version` (SDK runtime) | Show the firmware version | as Alpha 0.1 | Works on 12.20 |
+| `sceAudioOutInit/Open/Output/Close`, lookups in `libSceAudioIn.sprx` | **Audio lab ELF only** (experimental PS5 voice research): test tone, library check | **not linked, not in the release ELF**: `dlopen` + `dlsym` when the user starts a check | Not tested — see [PS5_AUDIO_RESEARCH.md](PS5_AUDIO_RESEARCH.md) |
 
 Why the last two are not ordinary imports: the SDK runtime (`crt/rtld_payload.c`) refuses to
 start a payload when a needed library or a strong symbol cannot be resolved. A new strong import

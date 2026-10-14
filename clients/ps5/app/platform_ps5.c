@@ -14,6 +14,13 @@
  *   kernel_get_fw_version             include/ps5/kernel.h  read-only query in the SDK runtime
  *   klog_puts                         include/ps5/klog.h    debug log channel of the SDK runtime
  *
+ * Audio lab builds only (AKENO_EXPERIMENTAL_AUDIO, never the release ELF), user-started:
+ *   dlopen / dlsym                    samples/hello_dlfcn   libSceAudioOut.sprx, libSceAudioIn.sprx:
+ *                                                           symbol lookups (prototype A)
+ *   sceAudioOutInit/Open/Output/Close ps5-payload-dev/SDL   prototypes and constants from its PS5 audio
+ *                                                           driver (src/audio/ps5, commit ee4c47d);
+ *                                                           resolved at run time (prototype C)
+ *
  * Game detection never attaches to, injects into or modifies another process.
  *
  * Why sceNotificationSend is not linked: the SDK runtime (crt/rtld_payload.c) refuses to start a
@@ -270,3 +277,119 @@ int akeno_platform_notify_action(const char *title, const char *text, const char
 void akeno_platform_debug_line(const char *line) {
     klog_puts(line);
 }
+
+#ifdef AKENO_EXPERIMENTAL_AUDIO
+/* ---- Experimental audio (audio lab builds only) ------------------------------------------- */
+
+/*
+ * Declarations and constants as in the PS5 audio driver of ps5-payload-dev/SDL
+ * (src/audio/ps5/SDL_ps5audio.h, commit ee4c47d), which plays audio from homebrew payloads.
+ * They are not linked: like sceNotificationSend they are resolved with dlopen() only when the
+ * user starts the test, so a failure cannot affect the start of the app.
+ */
+typedef int32_t (*audio_out_init_fn)(void);
+typedef int32_t (*audio_out_open_fn)(int32_t user_id, int32_t type, int32_t index, uint32_t len, uint32_t freq, uint32_t param);
+typedef int32_t (*audio_out_output_fn)(int32_t handle, const void *samples);
+typedef int32_t (*audio_out_close_fn)(int32_t handle);
+#define AUDIO_OUT_USER_ID_SYSTEM 0xFF
+#define AUDIO_OUT_PORT_TYPE_MAIN 0
+#define AUDIO_OUT_FORMAT_S16_MONO 0
+#define AUDIO_OUT_FREQUENCY 48000u
+#define AUDIO_OUT_GRAIN 256u /* samples per output call; the SDL driver uses 256..2048 in steps of 256 */
+
+const char *akeno_platform_audio_library_dir(void) { return "/system/common/lib"; }
+
+int akeno_platform_audio_lookup(const char *library, const char *const *names, int *found, size_t count, char *err, size_t err_len) {
+    for (size_t i = 0; i < count; i++) found[i] = 0;
+    void *lib = dlopen(library, RTLD_LAZY);
+    if (!lib) {
+        const char *why = dlerror();
+        snprintf(err, err_len, "dlopen failed: %s", why ? why : "unknown error");
+        return -1;
+    }
+    for (size_t i = 0; i < count; i++) found[i] = dlsym(lib, names[i]) != NULL;
+    dlclose(lib);
+    return 0;
+}
+
+/* Loaded once, on the first test, and kept for the life of the process (the module is
+ * initialized with sceAudioOutInit, which the SDL driver also calls only once). */
+static void *g_audio_out_lib = NULL;
+static audio_out_open_fn g_audio_out_open;
+static audio_out_output_fn g_audio_out_output;
+static audio_out_close_fn g_audio_out_close;
+
+static int audio_out_load(char *err, size_t err_len) {
+    if (g_audio_out_lib) return 0;
+    void *lib = dlopen("libSceAudioOut.sprx", RTLD_LAZY);
+    if (!lib) {
+        const char *why = dlerror();
+        snprintf(err, err_len, "dlopen(libSceAudioOut.sprx) failed: %s", why ? why : "unknown error");
+        return -2;
+    }
+    audio_out_init_fn init = (audio_out_init_fn)dlsym(lib, "sceAudioOutInit");
+    g_audio_out_open = (audio_out_open_fn)dlsym(lib, "sceAudioOutOpen");
+    g_audio_out_output = (audio_out_output_fn)dlsym(lib, "sceAudioOutOutput");
+    g_audio_out_close = (audio_out_close_fn)dlsym(lib, "sceAudioOutClose");
+    if (!init || !g_audio_out_open || !g_audio_out_output || !g_audio_out_close) {
+        snprintf(err, err_len, "libSceAudioOut.sprx does not export the expected functions");
+        dlclose(lib);
+        return -2;
+    }
+    int32_t rc = init();
+    if (rc != 0) {
+        snprintf(err, err_len, "sceAudioOutInit returned 0x%08x", (unsigned)rc);
+        dlclose(lib);
+        return -1;
+    }
+    g_audio_out_lib = lib;
+    return 0;
+}
+
+int akeno_platform_audio_tone(unsigned frequency_hz, unsigned duration_ms, double amplitude, char *err, size_t err_len) {
+    pthread_mutex_lock(&g_lock);
+    int loaded = audio_out_load(err, err_len);
+    pthread_mutex_unlock(&g_lock);
+    if (loaded != 0) return loaded;
+    int32_t handle = g_audio_out_open(AUDIO_OUT_USER_ID_SYSTEM, AUDIO_OUT_PORT_TYPE_MAIN, 0, AUDIO_OUT_GRAIN, AUDIO_OUT_FREQUENCY,
+                                      AUDIO_OUT_FORMAT_S16_MONO);
+    if (handle < 1) {
+        snprintf(err, err_len, "sceAudioOutOpen returned 0x%08x", (unsigned)handle);
+        return -1;
+    }
+    int16_t block[AUDIO_OUT_GRAIN];
+    const unsigned long total = (unsigned long)duration_ms * AUDIO_OUT_FREQUENCY / 1000u;
+    const unsigned long ramp = AUDIO_OUT_FREQUENCY / 100u; /* 10 ms fade in and out: no clicks */
+    /*
+     * Sine by recurrence, s[n] = 2cos(w)s[n-1] - s[n-2], with cos(w) and sin(w) from short Taylor
+     * series (w is about 0.06 rad): no libm import, which a console has not been shown to resolve.
+     */
+    const double w = 2.0 * 3.14159265358979323846 * frequency_hz / AUDIO_OUT_FREQUENCY, w2 = w * w;
+    const double cos_w = 1.0 - w2 / 2.0 + w2 * w2 / 24.0 - w2 * w2 * w2 / 720.0;
+    const double sin_w = w - w * w2 / 6.0 + w * w2 * w2 / 120.0;
+    double s_prev = -sin_w, s_cur = 0.0; /* s[-1] = sin(-w), s[0] = sin(0) */
+    int result = 0;
+    for (unsigned long done = 0; done < total; done += AUDIO_OUT_GRAIN) {
+        for (unsigned i = 0; i < AUDIO_OUT_GRAIN; i++) {
+            unsigned long n = done + i;
+            double gain = 0.0;
+            if (n < total) {
+                unsigned long left = total - n;
+                gain = amplitude * (n < ramp ? (double)n / ramp : left < ramp ? (double)left / ramp : 1.0);
+            }
+            block[i] = (int16_t)(32767.0 * gain * s_cur);
+            double s_next = 2.0 * cos_w * s_cur - s_prev;
+            s_prev = s_cur;
+            s_cur = s_next;
+        }
+        int32_t rc = g_audio_out_output(handle, block); /* blocks until the device takes the samples */
+        if (rc < 0) {
+            snprintf(err, err_len, "sceAudioOutOutput returned 0x%08x", (unsigned)rc);
+            result = -1;
+            break;
+        }
+    }
+    g_audio_out_close(handle);
+    return result;
+}
+#endif

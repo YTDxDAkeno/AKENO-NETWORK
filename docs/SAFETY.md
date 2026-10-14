@@ -42,6 +42,11 @@ all on some firmware. Rules, enforced by `clients/ps5/console/check-imports.sh` 
   and only in `platform_ps5.c`. Any failure falls back to the proven call.
 - Every CI run rebuilds Alpha 0.1 from `592c23a` and requires the hardware-tested SHA-256, so the
   fallback build stays available and the toolchain stays reproducible.
+- **PS5 audio research** (Alpha 0.4) lives in a separate audio lab ELF only, never in the release
+  ELF. It must import exactly what the release ELF imports (CI compares them), loads
+  `libSceAudioOut.sprx`/`libSceAudioIn.sprx` with `dlopen` only when the user starts a check,
+  never captures audio, and uses declarations from a working PS5 homebrew driver only. No
+  microphone, controller-ownership or PSN voice access. See PS5_AUDIO_RESEARCH.md.
 
 ## Game detection is read-only
 

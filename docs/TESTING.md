@@ -287,6 +287,15 @@ route table only lists existing, non-sensitive routes. The browser scenario appr
   fallback; in Chromium: quick-open link, drafts kept across incoming messages, newest-message
   banner, Games tab, a friend playing, the new Diagnostics sections. Set
   `AKENO_UI_SCREENSHOTS=<dir>` to save screenshots (CI uploads them as `console-ui-screenshots`).
+- **End-to-end, audio lab (5 scenarios, `--audiolab`, Alpha 0.4):** the experimental PS5 voice
+  research build with simulated audio (`AKENO_SIM_AUDIO`, `AKENO_SIM_AUDIO_LIBDIR`): the release
+  build has no audio routes and no audio section; nothing runs until the user asks; the probe
+  reports library files and exported names read-only, and that microphone enumeration is not
+  attempted; the tone needs the explicit confirmation, plays once at a time and reports its
+  result; without audio output it reports "unavailable" and the app keeps working; the
+  diagnostics page section works in Chromium. The PS5 workflow also builds the audio lab ELF,
+  runs the import gate on it and fails unless its dynamic imports equal the release ELF's
+  (docs/PS5_AUDIO_RESEARCH.md).
 
 ## Last verified results
 

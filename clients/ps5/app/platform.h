@@ -54,4 +54,28 @@ const char *akeno_platform_actionable_status(void);
 /* Writes one diagnostic line to the platform's debug channel (in addition to the log file). */
 void akeno_platform_debug_line(const char *line);
 
+#ifdef AKENO_EXPERIMENTAL_AUDIO
+/*
+ * Experimental audio research (PS5 voice prototypes A and C, docs/PS5_AUDIO_RESEARCH.md). Built
+ * only into the separate "audio lab" executable; the release build contains none of this. Every
+ * call is started by the user from the diagnostics page.
+ */
+
+/* Directory of the system's libraries ("/system/common/lib" on the PS5), or NULL if unknown. */
+const char *akeno_platform_audio_library_dir(void);
+
+/*
+ * Loads library at run time and records in found[i] whether it exports names[i]. Only looks the
+ * names up; nothing is called. Returns 0 when the library loaded, -1 otherwise (err says why).
+ */
+int akeno_platform_audio_lookup(const char *library, const char *const *names, int *found, size_t count, char *err, size_t err_len);
+
+/*
+ * Plays a sine tone on the main audio output and returns when it has finished (blocking, about
+ * duration_ms). amplitude is 0..1. Returns 0 on success, -1 on failure, -2 when no output
+ * function is available (err says why).
+ */
+int akeno_platform_audio_tone(unsigned frequency_hz, unsigned duration_ms, double amplitude, char *err, size_t err_len);
+#endif
+
 #endif

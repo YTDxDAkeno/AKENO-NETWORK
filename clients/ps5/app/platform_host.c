@@ -17,6 +17,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef AKENO_EXPERIMENTAL_AUDIO
+#include <time.h>
+#endif
 
 static pthread_mutex_t g_out = PTHREAD_MUTEX_INITIALIZER;
 
@@ -159,3 +162,46 @@ const char *akeno_platform_metadata_root(void) {
 void akeno_platform_debug_line(const char *line) {
     fprintf(stderr, "%s\n", line);
 }
+
+#ifdef AKENO_EXPERIMENTAL_AUDIO
+/*
+ * Simulated audio for testing the audio lab on a PC: AKENO_SIM_AUDIO_LIBDIR stands in for the
+ * console's library directory; AKENO_SIM_AUDIO lists the libraries that "load" and export every
+ * name asked for ("out", "in", "out,in"); a tone is printed as a JSON line instead of played.
+ */
+
+static int sim_audio_has(const char *what) {
+    const char *sim = getenv("AKENO_SIM_AUDIO");
+    return sim && strstr(sim, what) != NULL;
+}
+
+const char *akeno_platform_audio_library_dir(void) {
+    const char *dir = getenv("AKENO_SIM_AUDIO_LIBDIR");
+    return dir && dir[0] ? dir : NULL;
+}
+
+int akeno_platform_audio_lookup(const char *library, const char *const *names, int *found, size_t count, char *err, size_t err_len) {
+    (void)names;
+    int loads = (strstr(library, "AudioOut") && sim_audio_has("out")) || (strstr(library, "AudioIn") && sim_audio_has("in"));
+    for (size_t i = 0; i < count; i++) found[i] = loads;
+    if (!loads) {
+        snprintf(err, err_len, "dlopen failed: %s is not available (host build)", library);
+        return -1;
+    }
+    return 0;
+}
+
+int akeno_platform_audio_tone(unsigned frequency_hz, unsigned duration_ms, double amplitude, char *err, size_t err_len) {
+    if (!sim_audio_has("out")) {
+        snprintf(err, err_len, "dlopen(libSceAudioOut.sprx) failed: not available (host build)");
+        return -2;
+    }
+    struct timespec ts = { (time_t)(duration_ms / 1000), (long)(duration_ms % 1000) * 1000000L };
+    nanosleep(&ts, NULL);
+    pthread_mutex_lock(&g_out);
+    fprintf(stdout, "{\"event\":\"audio-tone\",\"frequency\":%u,\"durationMs\":%u,\"amplitude\":%.3f}\n", frequency_hz, duration_ms, amplitude);
+    fflush(stdout);
+    pthread_mutex_unlock(&g_out);
+    return 0;
+}
+#endif
