@@ -67,6 +67,11 @@ export function formatDuration(totalSeconds: number): string {
   return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`;
 }
 
+/** Playtime for display; null means the owner hides playtime from this viewer. */
+export function formatPlaytime(totalSeconds: number | null): string {
+  return totalSeconds === null ? 'hidden' : formatDuration(totalSeconds);
+}
+
 /** Seconds elapsed since an ISO timestamp (never negative). */
 export function secondsSince(iso: string, now = Date.now()): number {
   return Math.max(0, Math.floor((now - new Date(iso).getTime()) / 1000));

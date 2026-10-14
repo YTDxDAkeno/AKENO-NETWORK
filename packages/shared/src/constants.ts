@@ -270,6 +270,8 @@ export const GAME_ACTIVITY = {
   titleNameMax: 128,
   recentGamesMax: 10,
   recentSessionsMax: 10,
+  /** Games a user can exclude from tracking and sharing. */
+  excludedTitlesMax: 50,
 } as const;
 
 /** Console platforms a device may report activity from. */
@@ -277,7 +279,7 @@ export const GAME_ACTIVITY_PLATFORMS = ['PS5'] as const;
 export type GameActivityPlatform = (typeof GAME_ACTIVITY_PLATFORMS)[number];
 
 /** Why a tracked session ended. */
-export const GAME_SESSION_END_REASONS = ['stopped', 'switched', 'stale', 'tracking_disabled', 'device_revoked'] as const;
+export const GAME_SESSION_END_REASONS = ['stopped', 'switched', 'stale', 'tracking_disabled', 'device_revoked', 'excluded'] as const;
 export type GameSessionEndReason = (typeof GAME_SESSION_END_REASONS)[number];
 
 export const DEVICE_LIMITS = {

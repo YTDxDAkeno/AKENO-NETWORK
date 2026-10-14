@@ -3,11 +3,11 @@
  * browser requests are written to stdout as JSON lines so the test harness can observe them.
  *
  * Game detection is simulated: AKENO_SIM_PROCESSES names a file with one process per line,
- * "<pid> <title-id or -> [stopped]", re-read on every scan (a missing file means no processes,
- * a file containing only "fail" a listing error). Each title ID is written into a zeroed raw
- * application-info buffer at the offset AKENO_SIM_APPINFO_LAYOUT selects ("ps" = 20, the
- * default; "alt" = 16; "mixed" = alternating, i.e. an inconsistent console) and decoded with the
- * same parser as on the PS5. AKENO_SIM_METADATA_ROOT stands in for the console's root when
+ * "<pid> <title-id or -> [running|stopped] [ps|alt]", re-read on every scan (a missing file
+ * means no processes, a line "fail" a listing error). Each title ID is written into a zeroed raw
+ * application-info buffer at the offset of the line's layout, else of AKENO_SIM_APPINFO_LAYOUT
+ * ("ps" = 20, the default; "alt" = 16; "mixed" = alternating, i.e. an inconsistent console),
+ * and decoded with the same parser as on the PS5. AKENO_SIM_METADATA_ROOT stands in for the console's root when
  * title names are looked up. Without these variables the host build reports no game detection.
  */
 #define _POSIX_C_SOURCE 200809L
@@ -122,8 +122,8 @@ int akeno_platform_list_apps(akeno_proc_info *out, size_t max, size_t *total, ch
             return -1;
         }
         int pid = 0;
-        char title[32] = "", state[16] = "";
-        if (line[0] == '#' || sscanf(line, "%d %31s %15s", &pid, title, state) < 2) continue;
+        char title[32] = "", state[16] = "", layout_override[8] = "";
+        if (line[0] == '#' || sscanf(line, "%d %31s %15s %7s", &pid, title, state, layout_override) < 2) continue;
         (*total)++;
         if (n >= max) continue;
         akeno_proc_info *o = &out[n++];
@@ -139,6 +139,8 @@ int akeno_platform_list_apps(akeno_proc_info *out, size_t max, size_t *total, ch
         raw[0] = (unsigned char)(pid & 0xFF);
         raw[1] = (unsigned char)((pid >> 8) & 0xFF);
         int alt = mode == 1 || (mode == 2 && (n % 2) == 0);
+        if (strcmp(layout_override, "alt") == 0) alt = 1;
+        else if (strcmp(layout_override, "ps") == 0) alt = 0;
         size_t offset = alt ? AKENO_APPINFO_OFFSET_TITLE_ALT : AKENO_APPINFO_OFFSET_TITLE_PS;
         size_t len = strnlen(title, sizeof(title));
         if (len > 13) len = 13; /* The title field is at most 14 bytes in either layout. */

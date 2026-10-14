@@ -21,6 +21,117 @@ static akeno_proc_info proc(int pid, const char *title, akeno_proc_state state) 
     return p;
 }
 
+/* A process whose title ID sits at the offset of samples/test_privileges (16). */
+static akeno_proc_info proc_alt(int pid, const char *title, akeno_proc_state state) {
+    akeno_proc_info p = proc(pid, NULL, state);
+    p.has_app_info = 1;
+    snprintf(p.title_id_alt, sizeof(p.title_id_alt), "%s", title);
+    return p;
+}
+
+/* Raw application info as the system would write it, title at `offset`. */
+static void raw_info(unsigned char *raw, size_t len, unsigned int app_id, size_t offset, const char *title) {
+    memset(raw, 0, len);
+    raw[0] = (unsigned char)(app_id & 0xFF);
+    raw[1] = (unsigned char)((app_id >> 8) & 0xFF);
+    raw[2] = (unsigned char)((app_id >> 16) & 0xFF);
+    raw[3] = (unsigned char)((app_id >> 24) & 0xFF);
+    if (title) memcpy(raw + offset, title, strlen(title));
+}
+
+static void test_appinfo_parse(void) {
+    unsigned char raw[128];
+    akeno_proc_info p;
+
+    /* samples/ps layout: app_type (e.g. 1) at 16, title ID at 20. */
+    raw_info(raw, sizeof(raw), 0x60000123, AKENO_APPINFO_OFFSET_TITLE_PS, "PPSA01234");
+    raw[16] = 1;
+    memset(&p, 0, sizeof(p));
+    akeno_appinfo_parse(raw, sizeof(raw), &p);
+    CHECK(p.app_id == 0x60000123);
+    CHECK_STR(p.title_id, "PPSA01234");
+    CHECK_STR(p.title_id_alt, ""); /* Bytes 16..24 are app_type and "PPSA0": not a title ID. */
+    CHECK(p.raw_head[0] == 0x23 && p.raw_head[20] == 'P');
+
+    /* samples/test_privileges layout: title ID at 16; offset 20 then starts with digits. */
+    raw_info(raw, sizeof(raw), 7, AKENO_APPINFO_OFFSET_TITLE_ALT, "CUSA00001");
+    memset(&p, 0, sizeof(p));
+    akeno_appinfo_parse(raw, sizeof(raw), &p);
+    CHECK_STR(p.title_id, "");
+    CHECK_STR(p.title_id_alt, "CUSA00001");
+
+    /* Not NUL-terminated after nine characters, lower case, or too short: rejected. */
+    raw_info(raw, sizeof(raw), 1, AKENO_APPINFO_OFFSET_TITLE_PS, "PPSA012345");
+    akeno_appinfo_parse(raw, sizeof(raw), &p);
+    CHECK_STR(p.title_id, "");
+    raw_info(raw, sizeof(raw), 1, AKENO_APPINFO_OFFSET_TITLE_PS, "ppsa01234");
+    akeno_appinfo_parse(raw, sizeof(raw), &p);
+    CHECK_STR(p.title_id, "");
+    raw_info(raw, sizeof(raw), 1, AKENO_APPINFO_OFFSET_TITLE_PS, "PPSA0123");
+    akeno_appinfo_parse(raw, sizeof(raw), &p);
+    CHECK_STR(p.title_id, "");
+
+    /* A system application is shaped like a title ID (it votes for the layout) but is no game. */
+    raw_info(raw, sizeof(raw), 1, AKENO_APPINFO_OFFSET_TITLE_PS, "NPXS40028");
+    akeno_appinfo_parse(raw, sizeof(raw), &p);
+    CHECK_STR(p.title_id, "NPXS40028");
+    CHECK(akeno_looks_like_title_id(p.title_id) && !akeno_is_game_title_id(p.title_id));
+
+    /* A short answer never reads past its length. */
+    raw_info(raw, sizeof(raw), 1, AKENO_APPINFO_OFFSET_TITLE_PS, "PPSA01234");
+    akeno_appinfo_parse(raw, 25, &p);
+    CHECK_STR(p.title_id, "");
+    akeno_appinfo_parse(raw, 2, &p);
+    CHECK(p.app_id == 0);
+}
+
+static void test_layout_vote(void) {
+    akeno_game_scan scan;
+
+    /* Every process agrees on offset 16: the alternative layout is used. */
+    akeno_proc_info alt[] = { proc_alt(10, "NPXS40028", AKENO_PROC_ACTIVE), proc_alt(11, "PPSA04321", AKENO_PROC_ACTIVE) };
+    akeno_game_classify(alt, 2, 99, &scan);
+    CHECK(scan.layout == AKENO_LAYOUT_ALT);
+    CHECK(scan.layout_votes_alt == 2 && scan.layout_votes_ps == 0);
+    CHECK(scan.kind == AKENO_SCAN_GAME);
+    CHECK_STR(scan.title_id, "PPSA04321");
+
+    /* Offset 20 everywhere (samples/ps). */
+    akeno_proc_info ps[] = { proc(10, "NPXS40028", AKENO_PROC_ACTIVE), proc(11, "CUSA00042", AKENO_PROC_ACTIVE) };
+    akeno_game_classify(ps, 2, 99, &scan);
+    CHECK(scan.layout == AKENO_LAYOUT_PS && scan.kind == AKENO_SCAN_GAME);
+    CHECK_STR(scan.title_id, "CUSA00042");
+    CHECK(scan.probe_count == 2);
+    CHECK(strncmp(scan.probes[0], "10 ", 3) == 0);
+
+    /* Title IDs at both offsets (in different processes): the layout is not trusted, nothing is reported. */
+    akeno_proc_info mixed[] = { proc(10, "NPXS40028", AKENO_PROC_ACTIVE), proc_alt(11, "PPSA04321", AKENO_PROC_ACTIVE) };
+    akeno_game_classify(mixed, 2, 99, &scan);
+    CHECK(scan.layout == AKENO_LAYOUT_CONFLICT);
+    CHECK(scan.kind == AKENO_SCAN_UNVERIFIED);
+    CHECK_STR(scan.title_id, "");
+    CHECK(scan.candidates == 0 && scan.error[0]);
+    CHECK_STR(akeno_scan_kind_name(scan.kind), "unverified-layout");
+
+    /* No title IDs anywhere: unknown layout, no game. */
+    akeno_proc_info none[] = { proc(10, NULL, AKENO_PROC_ACTIVE), proc(11, "", AKENO_PROC_ACTIVE) };
+    akeno_game_classify(none, 2, 99, &scan);
+    CHECK(scan.layout == AKENO_LAYOUT_UNKNOWN && scan.kind == AKENO_SCAN_NONE);
+
+    /* The process list can be empty. */
+    akeno_game_classify(NULL, 0, 99, &scan);
+    CHECK(scan.kind == AKENO_SCAN_NONE && scan.processes == 0);
+
+    /* An unverified scan ends a confirmed game like a failed one (after debouncing). */
+    akeno_game_debounce d;
+    memset(&d, 0, sizeof(d));
+    snprintf(d.current, sizeof(d.current), "PPSA04321");
+    akeno_game_classify(mixed, 2, 99, &scan);
+    CHECK(akeno_game_debounce_update(&d, &scan, 2) == 0);
+    CHECK(akeno_game_debounce_update(&d, &scan, 2) == 1);
+    CHECK_STR(d.current, "");
+}
+
 static void test_title_ids(void) {
     CHECK(akeno_is_game_title_id("PPSA01234"));
     CHECK(akeno_is_game_title_id("CUSA00001"));
@@ -32,6 +143,9 @@ static void test_title_ids(void) {
     CHECK(!akeno_is_game_title_id("../../etc"));
     CHECK(!akeno_is_game_title_id(""));
     CHECK(!akeno_is_game_title_id(NULL));
+    CHECK(akeno_looks_like_title_id("NPXS40028"));
+    CHECK(!akeno_looks_like_title_id("NPXS4002"));
+    CHECK(!akeno_looks_like_title_id(NULL));
 }
 
 static void test_classify(void) {
@@ -249,6 +363,8 @@ static void test_meta_lookup(void) {
 void run_game_tests(void);
 void run_game_tests(void) {
     test_title_ids();
+    test_appinfo_parse();
+    test_layout_vote();
     test_classify();
     test_debounce();
     test_clean_names();

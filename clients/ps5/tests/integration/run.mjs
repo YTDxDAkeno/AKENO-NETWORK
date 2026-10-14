@@ -972,6 +972,273 @@ if (appBinary) {
     for (const device of devices.body.devices) await alice.request('DELETE', `/devices/${device.id}`);
   });
 
+  // ---- Alpha 0.2: game activity and quick access (simulated process list, real server) ----------
+
+  /** Waits for an async condition. */
+  async function waitUntil(predicate, what, timeoutMs = 20_000) {
+    const deadline = Date.now() + timeoutMs;
+    let last;
+    while (Date.now() < deadline) {
+      last = await predicate();
+      if (last) return last;
+      await sleep(100);
+    }
+    throw new Error(`Timed out waiting for ${what}`);
+  }
+
+  async function dbQuery(text, params = []) {
+    const client = new pg.Client({ connectionString: databaseUrl.toString() });
+    await client.connect();
+    try {
+      return (await client.query(text, params)).rows;
+    } finally {
+      await client.end();
+    }
+  }
+
+  /** Pairs a running console app with `approver`, granting `scopes` (default: all requested). */
+  async function pairApp(inst, approver, scopes) {
+    const started = await appApi(inst, 'POST', '/api/pair/start');
+    assert.equal(started.status, 200, started.text);
+    const code = (await appState(inst)).pairing.userCode;
+    const approved = await approver.request('POST', '/devices/pairings/approve', { userCode: code, ...(scopes ? { scopes } : {}) });
+    assert.equal(approved.status, 204, JSON.stringify(approved.body));
+    await waitUntil(async () => (await appState(inst)).paired, 'the console app to be paired', 25_000);
+  }
+
+  const carol = await registerUser(adminSession, 'it_carol');
+  {
+    const friendRequest = await carol.request('POST', '/friends/requests', { userId: bob.user.id });
+    assert.equal((await bob.request('POST', `/friends/requests/${friendRequest.body.request.id}/accept`)).status, 200);
+  }
+  const playerData = join(work, 'app-player');
+  const procs = join(work, 'processes.txt');
+  const metaRoot = join(work, 'console-root');
+  spawnSync('mkdir', ['-p', join(metaRoot, 'system_data/priv/appmeta/PPSA01234')]);
+  writeFileSync(join(metaRoot, 'system_data/priv/appmeta/PPSA01234/param.json'),
+    JSON.stringify({ titleId: 'PPSA01234', localizedParameters: { defaultLanguage: 'en-US', 'en-US': { titleName: 'Racing Game' } } }));
+  writeFileSync(procs, '');
+  const playerEnv = {
+    AKENO_SIM_PROCESSES: procs,
+    AKENO_SIM_METADATA_ROOT: metaRoot,
+    AKENO_ACTIVITY_SCAN_MS: '150',
+    AKENO_ACTIVITY_HEARTBEAT_MS: '4000',
+    AKENO_TICKET_MS: '4000',
+    AKENO_BACKOFF_BASE_MS: '300',
+  };
+  let player = null;
+  const carolActivity = async () => (await bob.request('GET', '/users/it_carol/activity')).body;
+  const sessionRows = () => dbQuery(
+    `SELECT s.title_id, s.ended_at, s.end_reason, s.last_heartbeat_at FROM game_activity_sessions s JOIN users u ON u.id = s.user_id
+     WHERE u.online_id = 'it_carol' ORDER BY s.started_at`);
+  const localActivity = async () => (await appState(player)).activity;
+
+  await step('console app: game activity needs the permission; the owner can grant it later (no re-pairing)', async () => {
+    player = await startApp(playerData, ['--port', '0', '--server', server, '--ca-file', caFile], playerEnv);
+    // Paired like an Alpha 0.1 console: everything it asked for except activity:write.
+    await pairApp(player, carol, ['profile:read', 'friends:read', 'friends:write', 'messages:read', 'messages:write', 'realtime',
+      'invitations:read', 'invitations:write', 'parties:read', 'parties:write', 'sessions:read', 'sessions:write', 'presence:write']);
+    writeFileSync(procs, '100 NPXS40028\n200 PPSA01234\n201 PPSA01234\n');
+    await waitUntil(async () => (await localActivity()).state === 'permission-missing', 'the missing permission to be reported');
+    assert.match((await localActivity()).detail, /Allow game activity/);
+    assert.equal((await carolActivity()).current, null);
+
+    const devices = await carol.request('GET', '/devices');
+    const device = devices.body.devices[0];
+    const granted = await carol.request('PATCH', `/devices/${device.id}`, { scopes: [...device.scopes, 'activity:write'] });
+    assert.equal(granted.status, 200, JSON.stringify(granted.body));
+    await waitUntil(async () => (await carolActivity()).current, 'the game to be shared after the permission was granted', 30_000);
+    const activity = await carolActivity();
+    assert.deepEqual({ titleId: activity.current.titleId, name: activity.current.name, platform: activity.current.platform },
+      { titleId: 'PPSA01234', name: 'Racing Game', platform: 'PS5' });
+    const local = await localActivity();
+    assert.equal(local.state, 'playing');
+    assert.equal(local.name, 'Racing Game');
+    assert.ok(local.startedAt, 'server start time known');
+  });
+
+  await step('console app: detects a game switch, ignores ambiguity and reports the end of the game', async () => {
+    writeFileSync(procs, '100 NPXS40028\n300 CUSA00001\n');
+    await waitUntil(async () => (await carolActivity()).current?.titleId === 'CUSA00001', 'the switch to CUSA00001');
+    let rows = await sessionRows();
+    assert.equal(rows.find((r) => r.title_id === 'PPSA01234').end_reason, 'switched');
+
+    // Two games at once: AKENO does not guess; the reported game ends.
+    writeFileSync(procs, '100 NPXS40028\n300 CUSA00001\n400 PPSA01234\n');
+    await waitUntil(async () => (await carolActivity()).current === null, 'ambiguity to end the activity');
+    const diagnostics = (await appApi(player, 'GET', '/api/diagnostics')).body.activity;
+    assert.equal(diagnostics.lastScan.result, 'ambiguous');
+    assert.deepEqual(diagnostics.lastScan.candidates.sort(), ['CUSA00001', 'PPSA01234']);
+    assert.match(diagnostics.lastScan.layout, /offset 20/);
+    assert.match(diagnostics.focus, /not determined/);
+    rows = await sessionRows();
+    assert.equal(rows.find((r) => r.title_id === 'CUSA00001').end_reason, 'stopped');
+
+    // A suspended (stopped) game is not activity; a running one is.
+    writeFileSync(procs, '100 NPXS40028\n400 PPSA01234 stopped\n');
+    await sleep(800);
+    assert.equal((await carolActivity()).current, null);
+    writeFileSync(procs, '100 NPXS40028\n400 PPSA01234\n');
+    await waitUntil(async () => (await carolActivity()).current?.titleId === 'PPSA01234', 'the game to be detected again');
+    writeFileSync(procs, '100 NPXS40028\n');
+    await waitUntil(async () => (await carolActivity()).current === null, 'the closed game to end');
+    assert.equal((await localActivity()).state, 'idle');
+    rows = await sessionRows();
+    assert.ok(rows.every((r) => r.ended_at !== null), JSON.stringify(rows));
+  });
+
+  await step('console app: an inconsistent application-info layout or a failed process list reports nothing', async () => {
+    writeFileSync(procs, '100 NPXS40028 running ps\n200 PPSA01234 running alt\n');
+    await waitUntil(async () => (await appApi(player, 'GET', '/api/diagnostics')).body.activity.lastScan.result === 'unverified-layout',
+      'the layout conflict');
+    const diagnostics = (await appApi(player, 'GET', '/api/diagnostics')).body.activity;
+    assert.equal(diagnostics.lastScan.layout, 'conflicting');
+    assert.deepEqual(diagnostics.lastScan.layoutVotes, { offset20: 1, offset16: 1 });
+    assert.equal(diagnostics.lastScan.probes.length, 2);
+    await sleep(600);
+    assert.equal((await carolActivity()).current, null);
+
+    // Every process with the other layout: detected at offset 16.
+    writeFileSync(procs, '100 NPXS40028 running alt\n200 PPSA01234 running alt\n');
+    await waitUntil(async () => (await carolActivity()).current?.titleId === 'PPSA01234', 'detection with the other layout');
+    assert.match((await appApi(player, 'GET', '/api/diagnostics')).body.activity.lastScan.layout, /offset 16/);
+
+    writeFileSync(procs, 'fail\n');
+    await waitUntil(async () => (await localActivity()).state === 'unsupported', 'the listing failure');
+    await waitUntil(async () => (await carolActivity()).current === null, 'the failure to end the activity');
+  });
+
+  await step('console app: heartbeats stop when the app is killed; a restart reports again', async () => {
+    writeFileSync(procs, '100 NPXS40028\n200 PPSA01234\n');
+    await waitUntil(async () => (await localActivity()).state === 'playing' && (await localActivity()).startedAt, 'the game to be reported');
+    await waitUntil(async () => (await appApi(player, 'GET', '/api/diagnostics')).body.activity.heartbeatsOk >= 2, 'a periodic heartbeat', 15_000);
+    player.child.kill('SIGKILL'); // A crash or a console going to rest mode without notice.
+    await player.exited;
+    const before = (await sessionRows()).find((r) => r.ended_at === null);
+    assert.ok(before, 'the session stays open until the server sees no heartbeats');
+    await sleep(5000);
+    const after = (await sessionRows()).find((r) => r.ended_at === null);
+    assert.equal(after.last_heartbeat_at.getTime(), before.last_heartbeat_at.getTime(), 'no heartbeats after the app died');
+
+    player = await startApp(playerData, ['--port', '0', '--ca-file', caFile], playerEnv);
+    await waitUntil(async () => (await localActivity()).state === 'playing' && (await localActivity()).startedAt, 'the game to be reported again');
+    const resumed = (await sessionRows()).find((r) => r.ended_at === null);
+    assert.ok(resumed.last_heartbeat_at.getTime() > before.last_heartbeat_at.getTime());
+  });
+
+  await step('console app: activity respects the console switch, website tracking and excluded games', async () => {
+    assert.equal((await appApi(player, 'POST', '/api/settings', { activityEnabled: false })).body.ok, true);
+    await waitUntil(async () => (await carolActivity()).current === null, 'the session to end when turned off on the console');
+    await waitUntil(async () => (await localActivity()).state === 'off', 'the local state to be off');
+    assert.equal(JSON.parse(readFileSync(join(playerData, 'settings.json'), 'utf8')).activityEnabled, false);
+    assert.equal((await appApi(player, 'POST', '/api/settings', { activityEnabled: true })).body.ok, true);
+    await waitUntil(async () => (await carolActivity()).current?.titleId === 'PPSA01234', 'sharing to resume');
+
+    assert.equal((await carol.request('PATCH', '/profile/privacy', { gameExcludedTitles: ['PPSA01234'] })).status, 200);
+    await waitUntil(async () => (await carolActivity()).current === null, 'the excluded game to end');
+    await waitUntil(async () => (await localActivity()).state === 'excluded', 'the console to show the exclusion', 15_000);
+    assert.equal((await carol.request('PATCH', '/profile/privacy', { gameExcludedTitles: [] })).status, 200);
+
+    assert.equal((await carol.request('PATCH', '/profile/privacy', { gameActivityTracking: false })).status, 200);
+    await waitUntil(async () => (await localActivity()).state === 'disabled-on-server', 'tracking off on the website', 30_000);
+    assert.equal((await carol.request('PATCH', '/profile/privacy', { gameActivityTracking: true })).status, 200);
+    await waitUntil(async () => (await carolActivity()).current?.titleId === 'PPSA01234', 'tracking to resume', 30_000);
+  });
+
+  let conversationId = null;
+  await step('console app: recent messages, and a second launch opens the newest conversation', async () => {
+    await waitFor(() => player.stderr.includes('realtime.state connected'), 'the realtime connection', 20_000);
+    const conversation = await bob.request('POST', '/conversations', { userId: carol.user.id });
+    conversationId = conversation.body.id;
+    await bob.request('POST', `/conversations/${conversationId}/messages`, {
+      body: 'Are you playing?',
+      clientMessageId: '77777777-7777-4777-8777-777777777777',
+    });
+    await waitFor(() => notifications(player).includes('AKENO: it_bob: Are you playing?'), 'the message notification');
+    const inbox = await appApi(player, 'GET', '/api/inbox');
+    assert.equal(inbox.body.messages[0].open, `conversation:${conversationId}`);
+    assert.equal(inbox.body.messages[0].from, 'it_bob');
+    assert.equal(inbox.body.messages[0].preview, 'Are you playing?');
+    const state = await appState(player);
+    assert.equal(state.inbox.unseen, 1);
+
+    const opens = () => player.events.filter((e) => e.event === 'open-browser').map((e) => e.url);
+    const before = opens().length;
+    const second = await startApp(playerData, ['--port', String(player.port), '--ca-file', caFile]);
+    assert.equal((await second.exited).code, 0, second.stderr);
+    await waitFor(() => opens().length === before + 1, 'the page to be reopened');
+    assert.ok(opens().at(-1).endsWith(`&open=conversation:${conversationId}`), opens().at(-1));
+
+    // Once the page has shown it, a second launch opens the default view again.
+    assert.equal((await appApi(player, 'POST', '/api/inbox/seen', { seq: inbox.body.messages[0].seq })).body.ok, true);
+    assert.equal((await appState(player)).inbox.unseen, 0);
+    const third = await startApp(playerData, ['--port', String(player.port), '--ca-file', caFile]);
+    assert.equal((await third.exited).code, 0);
+    await waitFor(() => opens().length === before + 2, 'the page to be reopened again');
+    assert.match(opens().at(-1), /^http:\/\/127\.0\.0\.1:\d+\/#t=[0-9a-f]{64}$/);
+  });
+
+  await step('console app: button notifications carry one-time links, never the page secret', async () => {
+    assert.equal((await appApi(player, 'POST', '/api/settings', { actionableNotifications: true })).body.ok, true);
+    await bob.request('POST', `/conversations/${conversationId}/messages`, { body: 'Open me', clientMessageId: '88888888-8888-4888-8888-888888888888' });
+    const toast = await waitUntil(async () => player.events.find((e) => e.event === 'notification' && e.sub === 'Open me'), 'the button notification');
+    assert.equal(toast.text, 'AKENO: it_bob');
+    assert.equal(toast.action.label, 'Open in AKENO');
+    const link = /^http:\/\/127\.0\.0\.1:(\d+)\/t\/([0-9a-f]{32})$/.exec(toast.action.url);
+    assert.ok(link, toast.action.url);
+    assert.ok(!JSON.stringify(toast).includes(player.token), 'the page secret is not in the notification');
+
+    const first = await fetch(toast.action.url, { redirect: 'manual' });
+    assert.equal(first.status, 302);
+    assert.equal(first.headers.get('location'), `/#t=${player.token}&open=conversation:${conversationId}`);
+    assert.equal(first.headers.get('cache-control'), 'no-store');
+    const again = await fetch(toast.action.url, { redirect: 'manual' });
+    assert.equal(again.status, 403, 'single use');
+    for (const bad of ['/t/xyz', `/t/${'0'.repeat(32)}`, `/t/${'a'.repeat(64)}`, '/t/']) {
+      assert.equal((await fetch(`http://127.0.0.1:${player.port}${bad}`, { redirect: 'manual' })).status, 403, bad);
+    }
+    const rebinding = await rawRequest(player.port, `GET /t/${link[2]} HTTP/1.1\r\nHost: attacker.example\r\n\r\n`);
+    assert.match(rebinding, /^HTTP\/1\.1 403 /);
+
+    // Links expire (4 s in this test, 10 min by default).
+    await bob.request('POST', `/conversations/${conversationId}/messages`, { body: 'Expired link', clientMessageId: '99999999-9999-4999-8999-999999999999' });
+    const late = await waitUntil(async () => player.events.find((e) => e.event === 'notification' && e.sub === 'Expired link'), 'the second button notification');
+    await sleep(4500);
+    assert.equal((await fetch(late.action.url, { redirect: 'manual' })).status, 403);
+
+    const test = await appApi(player, 'POST', '/api/diagnostics/actionable-test');
+    assert.equal(test.body.ok, true, test.text);
+    const diagnostics = (await appApi(player, 'GET', '/api/diagnostics')).body.notifications.actionable;
+    assert.equal(diagnostics.enabled, true);
+    assert.ok(diagnostics.sent >= 3);
+    assert.equal(diagnostics.unavailable, 0);
+  });
+
+  await step('console app: without a working button notification the proven plain one is shown', async () => {
+    player.child.kill('SIGTERM');
+    assert.equal((await player.exited).code, 0);
+    player = await startApp(playerData, ['--port', '0', '--ca-file', caFile], { ...playerEnv, AKENO_TEST_ACTIONABLE: 'unavailable' });
+    await waitFor(() => player.stderr.includes('realtime.state connected'), 'the realtime connection', 20_000);
+    await bob.request('POST', `/conversations/${conversationId}/messages`, { body: 'Fallback please', clientMessageId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' });
+    await waitFor(() => notifications(player).includes('AKENO: it_bob: Fallback please'), 'the plain fallback notification');
+    assert.ok(!player.events.some((e) => e.action), 'no button notification');
+    const diagnostics = (await appApi(player, 'GET', '/api/diagnostics')).body.notifications.actionable;
+    assert.equal(diagnostics.unavailable, 1);
+    assert.match(diagnostics.status, /not available/);
+  });
+
+  await step('console app: exiting reports the end of the running game session', async () => {
+    writeFileSync(procs, '100 NPXS40028\n200 PPSA01234\n');
+    await waitUntil(async () => (await carolActivity()).current?.titleId === 'PPSA01234', 'the game to be reported');
+    assert.equal((await appApi(player, 'POST', '/api/exit')).body.ok, true);
+    assert.equal((await player.exited).code, 0, player.stderr);
+    assert.equal((await carolActivity()).current, null);
+    const rows = await sessionRows();
+    assert.ok(rows.every((r) => r.ended_at !== null), JSON.stringify(rows));
+    assert.equal(rows.at(-1).end_reason, 'stopped');
+    allStderr.push(player.stderr);
+  });
+
   await step('console app: never writes tokens or device codes to its logs', async () => {
     const logs = readFileSync(join(appData, 'akeno.log'), 'utf8') + allStderr.join('\n');
     assert.doesNotMatch(logs, /akd_[A-Za-z0-9_-]{10,}/);

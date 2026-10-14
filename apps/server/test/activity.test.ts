@@ -345,6 +345,131 @@ describe('automatic game activity', () => {
     expect(server.ctx.activity.currentOf(player.id)?.name).toBe('Reported Name');
   });
 
+  it('excluded games are never tracked and their history is hidden from others', async () => {
+    const player = await registerUser(server, 'ga_exclude');
+    const friend = await registerUser(server, 'ga_excl_friend');
+    await makeFriends(player, friend);
+    const device = await pair(player);
+    await device.heartbeat('PPSA00061', 'Shared Game');
+    await device.stop();
+    await device.heartbeat('PPSA00060', 'Private Game');
+
+    // Excluding the running game ends its session at once.
+    const updated = await player.patch('/profile/privacy', { gameExcludedTitles: ['PPSA00060', 'PPSA00060'] });
+    expect(updated.status).toBe(200);
+    expect(updated.body.privacy.gameExcludedTitles).toEqual(['PPSA00060']); // duplicates removed
+    expect((await sessionsOf(player.id)).find((r) => r.titleId === 'PPSA00060')).toMatchObject({ endReason: 'excluded' });
+    expect(await friendGame(friend, player.id)).toBeNull();
+
+    // Further reports are refused and create nothing.
+    const refused = await device.heartbeat('PPSA00060');
+    expect(refused.status).toBe(409);
+    expect(refusal(refused).code).toBe('ACTIVITY_TITLE_EXCLUDED');
+    expect((await sessionsOf(player.id)).filter((r) => r.endedAt === null)).toHaveLength(0);
+
+    // Switching from a tracked game to an excluded one ends the tracked one.
+    await device.heartbeat('PPSA00061');
+    expect((await device.heartbeat('PPSA00060')).status).toBe(409);
+    expect((await sessionsOf(player.id)).filter((r) => r.endedAt === null)).toHaveLength(0);
+
+    const asFriend = await friend.get<GameActivityResponse>(`/users/${player.id}/activity`);
+    expect(asFriend.body.recentGames.map((g) => g.titleId)).toEqual(['PPSA00061']);
+    expect(asFriend.body.recentSessions.every((entry) => entry.titleId !== 'PPSA00060')).toBe(true);
+    expect(asFriend.body.recentGames[0]!.excluded).toBeUndefined();
+    const own = await player.get<GameActivityResponse>(`/users/${player.id}/activity`);
+    expect(own.body.recentGames.find((g) => g.titleId === 'PPSA00060')?.excluded).toBe(true);
+
+    for (const bad of [['ppsa00060'], ['../etc'], Array.from({ length: 51 }, (_, i) => `PPSA${String(i).padStart(5, '0')}`)]) {
+      expect((await player.patch('/profile/privacy', { gameExcludedTitles: bad })).status).toBe(400);
+    }
+    // Removing the exclusion allows tracking again.
+    await player.patch('/profile/privacy', { gameExcludedTitles: [] });
+    expect((await device.heartbeat('PPSA00060')).status).toBe(200);
+  });
+
+  it('sessions reported while invisible never appear in the history others see', async () => {
+    const player = await registerUser(server, 'ga_invisible');
+    const friend = await registerUser(server, 'ga_inv_friend');
+    await makeFriends(player, friend);
+    const device = await pair(player);
+    const online = await device.connect();
+
+    // Played visibly first: shared as usual.
+    await device.heartbeat('PPSA00070', 'Visible Game');
+    await device.stop();
+    // Going invisible marks a running session private at once...
+    await device.heartbeat('PPSA00071', 'Started Visible');
+    await player.put('/presence', { status: 'invisible' });
+    // ...and sessions started while invisible are private from the start.
+    await device.heartbeat('PPSA00072', 'Hidden Game');
+    await player.put('/presence', { status: 'online' });
+    await device.stop();
+
+    const rows = await sessionsOf(player.id);
+    expect(rows.find((r) => r.titleId === 'PPSA00070')?.private).toBe(false);
+    expect(rows.find((r) => r.titleId === 'PPSA00071')?.private).toBe(true);
+    expect(rows.find((r) => r.titleId === 'PPSA00072')?.private).toBe(true);
+
+    const asFriend = await friend.get<GameActivityResponse>(`/users/${player.id}/activity`);
+    expect(asFriend.body.recentGames.map((g) => g.titleId)).toEqual(['PPSA00070']);
+    expect(asFriend.body.recentSessions.map((entry) => entry.titleId)).toEqual(['PPSA00070']);
+    const own = await player.get<GameActivityResponse>(`/users/${player.id}/activity`);
+    expect(own.body.recentGames.map((g) => g.titleId).sort()).toEqual(['PPSA00070', 'PPSA00071', 'PPSA00072']);
+    expect(own.body.recentSessions.filter((entry) => entry.private).map((entry) => entry.titleId).sort()).toEqual(['PPSA00071', 'PPSA00072']);
+    await online.close();
+  });
+
+  it('hides playtime from others when the owner turns it off', async () => {
+    const player = await registerUser(server, 'ga_playtime');
+    const friend = await registerUser(server, 'ga_pt_friend');
+    await makeFriends(player, friend);
+    const device = await pair(player);
+    const started = await device.heartbeat('PPSA00080', 'Timed Game');
+    await age(accepted(started).session.id, 600);
+    await device.heartbeat('PPSA00080'); // a new session after the gap; the old one counts 0 s
+    await device.stop();
+
+    const visible = await friend.get<GameActivityResponse>(`/users/${player.id}/activity`);
+    expect(visible.body.playtimeVisible).toBe(true);
+    expect(typeof visible.body.recentGames[0]!.totalSeconds).toBe('number');
+
+    await player.patch('/profile/privacy', { gamePlaytimeVisible: false });
+    const hidden = await friend.get<GameActivityResponse>(`/users/${player.id}/activity`);
+    expect(hidden.body.playtimeVisible).toBe(false);
+    expect(hidden.body.recentGames[0]).toMatchObject({ titleId: 'PPSA00080', totalSeconds: null, lastSessionSeconds: null, sessionCount: 2 });
+    expect(hidden.body.recentSessions.every((entry) => entry.durationSeconds === null)).toBe(true);
+    const own = await player.get<GameActivityResponse>(`/users/${player.id}/activity`);
+    expect(own.body.playtimeVisible).toBe(true);
+    expect(typeof own.body.recentGames[0]!.totalSeconds).toBe('number');
+  });
+
+  it('a console paired without the activity permission can be reauthorized by its owner', async () => {
+    const player = await registerUser(server, 'ga_reauth');
+    const other = await registerUser(server, 'ga_reauth_other');
+    // Paired the way Alpha 0.1 consoles were: everything except activity:write.
+    const device = await pair(player, ['profile:read', 'friends:read', 'messages:read', 'messages:write', 'realtime']);
+    expect(refusal(await device.heartbeat('PPSA00090')).code).toBe('DEVICE_SCOPE_DENIED');
+
+    // Only the owner, from the website, can change permissions; never the device itself.
+    expect((await device.request('PATCH', `/devices/${device.id}`, { scopes: ['activity:write'] })).status).toBe(403);
+    expect((await other.patch(`/devices/${device.id}`, { scopes: ['activity:write'] })).status).toBe(404);
+    expect((await player.patch(`/devices/${device.id}`, { scopes: [] })).status).toBe(400);
+    expect((await player.patch(`/devices/${device.id}`, { scopes: ['admin'] })).status).toBe(400);
+
+    const granted = await player.patch(`/devices/${device.id}`, {
+      scopes: ['profile:read', 'friends:read', 'messages:read', 'messages:write', 'realtime', 'activity:write'],
+    });
+    expect(granted.status).toBe(200);
+    expect(granted.body.device.scopes).toContain('activity:write');
+    expect((await device.heartbeat('PPSA00090')).status).toBe(200);
+
+    // Taking the permission away again ends the device's running session and refuses reports.
+    await player.patch(`/devices/${device.id}`, { scopes: ['profile:read', 'realtime'] });
+    expect((await sessionsOf(player.id))[0]).toMatchObject({ endReason: 'device_revoked' });
+    expect(refusal(await device.heartbeat('PPSA00090')).code).toBe('DEVICE_SCOPE_DENIED');
+    expect((await device.request('GET', '/friends')).status).toBe(403);
+  });
+
   it('restores running sessions after a server restart', async () => {
     const player = await registerUser(server, 'ga_restart');
     const device = await pair(player);

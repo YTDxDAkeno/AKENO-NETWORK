@@ -2,12 +2,14 @@ import { z } from 'zod';
 import {
   AVATAR_IDS,
   FRIEND_REQUEST_PRIVACY,
+  GAME_ACTIVITY,
   LIMITS,
   MESSAGE_PRIVACY,
   PRESENCE_PREFERENCES,
   PRESENCE_VISIBILITY,
   PROFILE_VISIBILITY,
 } from '../constants.js';
+import { gameTitleIdSchema } from './activity.js';
 import { multiLineText, singleLineText } from './common.js';
 
 export const avatarSchema = z.enum(AVATAR_IDS, { error: 'Choose one of the available avatars.' });
@@ -36,6 +38,10 @@ export const updatePrivacySchema = z
     gameActivityTracking: z.boolean(),
     gameActivityVisibility: z.enum(PRESENCE_VISIBILITY),
     gameHistoryVisibility: z.enum(PRESENCE_VISIBILITY),
+    gamePlaytimeVisible: z.boolean(),
+    gameExcludedTitles: z
+      .array(gameTitleIdSchema)
+      .max(GAME_ACTIVITY.excludedTitlesMax, `You can exclude up to ${GAME_ACTIVITY.excludedTitlesMax} games.`),
   })
   .partial();
 export type UpdatePrivacyInput = z.infer<typeof updatePrivacySchema>;

@@ -22,6 +22,13 @@
       "when": 1791938037444,
       "tag": "0002_game_activity",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791941628402,
+      "tag": "0003_activity_privacy",
+      "breakpoints": true
     }
   ]
 }

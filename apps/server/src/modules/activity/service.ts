@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, lt, notInArray, sql, type SQL } from 'drizzle-orm';
 import {
   GAME_ACTIVITY,
   type CurrentGameActivity,
@@ -102,7 +102,11 @@ export class ActivityService {
     const outcome = await this.ctx.db.transaction(async (tx) => {
       // Lock the user's profile row: heartbeats of one user (from any device) run one at a time.
       const [profile] = await tx
-        .select({ tracking: profiles.gameActivityTracking })
+        .select({
+          tracking: profiles.gameActivityTracking,
+          excluded: profiles.gameExcludedTitles,
+          presencePreference: profiles.presencePreference,
+        })
         .from(profiles)
         .where(eq(profiles.userId, auth.userId))
         .for('update');
@@ -115,6 +119,17 @@ export class ActivityService {
         const ended = await this.endSessions(tx, active, now, 'tracking_disabled');
         return { disabled: true as const, changed: ended > 0 };
       }
+      if (profile.excluded.includes(input.titleId)) {
+        // An excluded game is never tracked. What this device reported before has ended.
+        const mine = active.filter((session) => session.lastDeviceId === deviceId || session.titleId === input.titleId);
+        let ended = 0;
+        for (const session of mine) {
+          ended += await this.endSessions(tx, [session], now, session.titleId === input.titleId ? 'excluded' : 'switched');
+        }
+        return { excluded: true as const, changed: ended > 0 };
+      }
+      // Reported while invisible: the session is never shown to others (see schema).
+      const invisible = profile.presencePreference === 'invisible';
 
       let changed = false;
       let continuing: SessionRow | null = null;
@@ -137,6 +152,7 @@ export class ActivityService {
             lastDeviceId: deviceId,
             heartbeatCount: sql`${gameActivitySessions.heartbeatCount} + 1`,
             ...(input.titleName ? { titleName: input.titleName } : {}),
+            ...(invisible ? { private: true } : {}),
           })
           .where(eq(gameActivitySessions.id, continuing.id))
           .returning();
@@ -154,11 +170,16 @@ export class ActivityService {
           lastHeartbeatAt: now,
           startedByDeviceId: deviceId,
           lastDeviceId: deviceId,
+          private: invisible,
         })
         .returning();
       return { disabled: false as const, changed: true, session: created!, created: true };
     });
 
+    if ('excluded' in outcome) {
+      if (outcome.changed) await this.afterChange(auth.userId);
+      throw new AppError(409, 'ACTIVITY_TITLE_EXCLUDED', 'This game is excluded from game activity in your privacy settings.');
+    }
     if (outcome.disabled) {
       if (outcome.changed) await this.afterChange(auth.userId);
       throw new AppError(
@@ -271,6 +292,35 @@ export class ActivityService {
     if (ended > 0) await this.afterChange(userId);
   }
 
+  /** The user excluded these games: running sessions of them end now. */
+  async titlesExcluded(userId: string, titleIds: readonly string[]): Promise<void> {
+    if (titleIds.length === 0) return;
+    const now = new Date();
+    const ended = await this.ctx.db.transaction(async (tx) => {
+      const sessions = await tx
+        .select()
+        .from(gameActivitySessions)
+        .where(
+          and(
+            eq(gameActivitySessions.userId, userId),
+            isNull(gameActivitySessions.endedAt),
+            inArray(gameActivitySessions.titleId, [...titleIds]),
+          ),
+        )
+        .for('update');
+      return this.endSessions(tx, sessions, now, 'excluded');
+    });
+    if (ended > 0) await this.afterChange(userId);
+  }
+
+  /** The user went invisible: their running sessions are never shown to others, also later. */
+  async markRunningPrivate(userId: string): Promise<void> {
+    await this.ctx.db
+      .update(gameActivitySessions)
+      .set({ private: true })
+      .where(and(eq(gameActivitySessions.userId, userId), isNull(gameActivitySessions.endedAt)));
+  }
+
   /** Deletes the user's whole tracked history (including a running session). */
   async clearHistory(userId: string): Promise<{ deleted: number }> {
     const deleted = await this.ctx.db
@@ -319,6 +369,8 @@ export class ActivityService {
         gameActivityTracking: profiles.gameActivityTracking,
         gameActivityVisibility: profiles.gameActivityVisibility,
         gameHistoryVisibility: profiles.gameHistoryVisibility,
+        gamePlaytimeVisible: profiles.gamePlaytimeVisible,
+        gameExcludedTitles: profiles.gameExcludedTitles,
       })
       .from(users)
       .innerJoin(profiles, eq(profiles.userId, users.id))
@@ -338,12 +390,14 @@ export class ActivityService {
     const current = presence.game;
     const restricted = !isSelf && row.profileVisibility === 'friends' && !isFriend;
     const historyVisible = isSelf || (!iBlocked && !restricted && audienceAllows(row.gameHistoryVisibility, viewer));
+    const playtimeVisible = isSelf || row.gamePlaytimeVisible;
     const empty: GameActivityResponse = {
       current,
       historyVisible,
       recentGames: [],
       recentSessions: [],
       trackedSince: null,
+      playtimeVisible,
       ...(isSelf ? { trackingEnabled: row.gameActivityTracking } : {}),
     };
     if (!historyVisible) return empty;
@@ -353,18 +407,27 @@ export class ActivityService {
     const includeRunning = isSelf || current !== null;
     return {
       ...empty,
-      ...(await this.history(targetId, includeRunning)),
+      ...(await this.history(targetId, { includeRunning, isSelf, playtimeVisible, excluded: row.gameExcludedTitles })),
     };
   }
 
   private async history(
     userId: string,
-    includeRunning: boolean,
+    view: { includeRunning: boolean; isSelf: boolean; playtimeVisible: boolean; excluded: readonly string[] },
   ): Promise<Pick<GameActivityResponse, 'recentGames' | 'recentSessions' | 'trackedSince'>> {
     const s = gameActivitySessions;
     const end = sql`coalesce(${s.endedAt}, ${s.lastHeartbeatAt})`;
     const duration = sql<number>`greatest(0, extract(epoch from (${end} - ${s.startedAt})))::int`;
-    const visible = includeRunning ? eq(s.userId, userId) : and(eq(s.userId, userId), sql`${s.endedAt} IS NOT NULL`);
+    const conditions: SQL[] = [eq(s.userId, userId)];
+    if (!view.includeRunning) conditions.push(sql`${s.endedAt} IS NOT NULL`);
+    if (!view.isSelf) {
+      // Others never see sessions recorded while invisible, nor games the owner excluded.
+      conditions.push(eq(s.private, false));
+      if (view.excluded.length > 0) conditions.push(notInArray(s.titleId, [...view.excluded]));
+    }
+    const visible = and(...conditions);
+    const excluded = new Set(view.excluded);
+    const seconds = (value: number): number | null => (view.playtimeVisible ? Number(value) : null);
 
     const games = await this.ctx.db
       .select({
@@ -393,6 +456,7 @@ export class ActivityService {
         endedAt: s.endedAt,
         endReason: s.endReason,
         durationSeconds: duration,
+        private: s.private,
       })
       .from(s)
       .where(visible)
@@ -406,10 +470,11 @@ export class ActivityService {
       name: this.nameFor(game.titleId, game.reportedName),
       platform: game.platform as GameActivityPlatform,
       lastPlayedAt: new Date(game.lastPlayedAt).toISOString(),
-      lastSessionSeconds: Number(game.lastSessionSeconds),
-      totalSeconds: Number(game.totalSeconds),
+      lastSessionSeconds: seconds(game.lastSessionSeconds),
+      totalSeconds: seconds(game.totalSeconds),
       sessionCount: Number(game.sessionCount),
       playingNow: Boolean(game.playingNow),
+      ...(view.isSelf ? { excluded: excluded.has(game.titleId) } : {}),
     }));
     const recentSessions: GameSessionEntry[] = sessions.map((session) => ({
       id: session.id,
@@ -418,8 +483,9 @@ export class ActivityService {
       platform: session.platform as GameActivityPlatform,
       startedAt: session.startedAt.toISOString(),
       endedAt: session.endedAt ? session.endedAt.toISOString() : null,
-      durationSeconds: Number(session.durationSeconds),
+      durationSeconds: seconds(session.durationSeconds),
       endReason: session.endReason as GameSessionEntry['endReason'],
+      ...(view.isSelf ? { private: session.private } : {}),
     }));
     return {
       recentGames,

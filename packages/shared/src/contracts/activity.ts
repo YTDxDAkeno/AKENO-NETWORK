@@ -20,11 +20,17 @@ export interface GameHistoryEntry {
   platform: GameActivityPlatform;
   /** End of the most recent session (or its last heartbeat while it is still running). */
   lastPlayedAt: string;
-  lastSessionSeconds: number;
-  /** Total tracked playtime; time before AKENO tracked this user is unknown and not included. */
-  totalSeconds: number;
+  /** null when the owner hides playtime from this viewer. */
+  lastSessionSeconds: number | null;
+  /**
+   * Total tracked playtime; time before AKENO tracked this user is unknown and not included.
+   * null when the owner hides playtime from this viewer.
+   */
+  totalSeconds: number | null;
   sessionCount: number;
   playingNow: boolean;
+  /** Only for the owner: the game is on their exclusion list (others never see it). */
+  excluded?: boolean;
 }
 
 export interface GameSessionEntry {
@@ -35,8 +41,11 @@ export interface GameSessionEntry {
   startedAt: string;
   /** null while the session is running. */
   endedAt: string | null;
-  durationSeconds: number;
+  /** null when the owner hides playtime from this viewer. */
+  durationSeconds: number | null;
   endReason: GameSessionEndReason | null;
+  /** Only for the owner: recorded while invisible, so never shown to others. */
+  private?: boolean;
 }
 
 export interface GameActivityResponse {
@@ -48,6 +57,8 @@ export interface GameActivityResponse {
   recentSessions: GameSessionEntry[];
   /** First tracked session; playtime before this is not known to AKENO. */
   trackedSince: string | null;
+  /** False when the owner hides playtime from this viewer (durations are then null). */
+  playtimeVisible: boolean;
   /** Only for the owner: whether automatic tracking is on. */
   trackingEnabled?: boolean;
 }

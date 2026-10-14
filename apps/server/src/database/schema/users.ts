@@ -79,6 +79,10 @@ export const profiles = pgTable(
     gameActivityTracking: boolean('game_activity_tracking').notNull().default(true),
     gameActivityVisibility: presenceVisibilityEnum('game_activity_visibility').notNull().default('friends'),
     gameHistoryVisibility: presenceVisibilityEnum('game_history_visibility').notNull().default('friends'),
+    /** Whether people who may see the history also see tracked playtime (durations and totals). */
+    gamePlaytimeVisible: boolean('game_playtime_visible').notNull().default(true),
+    /** Title IDs this user excluded: never tracked, and earlier sessions are hidden from others. */
+    gameExcludedTitles: text('game_excluded_titles').array().notNull().default(sql`'{}'::text[]`),
     ...timestamps,
   },
   (t) => [index('profiles_display_name_idx').on(sql`lower(${t.displayName})`)],

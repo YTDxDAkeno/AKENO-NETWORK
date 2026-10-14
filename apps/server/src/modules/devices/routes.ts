@@ -5,6 +5,7 @@ import {
   devicePairingTokenSchema,
   idParamsSchema,
   startDevicePairingSchema,
+  updateDeviceScopesSchema,
 } from '@akeno/shared';
 import type { AppContext } from '../../app/context.js';
 import { authOf, requestMeta, requireDevice, requireSession } from '../../middleware/auth.js';
@@ -15,7 +16,7 @@ import { parseInput } from '../../utils/validation.js';
  *
  * Unauthenticated device endpoints:  POST /devices/pairings, POST /devices/pairings/token
  * Signed-in website endpoints:       POST /devices/pairings/lookup | approve | deny,
- *                                    GET /devices, DELETE /devices/:id
+ *                                    GET /devices, PATCH /devices/:id (permissions), DELETE /devices/:id
  * Paired-device endpoints:           GET /devices/current, DELETE /devices/current
  */
 export function devicesRoutes(ctx: AppContext): FastifyPluginAsync {
@@ -74,6 +75,13 @@ export function devicesRoutes(ctx: AppContext): FastifyPluginAsync {
     app.get('/devices', { preHandler: session }, async (request) => ({
       devices: await ctx.devices.list(authOf(request).userId, null),
     }));
+
+    // Reauthorization: the owner changes what an already paired device may do (website only).
+    app.patch('/devices/:id', { preHandler: session, config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request) => {
+      const { id } = parseInput(idParamsSchema, request.params);
+      const { scopes } = parseInput(updateDeviceScopesSchema, request.body);
+      return { device: await ctx.devices.updateScopes(authOf(request).userId, id, scopes, requestMeta(request)) };
+    });
 
     app.delete('/devices/:id', { preHandler: session }, async (request, reply) => {
       const { id } = parseInput(idParamsSchema, request.params);

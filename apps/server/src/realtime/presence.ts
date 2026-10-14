@@ -97,6 +97,8 @@ export class PresenceService {
         await tx.update(users).set({ lastSeenAt: now }).where(eq(users.id, userId));
       }
     });
+    // A game played while invisible never shows up in the history others can see.
+    if (preference === 'invisible') await this.ctx.activity.markRunningPrivate(userId);
     await this.publish(userId);
     return this.selfStatus(userId);
   }

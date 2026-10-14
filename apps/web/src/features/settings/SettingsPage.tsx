@@ -4,6 +4,7 @@ import { useState, type FormEvent } from 'react';
 import { useSearchParams } from 'react-router';
 import {
   AVATAR_PRESETS,
+  GAME_ACTIVITY,
   LIMITS,
   checkPasswordQuality,
   type AuthSessionDto,
@@ -26,7 +27,7 @@ import { Tabs } from '../../components/Tabs';
 import { useToast } from '../../components/Toast';
 import { ApiError, api, errorMessage } from '../../lib/api';
 import { getControllerNavigation, getTheme, setControllerNavigation, setTheme, type Theme } from '../../lib/preferences';
-import { useAuthSessions } from '../../lib/queries';
+import { useAuthSessions, useGameActivity } from '../../lib/queries';
 import { queryKeys } from '../../lib/query-keys';
 import { useAuth, useCurrentUser } from '../auth/AuthProvider';
 import { PairedDevicesCard } from '../devices/PairedDevicesCard';
@@ -324,6 +325,18 @@ function PrivacySettingsPanel() {
             options={AUDIENCE}
             hint="Recent games, last played and total tracked playtime on your profile."
           />
+          <div className="md:col-span-2">
+            <Switch
+              label="Show my playtime"
+              description="When off, people who can see your play history see which games you played and when, but not for how long."
+              checked={form.gamePlaytimeVisible}
+              onChange={(value) => setForm((current) => ({ ...current, gamePlaytimeVisible: value }))}
+            />
+          </div>
+          <ExcludedGamesField
+            value={form.gameExcludedTitles}
+            onChange={(titles) => setForm((current) => ({ ...current, gameExcludedTitles: titles }))}
+          />
           <div className="flex flex-wrap items-center justify-between gap-3 md:col-span-2">
             <p className="text-xs text-muted">Playtime from before AKENO started tracking is never shown or estimated.</p>
             <Button
@@ -351,6 +364,84 @@ function PrivacySettingsPanel() {
         </div>
       </form>
     </Card>
+  );
+}
+
+/** Games that are never tracked; earlier sessions of them are hidden from others. */
+function ExcludedGamesField({ value, onChange }: { value: string[]; onChange: (titles: string[]) => void }) {
+  const user = useCurrentUser();
+  const activity = useGameActivity(user.id);
+  const [draft, setDraft] = useState('');
+  const normalized = draft.trim().toUpperCase();
+  const valid = GAME_ACTIVITY.titleIdPattern.test(normalized);
+  const full = value.length >= GAME_ACTIVITY.excludedTitlesMax;
+  const add = (titleId: string) => {
+    if (value.includes(titleId) || full) return;
+    onChange([...value, titleId]);
+    setDraft('');
+  };
+  const names = new Map((activity.data?.recentGames ?? []).map((game) => [game.titleId, game.name]));
+  const suggestions = (activity.data?.recentGames ?? []).filter((game) => !value.includes(game.titleId)).slice(0, 5);
+  return (
+    <div className="md:col-span-2" data-testid="excluded-games">
+      <p className="mb-1.5 text-sm font-medium">Games excluded from game activity</p>
+      <p className="mb-2 text-xs text-muted">
+        Excluded games are never tracked or shown as your current game, and their earlier sessions are hidden from everyone else. Use the
+        title ID shown in your play history (for example PPSA01234).
+      </p>
+      <div className="flex gap-2">
+        <label className="sr-only" htmlFor="excluded-game-input">
+          Title ID to exclude
+        </label>
+        <input
+          id="excluded-game-input"
+          className="h-11 w-48 rounded-xl border border-line-strong bg-surface-2 px-3.5 font-mono text-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 disabled:opacity-60"
+          value={draft}
+          maxLength={9}
+          placeholder="PPSA01234"
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              if (valid) add(normalized);
+            }
+          }}
+          disabled={full}
+        />
+        <Button type="button" onClick={() => add(normalized)} disabled={!valid || full} icon={<Plus aria-hidden className="size-4" />}>
+          Exclude
+        </Button>
+      </div>
+      {suggestions.length > 0 ? (
+        <p className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted">
+          Recently played:
+          {suggestions.map((game) => (
+            <button key={game.titleId} type="button" className="rounded-md border border-line px-2 py-0.5 hover:bg-surface-2" onClick={() => add(game.titleId)}>
+              Exclude {game.name ?? game.titleId}
+            </button>
+          ))}
+        </p>
+      ) : null}
+      {value.length > 0 ? (
+        <ul className="mt-2 flex flex-wrap gap-2">
+          {value.map((titleId) => (
+            <li key={titleId} className="inline-flex items-center gap-1 rounded-lg border border-line bg-surface-2 py-1 pl-2.5 pr-1 text-sm">
+              {names.get(titleId) ? `${names.get(titleId)} · ` : ''}
+              <span className="font-mono">{titleId}</span>
+              <button
+                type="button"
+                className="rounded p-0.5 text-subtle hover:text-ink"
+                onClick={() => onChange(value.filter((entry) => entry !== titleId))}
+                aria-label={`Stop excluding ${titleId}`}
+              >
+                <X aria-hidden className="size-3.5" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <p className="mt-1 text-xs text-subtle">Saved with the privacy settings below.</p>
+    </div>
   );
 }
 

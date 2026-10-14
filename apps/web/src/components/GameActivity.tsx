@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Clock, Gamepad2, History } from 'lucide-react';
 import type { CurrentGameActivity, GameActivityResponse } from '@akeno/shared';
-import { formatDuration, gameGeneration, longDate, secondsSince } from '../lib/format';
+import { formatDuration, formatPlaytime, gameGeneration, longDate, secondsSince } from '../lib/format';
 import { RelativeTime } from './RelativeTime';
 import { cn } from './cn';
 
@@ -88,20 +88,29 @@ export function GameHistory({ activity, isSelf }: { activity: GameActivityRespon
               <p className="truncate font-medium text-ink" title={game.titleId}>
                 {gameTitle(game)}
                 {game.playingNow ? <span className="ml-2 text-xs font-semibold text-success">Playing now</span> : null}
+                {game.excluded ? (
+                  <span className="ml-2 text-xs font-semibold text-warning" title="Excluded in your privacy settings: never tracked and hidden from others">
+                    Excluded
+                  </span>
+                ) : null}
               </p>
               <p className="text-xs text-muted">
                 {game.playingNow ? (
                   'Session running'
                 ) : (
                   <>
-                    Last played <RelativeTime iso={game.lastPlayedAt} /> · last session {formatDuration(game.lastSessionSeconds)}
+                    Last played <RelativeTime iso={game.lastPlayedAt} />
+                    {game.lastSessionSeconds !== null ? ` · last session ${formatDuration(game.lastSessionSeconds)}` : ''}
                   </>
                 )}
               </p>
             </div>
             <div className="shrink-0 text-right">
-              <p className="inline-flex items-center gap-1 text-sm font-semibold text-ink">
-                <Clock aria-hidden className="size-3.5 text-subtle" /> {formatDuration(game.totalSeconds)}
+              <p
+                className="inline-flex items-center gap-1 text-sm font-semibold text-ink"
+                title={game.totalSeconds === null ? 'This player does not share their playtime' : 'Total tracked playtime'}
+              >
+                <Clock aria-hidden className="size-3.5 text-subtle" /> {formatPlaytime(game.totalSeconds)}
               </p>
               <p className="text-xs text-subtle">
                 {game.sessionCount} session{game.sessionCount === 1 ? '' : 's'}

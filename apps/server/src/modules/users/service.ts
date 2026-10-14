@@ -161,6 +161,8 @@ export class UsersService {
         gameActivityTracking: p.gameActivityTracking,
         gameActivityVisibility: p.gameActivityVisibility,
         gameHistoryVisibility: p.gameHistoryVisibility,
+        gamePlaytimeVisible: p.gamePlaytimeVisible,
+        gameExcludedTitles: p.gameExcludedTitles,
       },
       presencePreference: p.presencePreference,
       // The request itself proves the user is active, so they count as connected here.
@@ -199,12 +201,14 @@ export class UsersService {
   }
 
   async updatePrivacy(userId: string, input: UpdatePrivacyInput): Promise<CurrentUser> {
+    const excluded = input.gameExcludedTitles ? [...new Set(input.gameExcludedTitles)].sort() : undefined;
     await this.ctx.db
       .update(profiles)
-      .set({ ...input, updatedAt: new Date() })
+      .set({ ...input, ...(excluded ? { gameExcludedTitles: excluded } : {}), updatedAt: new Date() })
       .where(eq(profiles.userId, userId));
-    // Turning automatic tracking off also ends a running session immediately.
+    // Turning automatic tracking off, or excluding a game, also ends a running session immediately.
     if (input.gameActivityTracking === false) await this.ctx.activity.trackingDisabled(userId);
+    if (excluded) await this.ctx.activity.titlesExcluded(userId, excluded);
     this.ctx.presence.invalidate(userId);
     await this.afterProfileChange(userId);
     return this.getCurrentUser(userId);

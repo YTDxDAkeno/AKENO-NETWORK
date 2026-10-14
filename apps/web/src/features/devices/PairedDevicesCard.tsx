@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Gamepad2, Link2 } from 'lucide-react';
+import { DEVICE_SCOPE_LABELS, type DeviceDto, type DeviceScope } from '@akeno/shared';
 import { Badge } from '../../components/Badge';
 import { Button, ButtonLink } from '../../components/Button';
 import { Card, CardHeader } from '../../components/Card';
@@ -27,6 +28,26 @@ export function PairedDevicesCard() {
     },
     onError: (error) => toast.error('Could not unpair the device', errorMessage(error)),
   });
+
+  // Reauthorization: grant a permission that did not exist (or was not granted) when the device was paired.
+  const grant = useMutation({
+    mutationFn: ({ device, scope }: { device: DeviceDto; scope: DeviceScope }) =>
+      api.patch<{ device: DeviceDto }>(`/devices/${device.id}`, { scopes: [...device.scopes, scope] }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.devices });
+      toast.success('Permission granted.', 'The console picks it up within a minute.');
+    },
+    onError: (error) => toast.error('Could not change the permissions', errorMessage(error)),
+  });
+
+  const confirmGrantActivity = async (device: DeviceDto) => {
+    const ok = await confirm({
+      title: `Allow ${device.name} to share game activity?`,
+      message: `${DEVICE_SCOPE_LABELS['activity:write']}. Who sees it is decided by your privacy settings; you can turn tracking off there at any time.`,
+      confirmLabel: 'Allow',
+    });
+    if (ok) grant.mutate({ device, scope: 'activity:write' });
+  };
 
   const confirmUnpair = async (id: string, name: string) => {
     const ok = await confirm({
@@ -72,6 +93,11 @@ export function PairedDevicesCard() {
                   {device.scopes.length === 1 ? '' : 's'}
                 </p>
               </div>
+              {!device.scopes.includes('activity:write') ? (
+                <Button size="sm" variant="secondary" loading={grant.isPending} onClick={() => void confirmGrantActivity(device)}>
+                  Allow game activity
+                </Button>
+              ) : null}
               <Button size="sm" variant="ghost" onClick={() => void confirmUnpair(device.id, device.name)}>
                 Unpair
               </Button>

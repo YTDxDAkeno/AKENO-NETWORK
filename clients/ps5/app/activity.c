@@ -50,8 +50,9 @@ typedef struct {
     long long next_scan;
     long long next_beat;
     int reported;       /* The server has an open session reported by this device. */
-    int scope_denied;   /* Paired without "activity:write". */
+    int scope_denied;   /* Paired without "activity:write" (the owner can grant it later on the website). */
     int server_off;     /* Turned off in the website's privacy settings. */
+    int excluded;       /* The owner excluded this game on the website. */
     int net_problem;
     int signed_out;
     int unsupported;
@@ -119,9 +120,12 @@ static void publish(act_ctx *c) {
         state = "signed-out", detail = "This console is no longer paired.";
     } else if (c->scope_denied) {
         state = "permission-missing";
-        detail = "This console was paired without permission to share game activity. Unpair it in Settings and pair it again to allow it.";
+        detail = "This console may not share game activity. On the AKENO website, open Settings, Paired devices and select "
+                 "\"Allow game activity\" for this console; no new pairing is needed.";
     } else if (c->server_off) {
         state = "disabled-on-server", detail = "Game activity is turned off in your privacy settings on the AKENO NETWORK website.";
+    } else if (c->debounce.current[0] && c->excluded) {
+        state = "excluded", detail = "You excluded this game in your privacy settings on the AKENO website; it is not shared.";
     } else if (c->debounce.current[0]) {
         state = "playing";
         detail = c->net_problem ? "The AKENO server could not be reached; retrying." : c->reported ? "Shared with AKENO NETWORK. Your privacy settings decide who sees it."
@@ -193,19 +197,27 @@ static void heartbeat(act_ctx *c) {
         pthread_mutex_unlock(&app->lock);
         c->reported = 1;
         c->server_off = 0;
+        c->scope_denied = 0;
+        c->excluded = 0;
         c->net_problem = 0;
         c->next_beat = now + c->heartbeat_ms;
     } else {
         pthread_mutex_lock(&app->lock);
         app->act.heartbeats_failed++;
         pthread_mutex_unlock(&app->lock);
+        long long slow_retry = now + (app->opt.activity_heartbeat_ms ? app->opt.activity_heartbeat_ms * 3 : DISABLED_RETRY_MS);
         if (status == AKENO_ERR_FORBIDDEN && strcmp(response.error_code, "DEVICE_SCOPE_DENIED") == 0) {
-            c->scope_denied = 1;
+            c->scope_denied = 1; /* Retried slowly: the owner can allow it on the website. */
             c->reported = 0;
+            c->next_beat = slow_retry;
         } else if (strcmp(response.error_code, "ACTIVITY_TRACKING_DISABLED") == 0) {
             c->server_off = 1;
             c->reported = 0;
-            c->next_beat = now + (app->opt.activity_heartbeat_ms ? app->opt.activity_heartbeat_ms * 3 : DISABLED_RETRY_MS);
+            c->next_beat = slow_retry;
+        } else if (strcmp(response.error_code, "ACTIVITY_TITLE_EXCLUDED") == 0) {
+            c->excluded = 1;
+            c->reported = 0;
+            c->next_beat = slow_retry;
         } else if (status == AKENO_ERR_UNAUTHORIZED) {
             c->signed_out = 1;
             c->reported = 0;
@@ -281,6 +293,7 @@ static void scan(act_ctx *c) {
         app->act.since = now;
         pthread_mutex_unlock(&app->lock);
         c->next_beat = now; /* Report a new game (or a switch) right away. */
+        c->excluded = 0;
     } else {
         app_log(app, AKENO_LOG_INFO, "activity.ended", "No game is running any more.");
         c->current_name = NULL;
@@ -319,7 +332,7 @@ static void *act_main(void *arg) {
                 scan(&c);
                 c.next_scan = now + scan_ms;
             }
-            if (c.debounce.current[0] && !c.scope_denied && akeno_now_ms() >= c.next_beat) heartbeat(&c);
+            if (c.debounce.current[0] && akeno_now_ms() >= c.next_beat) heartbeat(&c);
             publish(&c);
             struct timespec pause = { 0, 100 * 1000 * 1000 };
             nanosleep(&pause, NULL);

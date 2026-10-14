@@ -45,7 +45,8 @@ static void usage(void) {
             "  --port N         local page port on 127.0.0.1 (default %d, 0 = any free port)\n"
             "  --open-browser   ask the platform to open the page (host: prints the URL)\n\n"
             "Environment (tests): AKENO_IO_TIMEOUT_MS, AKENO_BACKOFF_BASE_MS, AKENO_MAX_RECONNECTS,\n"
-            "  AKENO_ACTIVITY_SCAN_MS, AKENO_ACTIVITY_HEARTBEAT_MS, AKENO_SIM_PROCESSES, AKENO_SIM_METADATA_ROOT\n",
+            "  AKENO_ACTIVITY_SCAN_MS, AKENO_ACTIVITY_HEARTBEAT_MS, AKENO_TICKET_MS, AKENO_SIM_PROCESSES,\n"
+            "  AKENO_SIM_APPINFO_LAYOUT, AKENO_SIM_METADATA_ROOT, AKENO_TEST_ACTIONABLE, AKENO_TEST_BROWSER_FAILS\n",
             AKENO_DEFAULT_PORT);
 }
 
@@ -77,6 +78,8 @@ int main(int argc, char **argv) {
     if (env) options.activity_scan_ms = atoi(env);
     env = getenv("AKENO_ACTIVITY_HEARTBEAT_MS");
     if (env) options.activity_heartbeat_ms = atoi(env);
+    env = getenv("AKENO_TICKET_MS");
+    if (env) options.ticket_ms = atoi(env);
     signal(SIGPIPE, SIG_IGN);
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);

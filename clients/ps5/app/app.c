@@ -403,7 +403,7 @@ int app_ticket_url(akeno_app *app, const char *open, char *url, size_t url_len) 
     }
     memcpy(slot->id, id, sizeof(slot->id));
     app_copy_str(slot->open, sizeof(slot->open), open);
-    slot->expires_at = now + APP_TICKET_MS;
+    slot->expires_at = now + (app->opt.ticket_ms > 0 ? app->opt.ticket_ms : APP_TICKET_MS);
     pthread_mutex_unlock(&app->lock);
     int n = snprintf(url, url_len, "http://127.0.0.1:%d/t/%s", app->port, id);
     memset(id, 0, sizeof(id));

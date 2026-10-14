@@ -48,6 +48,10 @@ export interface PrivacySettings {
   gameActivityVisibility: PresenceVisibility;
   /** Who may see recently played games and tracked playtime. */
   gameHistoryVisibility: PresenceVisibility;
+  /** Whether people who may see the history also see playtime (durations and totals). */
+  gamePlaytimeVisible: boolean;
+  /** Title IDs that are never tracked; their earlier sessions are hidden from others. */
+  gameExcludedTitles: string[];
 }
 
 export interface OwnProfile {

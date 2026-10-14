@@ -35,6 +35,16 @@ export const approveDevicePairingSchema = z.object({
 });
 export type ApproveDevicePairingInput = z.infer<typeof approveDevicePairingSchema>;
 
+/**
+ * Changes the permissions of an already paired device (website only, by its owner). This is how
+ * a console paired before a permission existed (e.g. "activity:write") is reauthorized without
+ * pairing it again. Nothing is ever granted without this explicit request.
+ */
+export const updateDeviceScopesSchema = z.object({
+  scopes: z.array(z.enum(DEVICE_SCOPES)).min(1).max(DEVICE_SCOPES.length),
+});
+export type UpdateDeviceScopesInput = z.infer<typeof updateDeviceScopesSchema>;
+
 export const devicePairingTokenSchema = z.object({
   deviceCode: z
     .string()

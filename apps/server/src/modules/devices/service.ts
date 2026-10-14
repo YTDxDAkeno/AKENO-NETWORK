@@ -381,6 +381,39 @@ export class DevicesService {
     return rows.map((row) => this.toDto(row, currentDeviceId));
   }
 
+  /**
+   * Replaces the permissions of a paired device. Only its owner can do this, from the website;
+   * a device can never change its own permissions. Removing a permission takes effect at once.
+   */
+  async updateScopes(userId: string, deviceId: string, scopes: readonly DeviceScope[], meta: RequestMeta): Promise<DeviceDto> {
+    const next = normalizeScopes([...scopes]);
+    const [before] = await this.ctx.db
+      .select({ scopes: deviceCredentials.scopes })
+      .from(deviceCredentials)
+      .where(and(eq(deviceCredentials.id, deviceId), eq(deviceCredentials.userId, userId)))
+      .limit(1);
+    if (!before) throw Errors.notFound('The device');
+    const [row] = await this.ctx.db
+      .update(deviceCredentials)
+      .set({ scopes: next })
+      .where(and(eq(deviceCredentials.id, deviceId), eq(deviceCredentials.userId, userId)))
+      .returning();
+    if (!row) throw Errors.notFound('The device');
+    const removed = normalizeScopes(before.scopes).filter((scope) => !next.includes(scope));
+    if (removed.includes('activity:write')) await this.ctx.activity.endForDevice(userId, deviceId);
+    // Live updates were opened with the old permissions; the device reconnects with the new ones.
+    if (removed.length > 0) this.ctx.hub.disconnectSession(deviceId, 'The permissions of this device changed.', REALTIME_CLOSE_CODES.sessionRevoked);
+    this.ctx.audit.recordInBackground({
+      actorId: userId,
+      action: 'device.scopes_changed',
+      targetType: 'device',
+      targetId: deviceId,
+      metadata: { deviceName: row.name, scopes: next, removed },
+      ipAddress: meta.ip,
+    });
+    return this.toDto(row, null);
+  }
+
   async revoke(userId: string, deviceId: string, meta: RequestMeta, reason = 'This device was unpaired.'): Promise<void> {
     // A game reported by this device stops counting at its last heartbeat.
     await this.ctx.activity.endForDevice(userId, deviceId);

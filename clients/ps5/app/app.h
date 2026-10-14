@@ -15,6 +15,7 @@ typedef struct {
     int max_reconnects;
     int activity_scan_ms;      /* Game detection interval; 0 = default (10 s). */
     int activity_heartbeat_ms; /* Activity heartbeat interval; 0 = what the server asks for (60 s). */
+    int ticket_ms;             /* Lifetime of one-time notification links; 0 = default (10 min). Tests only. */
 } akeno_app_options;
 
 /* Runs the app until it is asked to exit. Returns a process exit code. */

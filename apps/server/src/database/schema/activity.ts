@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { check, index, integer, pgTable, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
+import { boolean, check, index, integer, pgTable, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
 import { deviceCredentials } from './devices.js';
 import { users } from './users.js';
 
@@ -29,6 +29,11 @@ export const gameActivitySessions = pgTable(
     startedByDeviceId: uuid('started_by_device_id').references(() => deviceCredentials.id, { onDelete: 'set null' }),
     lastDeviceId: uuid('last_device_id').references(() => deviceCredentials.id, { onDelete: 'set null' }),
     heartbeatCount: integer('heartbeat_count').notNull().default(1),
+    /**
+     * Set when the user was invisible while this session was reported. Such a session is never
+     * shown to others, also after it ended, so the history cannot reveal time spent invisible.
+     */
+    private: boolean('private').notNull().default(false),
   },
   (t) => [
     uniqueIndex('game_activity_sessions_active_key').on(t.userId, t.titleId).where(sql`${t.endedAt} IS NULL`),
