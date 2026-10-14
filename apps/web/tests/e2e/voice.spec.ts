@@ -65,12 +65,29 @@ interface Browserish {
   close: () => Promise<void>;
 }
 
+/** Every page's console, printed when the test fails (CI logs are often all there is). */
+const consoleLogs: string[] = [];
+
 function watchErrors(page: Page, errors: string[]): void {
   page.on('pageerror', (error) => errors.push(error.message));
   page.on('console', (message) => {
+    consoleLogs.push(`${new Date().toISOString()} [${message.type()}] ${message.text().slice(0, 300)}`);
+    if (consoleLogs.length > 400) consoleLogs.shift();
     if (message.type() === 'error' && !message.text().startsWith('Failed to load resource')) errors.push(message.text());
   });
 }
+
+// Playwright requires the fixtures argument to be an object pattern.
+// eslint-disable-next-line no-empty-pattern
+test.afterEach(async ({}, testInfo) => {
+  if (testInfo.status !== testInfo.expectedStatus) console.log(`Browser console (last ${consoleLogs.length} lines):\n${consoleLogs.join('\n')}`);
+});
+
+/**
+ * Generous waits: LiveKit's own connect timeout is 15 s, after which the client retries with a
+ * fresh token, so a slow first attempt (seen on CI runners) must not fail the test.
+ */
+const VOICE_WAIT = { timeout: 30_000 };
 
 async function openDesktop(browser: Browser, baseURL: string, phone = false): Promise<Browserish> {
   const context = await browser.newContext({ ...(phone ? devices['Pixel 7'] : { viewport: { width: 1366, height: 860 } }), permissions: ['microphone'] });
@@ -192,18 +209,18 @@ test('party voice with a real LiveKit server', async ({ browser, baseURL }) => {
 
   await test.step('both join voice and receive each other’s audio', async () => {
     await ana.page.getByTestId('join-voice').click();
-    await expect(ana.page.getByTestId('party-voice')).toHaveAttribute('data-voice-status', 'connected');
+    await expect(ana.page.getByTestId('party-voice')).toHaveAttribute('data-voice-status', 'connected', VOICE_WAIT);
     await ben.page.getByTestId('join-voice').click();
-    await expect(ben.page.getByTestId('party-voice')).toHaveAttribute('data-voice-status', 'connected');
+    await expect(ben.page.getByTestId('party-voice')).toHaveAttribute('data-voice-status', 'connected', VOICE_WAIT);
     // The server reports voice membership to the other member too (webhook → party update).
     await expect(member(ana.page, benId).getByTestId('member-voice-state')).toBeVisible();
     await expect(member(ben.page, anaId).getByTestId('member-voice-state')).toBeVisible();
 
     // Real audio: inbound RTP keeps growing and carries sound (the fake microphone beeps).
-    await expect.poll(async () => (await inboundAudio(ben.page)).energy, { timeout: 20_000 }).toBeGreaterThan(0);
+    await expect.poll(async () => (await inboundAudio(ben.page)).energy, VOICE_WAIT).toBeGreaterThan(0);
     const first = await inboundAudio(ben.page);
     await expect.poll(async () => (await inboundAudio(ben.page)).bytes, { timeout: 10_000 }).toBeGreaterThan(first.bytes);
-    await expect.poll(async () => (await inboundAudio(ana.page)).energy, { timeout: 20_000 }).toBeGreaterThan(0);
+    await expect.poll(async () => (await inboundAudio(ana.page)).energy, VOICE_WAIT).toBeGreaterThan(0);
   });
 
   await test.step('speaking and mute state come from the room', async () => {
@@ -234,7 +251,7 @@ test('party voice with a real LiveKit server', async ({ browser, baseURL }) => {
     const before = await inboundAudio(ben.page);
     await expect.poll(async () => (await inboundAudio(ben.page)).bytes).toBeGreaterThan(before.bytes);
     await ben.page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Parties' }).click();
-    await expect(ben.page.getByTestId('party-voice')).toHaveAttribute('data-voice-status', 'connected');
+    await expect(ben.page.getByTestId('party-voice')).toHaveAttribute('data-voice-status', 'connected', VOICE_WAIT);
   });
 
   await test.step('a page reload leaves voice; the microphone test shows a live level', async () => {
@@ -258,13 +275,13 @@ test('party voice with a real LiveKit server', async ({ browser, baseURL }) => {
   await test.step('a second tab takes over the voice connection', async () => {
     await ana.page.goto('/parties');
     await ana.page.getByTestId('join-voice').click();
-    await expect(ana.page.getByTestId('party-voice')).toHaveAttribute('data-voice-status', 'connected');
+    await expect(ana.page.getByTestId('party-voice')).toHaveAttribute('data-voice-status', 'connected', VOICE_WAIT);
     const second = await ana.page.context().newPage();
     const secondErrors: string[] = [];
     watchErrors(second, secondErrors);
     await second.goto('/parties');
     await second.getByTestId('join-voice').click();
-    await expect(second.getByTestId('party-voice')).toHaveAttribute('data-voice-status', 'connected');
+    await expect(second.getByTestId('party-voice')).toHaveAttribute('data-voice-status', 'connected', VOICE_WAIT);
     await expect(ana.page.getByTestId('voice-error')).toContainText('another tab');
     await expect.poll(() => liveMicTracks(ana.page)).toBe(0);
     await second.getByTestId('leave-voice').click();
@@ -277,7 +294,7 @@ test('party voice with a real LiveKit server', async ({ browser, baseURL }) => {
 
   await test.step('removing a member from the party ends their voice access', async () => {
     await ana.page.getByTestId('join-voice').click();
-    await expect(ana.page.getByTestId('party-voice')).toHaveAttribute('data-voice-status', 'connected');
+    await expect(ana.page.getByTestId('party-voice')).toHaveAttribute('data-voice-status', 'connected', VOICE_WAIT);
     await expect(member(ana.page, benId).getByTestId('member-voice-state')).toBeVisible();
     await member(ana.page, benId).getByRole('button', { name: `Manage ${benName}` }).click();
     await ana.page.getByRole('menuitem', { name: 'Remove from party' }).click();
@@ -303,9 +320,9 @@ test('party voice with a real LiveKit server', async ({ browser, baseURL }) => {
     const invitation = cid.page.getByTestId('invitation').filter({ hasText: party.json.party.name });
     await invitation.getByRole('button', { name: 'Join voice' }).click();
     await expect(cid.page).toHaveURL(/\/parties$/);
-    await expect(cid.page.getByTestId('party-voice')).toHaveAttribute('data-voice-status', 'connected');
+    await expect(cid.page.getByTestId('party-voice')).toHaveAttribute('data-voice-status', 'connected', VOICE_WAIT);
     await expect(member(cid.page, anaId).getByTestId('member-voice-state')).toBeVisible();
-    await expect.poll(async () => (await inboundAudio(cid.page)).energy, { timeout: 20_000 }).toBeGreaterThan(0);
+    await expect.poll(async () => (await inboundAudio(cid.page)).energy, VOICE_WAIT).toBeGreaterThan(0);
     await cid.page.getByRole('navigation', { name: 'Quick navigation' }).getByRole('link', { name: 'Friends' }).click();
     const bar = cid.page.getByTestId('voice-bar').last();
     await expect(bar).toBeVisible();
@@ -329,7 +346,7 @@ test('party voice with a real LiveKit server', async ({ browser, baseURL }) => {
       await expect.poll(() => openPeerConnections(ana.page)).toBe(0);
       if (cycle < 2) {
         await ana.page.getByTestId('join-voice').click();
-        await expect(ana.page.getByTestId('party-voice')).toHaveAttribute('data-voice-status', 'connected');
+        await expect(ana.page.getByTestId('party-voice')).toHaveAttribute('data-voice-status', 'connected', VOICE_WAIT);
       }
     }
   });
