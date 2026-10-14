@@ -153,6 +153,9 @@ Details in [VOICE.md](VOICE.md). In short:
   the media ports 7881/tcp and 7882/udp are, after the operator opens them.
 - The Content-Security-Policy `connect-src` adds only the configured LiveKit origin; the
   microphone worklet is served from the app's own origin (`script-src 'self'`).
+- Rate limiting: since Alpha 0.4 the built web client's files (the page and hashed assets) are
+  not counted toward the per-user request limit, so reloading cannot break the app or a voice
+  connection; API, WebSocket, media and health requests are limited as before.
 
 ## Logging and audit
 

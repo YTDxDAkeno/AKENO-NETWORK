@@ -77,8 +77,10 @@ system dependencies with `--with-deps`). The Playwright version is pinned to 1.5
   connection over; the leader removes a member, whose connection and microphone end and who is
   refused a new token; a phone-sized user joins from a party invitation ("Join voice"), the
   voice bar sits above the bottom navigation without horizontal overflow; leaving releases the
-  microphone; no console or CSP errors. Test-only instrumentation records peer connections
-  and microphone tracks in the page.
+  microphone; no console or CSP errors; the phone user's microphone processor is made to fail
+  and voice still works with the plain microphone. Test-only instrumentation records peer
+  connections and microphone tracks in the page; the microphone is a generated speech-like WAV
+  (Chromium's default fake beep is too sparse for speaker detection).
 
 Running the voice E2E locally (LiveKit in Docker with host networking; the webhook points at
 the E2E server port):
@@ -309,7 +311,7 @@ clang 18 + ps5-payload-sdk `f5d40f0`):
 | Command | Result |
 | --- | --- |
 | `pnpm lint`, `pnpm typecheck` | passed |
-| `pnpm test` | shared 8/8, server 166/166, web 34/34 |
+| `pnpm test` | shared 8/8, server 167/167, web 34/34 |
 | `pnpm test:e2e` with `E2E_LIVEKIT_*` (real LiveKit) | 7/7 (voice spec repeated many times while developing) |
 | `pnpm test:e2e` without LiveKit | 6/6 passed, voice spec skipped |
 | C unit tests (ASan/UBSan, both transports) | 496 checks each, 0 failures |
@@ -317,6 +319,7 @@ clang 18 + ps5-payload-sdk `f5d40f0`):
 | PS5 build: release + audio lab ELF, `check-imports.sh` | both pass; identical dynamic imports; release code byte-identical to the previous commit except the page script |
 | `upgrade-check.mjs --old <Alpha 0.2 9dcc192>` | passed incl. rollback |
 | Production image + Compose `voice` profile, LiveKit restart, load (6/8 participants) | passed / numbers in VOICE.md |
+| GitHub Actions on `c1e2091` (CI run 38557227535, PS5 run 38557227548) | all jobs green, including the voice E2E against LiveKit in CI |
 
 Earlier: executed on 2026-10-14 (session 4, Alpha 0.2 release candidate) in a cloud development container
 (Linux, Node.js 22.22.0, pnpm 10.28.0, PostgreSQL 16.15, Chromium via Playwright, GCC 13.3,

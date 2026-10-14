@@ -52,16 +52,23 @@ VPS-only commits must be pushed or merged (procedure in the session-2 section be
    mechanism; every join is re-checked through the signed webhook.
 4. Voice tokens are bound to the requesting **browser session**: signing that session out ends
    the voice connection; other sessions of the same user are unaffected.
-5. The E2E found two real bugs, both fixed: the CSP blocked the inlined AudioWorklet (`data:`;
-   now emitted as a file), and the party watcher dropped a voice connection made right after
-   accepting an invitation (acted on stale "current party" data).
+5. The E2E (locally and on CI) found real bugs, all fixed: the CSP blocked the inlined
+   AudioWorklet (`data:`; now emitted as a file); the party watcher dropped a voice connection
+   made right after accepting an invitation (stale "current party" data); the microphone test
+   created its audio context outside the click (meter stuck at 0 on CI, would affect Safari);
+   static files (including the worklet) counted toward the per-user rate limit, so a
+   rate-limited worklet fetch could stall joining (static files are now exempt; joining falls
+   back to the plain microphone if processing cannot load); one voice change refetched the
+   same party queries two or three times (now coalesced).
+6. Test-only: Chromium's default fake microphone (a 20 ms beep every 500 ms) is too sparse for
+   LiveKit's speaker detection; the E2E feeds a generated speech-like WAV instead.
 
 ### Tests executed (2026-10-14, Linux container, Node 22.22, PostgreSQL 16, Chromium, LiveKit 1.12.0)
 
 | Check | Result |
 | --- | --- |
 | `pnpm lint`, `pnpm typecheck` | passed |
-| `pnpm test` | shared 8/8, **server 166/166** (voice 15), **web 34/34** (voice 7) |
+| `pnpm test` | shared 8/8, **server 167/167** (voice 15), **web 34/34** (voice 7) |
 | Browser E2E with real LiveKit (`E2E_LIVEKIT_URL` set) | **7/7** incl. `voice.spec.ts` (two/three browsers, real audio energy in WebRTC stats) |
 | Browser E2E without LiveKit | 6/6 passed, voice spec skipped |
 | Compose `voice` profile with the production image | two browsers exchanged audio over UDP 7882 |
@@ -69,7 +76,7 @@ VPS-only commits must be pushed or merged (procedure in the session-2 section be
 | Load: 6 / 8 participants all talking | LiveKit 8 % / 12 % of a core, 66 / 74 MB; 32 kbit/s up, 150 / 209 kbit/s down per participant |
 
 | Upgrade check from Alpha 0.2 (`9dcc192`) incl. rollback, with the Alpha 0.4 server | passed |
-| CI on GitHub (`6e37eb2`, `4e137c2`) | PS5 build, Docker image, Compose (incl. voice profile), C client + audio lab jobs green; the browser job ran the real-LiveKit voice test and failed at the Settings microphone test (meter at 0) → fixed in `efbf745` (audio context created in the click; also matters for Safari) |
+| CI on GitHub | **All green on `c1e2091`** (run 38557227535 + PS5 run 38557227548): lint, typecheck, unit/integration, browser E2E with a real LiveKit server, C client + audio lab, Docker image, Compose incl. voice profile, PS5 builds and import gates. Earlier runs failed in the voice E2E and led to real fixes (below) |
 
 Not executed: a real two-device audio test, real phones, Firefox/Safari, TURN, the production
 VPS (not reachable from this container: its CPU/RAM/bandwidth/firewall were not inspected —

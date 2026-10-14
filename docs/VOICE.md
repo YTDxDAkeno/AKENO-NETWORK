@@ -131,7 +131,9 @@ excluded from the browser Origin check because LiveKit calls it server to server
   the microphone (the browser's recording indicator goes off).
 
 Microphone processing runs in an AudioWorklet (`gate-worklet.js`): input gain and the voice
-activity / push-to-talk gate. Remote audio plays through `<audio>` elements rather than Web
+activity / push-to-talk gate. If it cannot load (old browser, the file cannot be fetched), voice
+still connects with the plain microphone and says so; push-to-talk then mutes and unmutes the
+microphone instead. Remote audio plays through `<audio>` elements rather than Web
 Audio because Chrome's echo canceller only hears audio played that way. Per-person volume is
 therefore capped at 100 %.
 
