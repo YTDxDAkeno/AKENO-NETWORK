@@ -7,6 +7,7 @@ import {
   type DirectConversationDto,
   type FriendDto,
   type PresenceView,
+  type PublicProfile,
   type ServerEventEnvelope,
 } from '@akeno/shared';
 import { useToast } from '../../components/Toast';
@@ -38,6 +39,10 @@ function patchPresence(queryClient: QueryClient, userId: string, presence: Prese
         }
       : data,
   );
+  queryClient.setQueriesData<PublicProfile>({ queryKey: queryKeys.profiles }, (data) =>
+    data && data.user.id === userId ? { ...data, presence } : data,
+  );
+  void queryClient.invalidateQueries({ queryKey: queryKeys.activity(userId), refetchType: 'active' });
   void queryClient.invalidateQueries({ queryKey: queryKeys.allParties, refetchType: 'active' });
 }
 
@@ -84,6 +89,16 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         case 'self.presence':
           authRef.current.patchUser({ presence: event.data.status });
           break;
+        case 'activity.self': {
+          const self = authRef.current.user;
+          if (self) {
+            queryClient.setQueriesData<PublicProfile>({ queryKey: queryKeys.profiles }, (data) =>
+              data && data.user.id === self.id ? { ...data, presence: { ...data.presence, game: event.data.game } } : data,
+            );
+            invalidate(queryKeys.activity(self.id));
+          }
+          break;
+        }
         case 'friends.changed':
           for (const key of [queryKeys.friends, queryKeys.friendRequests, queryKeys.blocks, queryKeys.profiles, queryKeys.conversations, ['search']]) {
             invalidate(key);

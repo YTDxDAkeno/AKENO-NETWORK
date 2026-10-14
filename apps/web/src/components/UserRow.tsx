@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import type { PresenceView, UserSummary } from '@akeno/shared';
 import { presenceDescription } from '../lib/format';
 import { Avatar } from './Avatar';
+import { GameActivityLine } from './GameActivity';
 import { cn } from './cn';
 
 /** A user line with avatar, name, Online ID / presence and optional actions. */
@@ -51,6 +52,7 @@ export function UserRow({
             </span>
           ) : null}
         </span>
+        {presence?.game ? <GameActivityLine game={presence.game} className="mt-0.5 max-w-full text-xs" /> : null}
       </div>
       {actions ? <div className="flex shrink-0 items-center gap-1.5">{actions}</div> : null}
     </div>

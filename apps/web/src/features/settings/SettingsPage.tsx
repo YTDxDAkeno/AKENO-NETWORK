@@ -229,6 +229,8 @@ function PrivacySettingsPanel() {
   const user = useCurrentUser();
   const { setUser } = useAuth();
   const toast = useToast();
+  const confirm = useConfirm();
+  const queryClient = useQueryClient();
   const [form, setForm] = useState<PrivacySettings>(user.privacy);
   const save = useMutation({
     mutationFn: () => api.patch<CurrentUser>('/profile/privacy', form),
@@ -237,6 +239,14 @@ function PrivacySettingsPanel() {
       toast.success('Privacy settings saved.');
     },
     onError: (error) => toast.error('Could not save privacy settings', errorMessage(error)),
+  });
+  const clearHistory = useMutation({
+    mutationFn: () => api.delete<{ deleted: number }>('/activity/history'),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.allActivity });
+      toast.success('Play history cleared.');
+    },
+    onError: (error) => toast.error('Could not clear play history', errorMessage(error)),
   });
   const set = <K extends keyof PrivacySettings>(key: K) => (event: React.ChangeEvent<HTMLSelectElement>) =>
     setForm((current) => ({ ...current, [key]: event.target.value as PrivacySettings[K] }));
@@ -287,6 +297,53 @@ function PrivacySettingsPanel() {
             { value: 'nobody', label: 'Nobody' },
           ]}
         />
+        <fieldset className="grid gap-5 border-t border-line pt-5 md:col-span-2 md:grid-cols-2" aria-labelledby="game-activity-privacy">
+          <legend id="game-activity-privacy" className="sr-only">
+            Game activity
+          </legend>
+          <div className="md:col-span-2">
+            <Switch
+              label="Share the game I am playing"
+              description="AKENO for PS5 detects the game running on your paired console and records how long you play. Turning this off ends the running session and stops new tracking; existing history is kept until you clear it."
+              checked={form.gameActivityTracking}
+              onChange={(value) => setForm((current) => ({ ...current, gameActivityTracking: value }))}
+            />
+          </div>
+          <SelectField
+            label="Who can see what you are playing"
+            value={form.gameActivityVisibility}
+            onChange={set('gameActivityVisibility')}
+            options={AUDIENCE}
+            disabled={!form.gameActivityTracking}
+            hint="Only shown while you appear online. Invisible mode and blocks always hide it."
+          />
+          <SelectField
+            label="Who can see your play history"
+            value={form.gameHistoryVisibility}
+            onChange={set('gameHistoryVisibility')}
+            options={AUDIENCE}
+            hint="Recent games, last played and total tracked playtime on your profile."
+          />
+          <div className="flex flex-wrap items-center justify-between gap-3 md:col-span-2">
+            <p className="text-xs text-muted">Playtime from before AKENO started tracking is never shown or estimated.</p>
+            <Button
+              type="button"
+              variant="secondary"
+              loading={clearHistory.isPending}
+              icon={<Trash2 aria-hidden className="size-4" />}
+              onClick={async () => {
+                const ok = await confirm({
+                  title: 'Clear your play history?',
+                  message: 'All tracked game sessions and totals are deleted. This cannot be undone.',
+                  confirmLabel: 'Clear history',
+                });
+                if (ok) clearHistory.mutate();
+              }}
+            >
+              Clear play history
+            </Button>
+          </div>
+        </fieldset>
         <div className="flex items-end justify-end md:col-span-2">
           <Button type="submit" variant="primary" loading={save.isPending} icon={<Save aria-hidden className="size-4" />}>
             Save privacy settings

@@ -27,6 +27,8 @@ export const queryKeys = {
   notifications: ['notifications'] as const,
   authSessions: ['auth', 'sessions'] as const,
   devices: ['devices'] as const,
+  activity: (userId: string) => ['activity', userId] as const,
+  allActivity: ['activity'] as const,
   admin: {
     invitations: ['admin', 'invitations'] as const,
     users: (q: string) => ['admin', 'users', q] as const,

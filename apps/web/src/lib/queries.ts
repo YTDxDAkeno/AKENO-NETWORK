@@ -10,6 +10,7 @@ import type {
   DirectConversationDto,
   FriendDto,
   FriendRequestsResponse,
+  GameActivityResponse,
   GameSessionDetailDto,
   GameSessionDto,
   GroupDetailDto,
@@ -64,6 +65,16 @@ export function useProfile(handle: string) {
     queryKey: queryKeys.profile(handle),
     queryFn: () => api.get<PublicProfile>(`/users/${encodeURIComponent(handle)}`),
     retry: false,
+  });
+}
+
+/** Detected game, recent games and tracked playtime of a user (privacy rules applied by the server). */
+export function useGameActivity(userId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.activity(userId ?? ''),
+    queryFn: () => api.get<GameActivityResponse>(`/users/${encodeURIComponent(userId ?? '')}/activity`),
+    enabled: Boolean(userId),
+    staleTime: 30_000,
   });
 }
 

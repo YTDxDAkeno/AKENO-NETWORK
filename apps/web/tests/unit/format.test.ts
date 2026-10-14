@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { describeNotification } from '../../src/lib/notifications';
-import { presenceDescription, relativeTime } from '../../src/lib/format';
+import { formatDuration, gameGeneration, presenceDescription, relativeTime, secondsSince } from '../../src/lib/format';
 import { uuidv4 } from '../../src/lib/uuid';
 
 describe('formatting helpers', () => {
@@ -17,6 +17,20 @@ describe('formatting helpers', () => {
     expect(presenceDescription({ status: 'dnd', lastSeenAt: null })).toBe('Do Not Disturb');
     expect(presenceDescription({ status: 'offline', lastSeenAt: null })).toBe('Offline');
     expect(presenceDescription({ status: 'offline', lastSeenAt: new Date().toISOString() })).toBe('Last seen just now');
+  });
+
+  it('formats tracked playtime', () => {
+    expect(formatDuration(0)).toBe('under a minute');
+    expect(formatDuration(59)).toBe('under a minute');
+    expect(formatDuration(60 * 45 + 30)).toBe('45 min');
+    expect(formatDuration(3600 * 2 + 60 * 5)).toBe('2 h 5 min');
+    expect(formatDuration(3600 * 3)).toBe('3 h');
+    expect(formatDuration(-5)).toBe('under a minute');
+    expect(secondsSince('2026-10-13T11:58:00Z', now)).toBe(120);
+    expect(secondsSince('2026-10-13T12:05:00Z', now)).toBe(0); // clock skew never goes negative
+    expect(gameGeneration('PPSA01234')).toBe('PS5 game');
+    expect(gameGeneration('CUSA00001')).toBe('PS4 game');
+    expect(gameGeneration('NPXS20001')).toBeNull();
   });
 
   it('describes notifications with links', () => {

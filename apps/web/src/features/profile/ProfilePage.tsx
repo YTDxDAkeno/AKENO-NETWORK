@@ -4,6 +4,7 @@ import { Avatar } from '../../components/Avatar';
 import { Badge } from '../../components/Badge';
 import { Button, ButtonLink } from '../../components/Button';
 import { Card } from '../../components/Card';
+import { GameActivityCard, GameHistory } from '../../components/GameActivity';
 import { Menu } from '../../components/Menu';
 import { PageLoader } from '../../components/Spinner';
 import { EmptyState, ErrorState, Notice } from '../../components/States';
@@ -11,13 +12,14 @@ import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { ApiError } from '../../lib/api';
 import { avatarPreset } from '../../lib/avatars';
 import { longDate, presenceDescription } from '../../lib/format';
-import { useProfile } from '../../lib/queries';
+import { useGameActivity, useProfile } from '../../lib/queries';
 import { useFriendActions } from '../friends/useFriendActions';
 import { useStartConversation } from '../messages/useStartConversation';
 
 export function ProfilePage() {
   const { handle = '' } = useParams();
   const profile = useProfile(handle);
+  const activity = useGameActivity(profile.data?.user.id);
   const actions = useFriendActions();
   const start = useStartConversation();
   useDocumentTitle(profile.data ? profile.data.user.displayName : 'Profile');
@@ -158,6 +160,25 @@ export function ProfilePage() {
             </p>
           ) : null}
         </div>
+      </Card>
+
+      <Card className="mt-6 p-5" aria-labelledby="game-activity-title">
+        <h2 id="game-activity-title" className="mb-3 text-sm font-semibold uppercase tracking-wider text-subtle">
+          Game activity
+        </h2>
+        {/* presence.game follows realtime updates; the server applies the same audience rules to both. */}
+        {data.presence.game ? (
+          <div className="mb-4">
+            <GameActivityCard game={data.presence.game} />
+          </div>
+        ) : null}
+        {activity.isPending ? (
+          <p className="text-sm text-muted">Loading activity…</p>
+        ) : activity.isError ? (
+          <p className="text-sm text-muted">Game activity could not be loaded.</p>
+        ) : (
+          <GameHistory activity={activity.data} isSelf={isSelf} />
+        )}
       </Card>
 
       {data.restricted ? (

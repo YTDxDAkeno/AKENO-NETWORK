@@ -55,3 +55,26 @@ export function presenceDescription(presence: { status: SelfPresenceStatus; last
 export function pluralize(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
 }
+
+/** Compact duration: "under a minute", "45 min", "2 h 5 min", "3 h". */
+export function formatDuration(totalSeconds: number): string {
+  const seconds = Math.max(0, Math.floor(totalSeconds));
+  if (seconds < 60) return 'under a minute';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`;
+}
+
+/** Seconds elapsed since an ISO timestamp (never negative). */
+export function secondsSince(iso: string, now = Date.now()): number {
+  return Math.max(0, Math.floor((now - new Date(iso).getTime()) / 1000));
+}
+
+/** "PS5 game" / "PS4 game" from a PlayStation title ID prefix. */
+export function gameGeneration(titleId: string): string | null {
+  if (titleId.startsWith('PPSA')) return 'PS5 game';
+  if (titleId.startsWith('CUSA')) return 'PS4 game';
+  return null;
+}
