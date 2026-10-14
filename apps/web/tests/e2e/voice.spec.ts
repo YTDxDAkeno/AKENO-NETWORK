@@ -1,3 +1,6 @@
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { devices, expect, request as playwrightRequest, test, type Browser, type Page } from '@playwright/test';
 
 /**
@@ -11,8 +14,51 @@ import { devices, expect, request as playwrightRequest, test, type Browser, type
  * (see docs/TESTING.md). Skipped otherwise.
  */
 
+/**
+ * The microphone: a 440 Hz tone in speech-like bursts (300 ms on, 200 ms off), written as a WAV
+ * file for Chromium's fake capture device. Chromium's default fake microphone beeps for 20 ms
+ * every 500 ms, too little for LiveKit's speaker detection, which made "Speaking" flaky.
+ */
+function speechLikeWav(): string {
+  const rate = 48_000;
+  const samples = rate * 2;
+  const data = Buffer.alloc(samples * 2);
+  for (let n = 0; n < samples; n += 1) {
+    const inBurst = (n % (rate / 2)) / rate; // seconds into the current 500 ms period
+    const fade = Math.min(1, inBurst / 0.01, Math.max(0, 0.3 - inBurst) / 0.01);
+    const value = inBurst < 0.3 ? 0.5 * fade * Math.sin((2 * Math.PI * 440 * n) / rate) : 0;
+    data.writeInt16LE(Math.round(value * 32767), n * 2);
+  }
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + data.length, 4);
+  header.write('WAVEfmt ', 8);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20); // PCM
+  header.writeUInt16LE(1, 22); // mono
+  header.writeUInt32LE(rate, 24);
+  header.writeUInt32LE(rate * 2, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write('data', 36);
+  header.writeUInt32LE(data.length, 40);
+  const dir = mkdtempSync(join(tmpdir(), 'akeno-voice-e2e-'));
+  const file = join(dir, 'microphone.wav');
+  writeFileSync(file, Buffer.concat([header, data]));
+  return file;
+}
+
 test.skip(!process.env.E2E_LIVEKIT_URL, 'E2E_LIVEKIT_URL is not set: no LiveKit server to test voice against');
-test.use({ launchOptions: { args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', '--autoplay-policy=no-user-gesture-required'] } });
+test.use({
+  launchOptions: {
+    args: [
+      '--use-fake-ui-for-media-stream',
+      '--use-fake-device-for-media-stream',
+      `--use-file-for-fake-audio-capture=${speechLikeWav()}`,
+      '--autoplay-policy=no-user-gesture-required',
+    ],
+  },
+});
 
 const PASSWORD = 'correct-horse-battery-staple';
 const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD ?? 'e2e-admin-password-123';
@@ -257,7 +303,7 @@ test('party voice with a real LiveKit server', async ({ browser, baseURL }) => {
   await test.step('a page reload leaves voice; the microphone test shows a live level', async () => {
     // A full page load disconnects from the room cleanly (no lingering participant).
     await ana.page.goto('/settings?tab=voice');
-    // Chromium's fake microphone plays a steady beep that noise suppression can treat as noise.
+    // Also exercises the processing switches: the level is checked with noise suppression off.
     const suppression = ana.page.getByRole('switch', { name: 'Noise suppression' });
     await suppression.click();
     await expect(suppression).toHaveAttribute('aria-checked', 'false');
