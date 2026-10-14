@@ -1,4 +1,5 @@
 import type { GameActivityPlatform, GameSessionEndReason } from '../constants.js';
+import type { GameArtwork } from './games.js';
 
 /**
  * A game a user is playing right now, as detected by one of their paired devices.
@@ -11,6 +12,8 @@ export interface CurrentGameActivity {
   platform: GameActivityPlatform;
   /** Server time when this session started. */
   startedAt: string;
+  /** Artwork of the verified game this title ID maps to; null when unknown or unverified. */
+  art: GameArtwork | null;
 }
 
 /** One game in a user's tracked history, aggregated over all tracked sessions. */
@@ -18,6 +21,7 @@ export interface GameHistoryEntry {
   titleId: string;
   name: string | null;
   platform: GameActivityPlatform;
+  art: GameArtwork | null;
   /** End of the most recent session (or its last heartbeat while it is still running). */
   lastPlayedAt: string;
   /** null when the owner hides playtime from this viewer. */
@@ -38,6 +42,7 @@ export interface GameSessionEntry {
   titleId: string;
   name: string | null;
   platform: GameActivityPlatform;
+  art: GameArtwork | null;
   startedAt: string;
   /** null while the session is running. */
   endedAt: string | null;

@@ -1,16 +1,20 @@
 import type { PartyPrivacy } from '../constants.js';
 import type { UserWithPresence } from './users.js';
+import type { PartyMemberVoiceState } from './voice.js';
 
 export interface PartyMemberDto {
   user: UserWithPresence;
   joinedAt: string;
   isLeader: boolean;
+  /** Voice connection of this member (only reported to party members). */
+  voice: PartyMemberVoiceState;
 }
 
 export interface PartyVoiceStatus {
-  /** Voice chat is not part of the stable V1 release. */
-  available: false;
-  reason: string;
+  /** Voice chat is configured on this server and the viewer may use it in this party. */
+  available: boolean;
+  /** English explanation when voice is unavailable; null when available. */
+  reason: string | null;
 }
 
 export interface PartyDto {

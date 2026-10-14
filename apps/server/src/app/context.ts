@@ -5,11 +5,14 @@ import { AccountService } from '../modules/accounts/service.js';
 import { ActivityService } from '../modules/activity/service.js';
 import { AdminService } from '../modules/administration/service.js';
 import { AuthService } from '../modules/auth/service.js';
+import { BadgesService } from '../modules/badges/service.js';
 import { DevicesService } from '../modules/devices/service.js';
 import { FriendsService } from '../modules/friends/service.js';
+import { GameCatalogService } from '../modules/games/service.js';
 import { GameSessionsService } from '../modules/game-sessions/service.js';
 import { GroupsService } from '../modules/groups/service.js';
 import { InvitationsService } from '../modules/invitations/service.js';
+import { MediaService } from '../modules/media/service.js';
 import { MessagesService } from '../modules/messages/service.js';
 import { NotificationsService } from '../modules/notifications/service.js';
 import { PartiesService } from '../modules/parties/service.js';
@@ -46,6 +49,9 @@ export interface AppContext {
   accounts: AccountService;
   admin: AdminService;
   activity: ActivityService;
+  media: MediaService;
+  games: GameCatalogService;
+  badges: BadgesService;
 }
 
 export function createContext(config: AppConfig, db: Database, log: FastifyBaseLogger): AppContext {
@@ -68,5 +74,8 @@ export function createContext(config: AppConfig, db: Database, log: FastifyBaseL
   ctx.accounts = new AccountService(ctx);
   ctx.admin = new AdminService(ctx);
   ctx.activity = new ActivityService(ctx);
+  ctx.media = new MediaService(ctx);
+  ctx.games = new GameCatalogService(ctx);
+  ctx.badges = new BadgesService(ctx);
   return ctx;
 }

@@ -10,3 +10,6 @@ export * from './invitations.js';
 export * from './system.js';
 export * from './devices.js';
 export * from './activity.js';
+export * from './media.js';
+export * from './games.js';
+export * from './badges.js';

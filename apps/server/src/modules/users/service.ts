@@ -1,20 +1,26 @@
 import { and, asc, eq, ilike, inArray, ne, or, sql } from 'drizzle-orm';
-import type {
-  CurrentUser,
-  PresencePreference,
-  PresenceVisibility,
-  PublicProfile,
-  Relationship,
-  RelationshipState,
-  UpdatePrivacyInput,
-  UpdateProfileInput,
-  UserSearchResult,
-  UserSummary,
-  UserWithPresence,
+import {
+  themePreset,
+  type BadgeId,
+  type CurrentUser,
+  type ProfileAppearance,
+  type ProfileThemeId,
+  type UpdateAppearanceInput,
+  type PresencePreference,
+  type PresenceVisibility,
+  type PublicProfile,
+  type Relationship,
+  type RelationshipState,
+  type UpdatePrivacyInput,
+  type UpdateProfileInput,
+  type UserSearchResult,
+  type UserSummary,
+  type UserWithPresence,
 } from '@akeno/shared';
 import type { AppContext } from '../../app/context.js';
 import type { DbExecutor } from '../../database/client.js';
 import { friendRequests, profiles, users } from '../../database/schema/index.js';
+import { BadgesService } from '../badges/service.js';
 import { computePresenceView, effectiveSelfStatus } from '../../realtime/presence-rules.js';
 import { Errors } from '../../utils/errors.js';
 import { toIso } from '../../utils/time.js';
@@ -29,6 +35,7 @@ export const userCardColumns = {
   lastSeenAt: users.lastSeenAt,
   displayName: profiles.displayName,
   avatar: profiles.avatar,
+  avatarMediaId: profiles.avatarMediaId,
   statusMessage: profiles.statusMessage,
   activity: profiles.activity,
   presencePreference: profiles.presencePreference,
@@ -46,6 +53,7 @@ export interface UserCardRow {
   lastSeenAt: Date | null;
   displayName: string;
   avatar: string;
+  avatarMediaId: string | null;
   statusMessage: string;
   activity: string | null;
   presencePreference: PresencePreference;
@@ -54,11 +62,35 @@ export interface UserCardRow {
   gameActivityVisibility: PresenceVisibility;
 }
 
-export function toUserSummary(row: Pick<UserCardRow, 'id' | 'onlineId' | 'displayName' | 'avatar' | 'status'>): UserSummary {
-  if (row.status === 'deleted') {
-    return { id: row.id, onlineId: 'deleted-user', displayName: 'Deleted user', avatar: 'bot', deleted: true };
-  }
-  return { id: row.id, onlineId: row.onlineId, displayName: row.displayName, avatar: row.avatar, deleted: false };
+export function toUserSummary(
+  row: Pick<UserCardRow, 'id' | 'onlineId' | 'displayName' | 'avatar' | 'status'> & { avatarMediaId?: string | null },
+): UserSummary {
+  if (row.status === 'deleted') return placeholderSummary(row.id, 'deleted-user', 'Deleted user');
+  return {
+    id: row.id,
+    onlineId: row.onlineId,
+    displayName: row.displayName,
+    avatar: row.avatar,
+    avatarImage: row.avatarMediaId ?? null,
+    deleted: false,
+  };
+}
+
+/** Summary for accounts that no longer exist (deleted, or missing from a join). */
+export function placeholderSummary(id: string, onlineId = 'unknown', displayName = 'Unknown user'): UserSummary {
+  return { id, onlineId, displayName, avatar: 'bot', avatarImage: null, deleted: true };
+}
+
+type ProfileRow = typeof profiles.$inferSelect;
+
+export function appearanceOf(profile: Pick<ProfileRow, 'theme' | 'accentColor' | 'bannerMediaId' | 'bannerOverlay'>, restricted = false): ProfileAppearance {
+  const theme = themePreset(profile.theme).id;
+  return {
+    theme,
+    accentColor: theme === 'custom' ? profile.accentColor : null,
+    bannerImage: restricted ? null : profile.bannerMediaId,
+    bannerOverlay: profile.bannerOverlay,
+  };
 }
 
 function escapeLike(value: string): string {
@@ -137,6 +169,7 @@ export class UsersService {
       .limit(1);
     if (!row) throw Errors.unauthenticated();
     const p = row.profile;
+    const badges = await this.ctx.badges.earned(row.id);
     return {
       id: row.id,
       onlineId: row.onlineId,
@@ -146,11 +179,14 @@ export class UsersService {
       profile: {
         displayName: p.displayName,
         avatar: p.avatar,
+        avatarImage: p.avatarMediaId,
         bio: p.bio,
         statusMessage: p.statusMessage,
         favoriteGames: p.favoriteGames,
         activity: p.activity,
         activityUpdatedAt: toIso(p.activityUpdatedAt),
+        appearance: appearanceOf(p),
+        featuredBadges: BadgesService.featuredOf(p.featuredBadges, badges),
       },
       privacy: {
         profileVisibility: p.profileVisibility,
@@ -171,7 +207,75 @@ export class UsersService {
         allIdle: this.ctx.presence.allIdle(row.id),
         preference: p.presencePreference,
       }),
+      badges,
     };
+  }
+
+  /** Theme, accent colour, banner overlay and featured badges. */
+  async updateAppearance(userId: string, input: UpdateAppearanceInput): Promise<CurrentUser> {
+    const patch: Partial<typeof profiles.$inferInsert> = { updatedAt: new Date() };
+    if (input.theme !== undefined) patch.theme = input.theme satisfies ProfileThemeId;
+    if (input.accentColor !== undefined) patch.accentColor = input.accentColor;
+    if (input.theme === 'custom' && input.accentColor === undefined) {
+      const [current] = await this.ctx.db.select({ accent: profiles.accentColor }).from(profiles).where(eq(profiles.userId, userId));
+      if (!current?.accent) patch.accentColor = themePreset('default').accent;
+    }
+    if (input.bannerOverlay !== undefined) patch.bannerOverlay = input.bannerOverlay;
+    if (input.featuredBadges !== undefined) {
+      patch.featuredBadges = await this.ctx.badges.validateFeatured(userId, input.featuredBadges as BadgeId[]);
+    }
+    await this.ctx.db.update(profiles).set(patch).where(eq(profiles.userId, userId));
+    await this.afterProfileChange(userId);
+    return this.getCurrentUser(userId);
+  }
+
+  /** Stores an uploaded profile picture or banner and removes the one it replaces. */
+  async setProfileImage(userId: string, slot: 'avatar' | 'banner', data: Buffer): Promise<CurrentUser> {
+    const stored = await this.ctx.media.store(slot, userId, data);
+    let replaced: string[];
+    try {
+      replaced = await this.ctx.db.transaction(async (tx) => {
+        const [profile] = await tx
+          .select({ avatar: profiles.avatarMediaId, banner: profiles.bannerMediaId })
+          .from(profiles)
+          .where(eq(profiles.userId, userId))
+          .for('update');
+        if (!profile) throw Errors.unauthenticated();
+        await tx
+          .update(profiles)
+          .set(slot === 'avatar' ? { avatarMediaId: stored.id, updatedAt: new Date() } : { bannerMediaId: stored.id, updatedAt: new Date() })
+          .where(eq(profiles.userId, userId));
+        return this.ctx.media.softDelete([slot === 'avatar' ? profile.avatar : profile.banner], tx);
+      });
+    } catch (error) {
+      await this.ctx.media.discard(stored.id);
+      throw error;
+    }
+    await this.ctx.media.removeFiles(replaced);
+    await this.afterProfileChange(userId);
+    return this.getCurrentUser(userId);
+  }
+
+  /** Removes the uploaded picture (the preset avatar shows again) or banner (theme default). */
+  async removeProfileImage(userId: string, slot: 'avatar' | 'banner'): Promise<CurrentUser> {
+    const removed = await this.ctx.db.transaction(async (tx) => {
+      const [profile] = await tx
+        .select({ avatar: profiles.avatarMediaId, banner: profiles.bannerMediaId })
+        .from(profiles)
+        .where(eq(profiles.userId, userId))
+        .for('update');
+      if (!profile) throw Errors.unauthenticated();
+      const current = slot === 'avatar' ? profile.avatar : profile.banner;
+      if (!current) return [];
+      await tx
+        .update(profiles)
+        .set(slot === 'avatar' ? { avatarMediaId: null, updatedAt: new Date() } : { bannerMediaId: null, updatedAt: new Date() })
+        .where(eq(profiles.userId, userId));
+      return this.ctx.media.softDelete([current], tx);
+    });
+    await this.ctx.media.removeFiles(removed);
+    if (removed.length > 0) await this.afterProfileChange(userId);
+    return this.getCurrentUser(userId);
   }
 
   async updateProfile(userId: string, input: UpdateProfileInput & Record<string, unknown>): Promise<CurrentUser> {
@@ -289,22 +393,40 @@ export class UsersService {
       friendRequestPrivacy: row.profile.friendRequestPrivacy,
     });
     const restricted = !isSelf && (iBlocked || (row.profile.profileVisibility === 'friends' && !isFriend));
-    const mutualFriendCount = isSelf || iBlocked ? 0 : await this.mutualFriendCount(viewerId, targetId);
+    const mutualIds = isSelf || iBlocked ? [] : await this.mutualFriendIds(viewerId, targetId);
+    const presence = computePresenceView(this.ctx.presence.subjectFor(row.card), { isSelf, isFriend, blocked: iBlocked });
+    // A party is only shown while the user appears online to this viewer (never while invisible).
+    const showParty = !iBlocked && (isSelf || presence.status !== 'offline');
+    const [badges, mutualCards, party] = await Promise.all([
+      this.ctx.badges.earned(targetId),
+      this.getSummaries(mutualIds.slice(0, 6)),
+      showParty ? this.ctx.parties.profileParty(viewerId, targetId) : Promise.resolve(null),
+    ]);
+    const featuredBadges = BadgesService.featuredOf(row.profile.featuredBadges, badges);
+    const favoriteGames = restricted ? [] : row.profile.favoriteGames;
 
     return {
       user: toUserSummary(row.card),
-      presence: computePresenceView(this.ctx.presence.subjectFor(row.card), {
-        isSelf,
-        isFriend,
-        blocked: iBlocked,
-      }),
+      presence,
       joinedAt: row.card.createdAt.toISOString(),
       restricted,
       bio: restricted ? null : row.profile.bio,
       statusMessage: restricted ? null : row.profile.statusMessage,
-      favoriteGames: restricted ? [] : row.profile.favoriteGames,
+      favoriteGames,
+      favoriteGameDetails: favoriteGames.map((name) => ({ name, art: this.ctx.games.artForName(name) })),
       relationship,
-      mutualFriendCount,
+      mutualFriendCount: mutualIds.length,
+      mutualFriends: mutualIds.slice(0, 6).flatMap((id) => {
+        const summary = mutualCards.get(id);
+        return summary ? [summary] : [];
+      }),
+      appearance: appearanceOf(row.profile, restricted),
+      badges: [
+        ...featuredBadges.flatMap((id) => badges.filter((badge) => badge.id === id)),
+        ...badges.filter((badge) => !featuredBadges.includes(badge.id)),
+      ],
+      featuredBadges,
+      party,
     };
   }
 
@@ -369,9 +491,9 @@ export class UsersService {
     return result;
   }
 
-  private async mutualFriendCount(a: string, b: string): Promise<number> {
+  private async mutualFriendIds(a: string, b: string): Promise<string[]> {
     const [mine, theirs] = await Promise.all([this.ctx.relations.friendIds(a), this.ctx.relations.friendIds(b)]);
     const set = new Set(mine);
-    return theirs.filter((id) => set.has(id)).length;
+    return theirs.filter((id) => set.has(id));
   }
 }

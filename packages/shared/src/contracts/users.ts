@@ -1,4 +1,7 @@
+import type { BadgeId } from '../badges.js';
+import type { ProfileThemeId } from '../themes.js';
 import type { CurrentGameActivity } from './activity.js';
+import type { GameArtwork } from './games.js';
 import type {
   AccountStatus,
   FriendRequestPrivacy,
@@ -16,7 +19,10 @@ export interface UserSummary {
   id: string;
   onlineId: string;
   displayName: string;
+  /** Preset avatar ID; always set, used when there is no uploaded picture. */
   avatar: string;
+  /** Uploaded profile picture (media ID, see mediaUrl()); null means the preset is shown. */
+  avatarImage: string | null;
   /** True for tombstoned (deleted) accounts that still appear as message authors. */
   deleted: boolean;
 }
@@ -54,14 +60,35 @@ export interface PrivacySettings {
   gameExcludedTitles: string[];
 }
 
+/** Visual customization of a profile. */
+export interface ProfileAppearance {
+  theme: ProfileThemeId;
+  /** Only set for the custom theme (#rrggbb). */
+  accentColor: string | null;
+  /** Uploaded banner (media ID) or null for the theme's default banner. */
+  bannerImage: string | null;
+  /** Darken the banner so overlaid elements stay readable. */
+  bannerOverlay: boolean;
+}
+
+export interface BadgeDto {
+  id: BadgeId;
+  /** null for derived badges (Administrator). */
+  grantedAt: string | null;
+}
+
 export interface OwnProfile {
   displayName: string;
   avatar: string;
+  avatarImage: string | null;
   bio: string;
   statusMessage: string;
   favoriteGames: string[];
   activity: string | null;
   activityUpdatedAt: string | null;
+  appearance: ProfileAppearance;
+  /** Up to FEATURED_BADGES_MAX earned badges, in display order. */
+  featuredBadges: BadgeId[];
 }
 
 /** The authenticated user's own account, including private settings. */
@@ -76,6 +103,8 @@ export interface CurrentUser {
   presencePreference: PresencePreference;
   /** The user's own effective presence as currently computed by the server. */
   presence: SelfPresenceStatus;
+  /** Every badge this account has earned. */
+  badges: BadgeDto[];
 }
 
 export type RelationshipState =
@@ -103,8 +132,33 @@ export interface PublicProfile {
   bio: string | null;
   statusMessage: string | null;
   favoriteGames: string[];
+  /** Favorite games with artwork where the name exactly matches a verified game. */
+  favoriteGameDetails: FavoriteGameDto[];
   relationship: Relationship;
   mutualFriendCount: number;
+  /** Up to six mutual friends (the viewer already knows them). */
+  mutualFriends: UserSummary[];
+  /** Theme and banner. The banner is null when profile details are restricted. */
+  appearance: ProfileAppearance;
+  /** Featured badges first, then the remaining earned badges. */
+  badges: BadgeDto[];
+  featuredBadges: BadgeId[];
+  /** A party of this user that the viewer may see (and may be able to join), else null. */
+  party: ProfilePartyDto | null;
+}
+
+export interface FavoriteGameDto {
+  name: string;
+  art: GameArtwork | null;
+}
+
+export interface ProfilePartyDto {
+  id: string;
+  name: string;
+  memberCount: number;
+  maxMembers: number;
+  /** The viewer is a member. */
+  isMember: boolean;
 }
 
 export interface UserSearchResult extends UserSummary {

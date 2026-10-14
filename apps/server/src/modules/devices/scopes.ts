@@ -1,4 +1,4 @@
-import { API_PREFIX, type DeviceScope, REALTIME_PATH } from '@akeno/shared';
+import { API_PREFIX, type DeviceScope, MEDIA_PATH_PREFIX, REALTIME_PATH } from '@akeno/shared';
 
 /**
  * Routes a paired device may call, and the scope each one requires. Everything that is not
@@ -77,6 +77,8 @@ const DEVICE_ROUTES = new Map<string, DeviceScope | null>([
     return [`${method} ${API_PREFIX}${path}`, scope] as const;
   }),
   [`GET ${REALTIME_PATH}`, 'realtime'],
+  // Profile pictures and game artwork (the console page shows them through its local proxy).
+  [`GET ${MEDIA_PATH_PREFIX}/:id/:file`, 'profile:read'],
 ]);
 
 export type DeviceRouteDecision = { allowed: true } | { allowed: false; scope: DeviceScope | null };

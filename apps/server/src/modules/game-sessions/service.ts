@@ -22,7 +22,7 @@ import {
 } from '../../database/schema/index.js';
 import { Effects } from '../../utils/effects.js';
 import { AppError, Errors } from '../../utils/errors.js';
-import { userCardColumns } from '../users/service.js';
+import { placeholderSummary, userCardColumns } from '../users/service.js';
 
 type SessionRow = typeof gameSessions.$inferSelect;
 
@@ -121,14 +121,9 @@ export class GameSessionsService {
         id: row.id,
         gameName: row.gameName,
         gameIdentifier: row.gameIdentifier,
+        art: this.ctx.games.artForSession(row.gameIdentifier, row.gameName),
         description: row.description,
-        host: hosts.get(row.hostId) ?? {
-          id: row.hostId,
-          onlineId: 'unknown',
-          displayName: 'Unknown user',
-          avatar: 'bot',
-          deleted: true,
-        },
+        host: hosts.get(row.hostId) ?? placeholderSummary(row.hostId),
         visibility: row.visibility,
         joinMode: row.joinMode,
         maxParticipants: row.maxParticipants,

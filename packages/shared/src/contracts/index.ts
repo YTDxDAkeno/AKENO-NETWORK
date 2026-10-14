@@ -12,3 +12,5 @@ export * from './errors.js';
 export * from './realtime.js';
 export * from './devices.js';
 export * from './activity.js';
+export * from './games.js';
+export * from './voice.js';

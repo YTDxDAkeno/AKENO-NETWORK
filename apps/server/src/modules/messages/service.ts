@@ -22,6 +22,7 @@ import {
 } from '../../database/schema/index.js';
 import { AppError, Errors } from '../../utils/errors.js';
 import { orderedPair } from '../../utils/pairs.js';
+import { placeholderSummary } from '../users/service.js';
 
 type MessageRow = typeof messages.$inferSelect;
 
@@ -413,5 +414,5 @@ export class MessagesService {
 }
 
 function unknownSender(id: string): UserSummary {
-  return { id, onlineId: 'unknown', displayName: 'Unknown user', avatar: 'bot', deleted: true };
+  return placeholderSummary(id);
 }

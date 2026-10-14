@@ -1,3 +1,4 @@
+import type { BadgeId } from '../badges.js';
 import type { AccountStatus, UserRole } from '../constants.js';
 import type { UserSummary } from './users.js';
 
@@ -53,4 +54,21 @@ export interface AdminStatsDto {
     nodeVersion: string;
   };
   database: { totalConnections: number; idleConnections: number; waitingRequests: number };
+  media: MediaStatsDto;
+}
+
+export interface UserBadgeAdminDto {
+  badgeId: BadgeId;
+  note: string;
+  grantedAt: string;
+  /** null when granted by the server operator through the command line. */
+  grantedBy: UserSummary | null;
+}
+
+export interface MediaStatsDto {
+  available: boolean;
+  objects: number;
+  bytes: number;
+  limitBytes: number;
+  freeBytes: number | null;
 }

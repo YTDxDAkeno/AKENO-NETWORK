@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { MessageDto } from '@akeno/shared';
 import { flattenPages, mergeIntoCache, newestMessageId, unconfirmedPending, type MessageCache } from '../../src/lib/messages';
 
-const sender = { id: 'u1', onlineId: 'alice', displayName: 'Alice', avatar: 'nova', deleted: false };
+const sender = { id: 'u1', onlineId: 'alice', displayName: 'Alice', avatar: 'nova', avatarImage: null, deleted: false };
 const message = (id: number, clientMessageId: string | null = null): MessageDto => ({
   id,
   conversationId: 'c1',

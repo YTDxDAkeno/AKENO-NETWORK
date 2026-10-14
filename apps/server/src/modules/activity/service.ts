@@ -10,11 +10,10 @@ import {
   type GameSessionEndReason,
   type GameSessionEntry,
   type GameStopInput,
-  type GameTitleDto,
 } from '@akeno/shared';
 import type { AppContext } from '../../app/context.js';
 import type { DbExecutor } from '../../database/client.js';
-import { gameActivitySessions, gameTitles, profiles, users } from '../../database/schema/index.js';
+import { gameActivitySessions, profiles, users } from '../../database/schema/index.js';
 import { audienceAllows, computePresenceView } from '../../realtime/presence-rules.js';
 import { isUniqueViolation } from '../../utils/db-errors.js';
 import { AppError, Errors } from '../../utils/errors.js';
@@ -43,15 +42,11 @@ type SessionRow = typeof gameActivitySessions.$inferSelect;
  */
 export class ActivityService {
   private readonly current = new Map<string, ActiveGame>();
-  private readonly titles = new Map<string, string>();
 
   constructor(private readonly ctx: AppContext) {}
 
-  /** Loads curated names and the active, non-stale sessions after startup. */
+  /** Loads the active, non-stale sessions after startup (the game catalogue loads separately). */
   async load(now = new Date()): Promise<void> {
-    const titleRows = await this.ctx.db.select({ titleId: gameTitles.titleId, name: gameTitles.name }).from(gameTitles);
-    this.titles.clear();
-    for (const row of titleRows) this.titles.set(row.titleId, row.name);
     const cutoff = new Date(now.getTime() - STALE_MS);
     const rows = await this.ctx.db
       .select()
@@ -73,11 +68,13 @@ export class ActivityService {
       name: this.nameFor(game.titleId, game.reportedName),
       platform: game.platform,
       startedAt: game.startedAt.toISOString(),
+      art: this.ctx.games.artForTitle(game.titleId),
     };
   }
 
+  /** Verified catalogue name first, then the name the device read from the console's metadata. */
   private nameFor(titleId: string, reported: string | null): string | null {
-    return this.titles.get(titleId) ?? reported ?? null;
+    return this.ctx.games.nameForTitle(titleId) ?? reported ?? null;
   }
 
   // ---- Reporting (paired devices only) ---------------------------------------------------------
@@ -469,6 +466,7 @@ export class ActivityService {
       titleId: game.titleId,
       name: this.nameFor(game.titleId, game.reportedName),
       platform: game.platform as GameActivityPlatform,
+      art: this.ctx.games.artForTitle(game.titleId),
       lastPlayedAt: new Date(game.lastPlayedAt).toISOString(),
       lastSessionSeconds: seconds(game.lastSessionSeconds),
       totalSeconds: seconds(game.totalSeconds),
@@ -481,6 +479,7 @@ export class ActivityService {
       titleId: session.titleId,
       name: this.nameFor(session.titleId, session.titleName),
       platform: session.platform as GameActivityPlatform,
+      art: this.ctx.games.artForTitle(session.titleId),
       startedAt: session.startedAt.toISOString(),
       endedAt: session.endedAt ? session.endedAt.toISOString() : null,
       durationSeconds: seconds(session.durationSeconds),
@@ -494,35 +493,12 @@ export class ActivityService {
     };
   }
 
-  // ---- Curated names (administrators) ---------------------------------------------------------
+  // ---- Catalogue changes ----------------------------------------------------------------------
 
-  async listTitles(): Promise<GameTitleDto[]> {
-    const rows = await this.ctx.db.select().from(gameTitles).orderBy(asc(gameTitles.titleId));
-    return rows.map((row) => ({ titleId: row.titleId, name: row.name, updatedAt: row.updatedAt.toISOString() }));
-  }
-
-  async setTitle(actorId: string | null, titleId: string, name: string): Promise<GameTitleDto> {
-    const now = new Date();
-    const [row] = await this.ctx.db
-      .insert(gameTitles)
-      .values({ titleId, name, updatedById: actorId, updatedAt: now })
-      .onConflictDoUpdate({ target: gameTitles.titleId, set: { name, updatedById: actorId, updatedAt: now } })
-      .returning();
-    this.titles.set(titleId, name);
-    await this.republishPlaying(titleId);
-    return { titleId: row!.titleId, name: row!.name, updatedAt: row!.updatedAt.toISOString() };
-  }
-
-  async removeTitle(titleId: string): Promise<void> {
-    const deleted = await this.ctx.db.delete(gameTitles).where(eq(gameTitles.titleId, titleId)).returning({ id: gameTitles.titleId });
-    if (deleted.length === 0) throw Errors.notFound('The game title');
-    this.titles.delete(titleId);
-    await this.republishPlaying(titleId);
-  }
-
-  /** Users currently playing a renamed title get a fresh presence event with the new name. */
-  private async republishPlaying(titleId: string): Promise<void> {
-    const userIds = [...this.current].filter(([, game]) => game.titleId === titleId).map(([userId]) => userId);
+  /** Users currently playing one of these titles get a fresh presence event (new name or artwork). */
+  async republishTitles(titleIds: readonly string[]): Promise<void> {
+    const affected = new Set(titleIds);
+    const userIds = [...this.current].filter(([, game]) => affected.has(game.titleId)).map(([userId]) => userId);
     if (userIds.length === 0) return;
     const rows = await this.ctx.db.select({ id: users.id }).from(users).where(inArray(users.id, userIds));
     for (const row of rows) {

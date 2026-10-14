@@ -4,6 +4,7 @@ import type {
   GameSessionStatus,
   GameSessionVisibility,
 } from '../constants.js';
+import type { GameArtwork } from './games.js';
 import type { UserSummary, UserWithPresence } from './users.js';
 
 export type GameSessionViewerState = 'host' | 'member' | 'requested' | 'invited' | 'none';
@@ -12,6 +13,8 @@ export interface GameSessionDto {
   id: string;
   gameName: string;
   gameIdentifier: string | null;
+  /** Artwork when the identifier is a mapped title ID or the name exactly matches a verified game. */
+  art: GameArtwork | null;
   description: string;
   host: UserSummary;
   visibility: GameSessionVisibility;

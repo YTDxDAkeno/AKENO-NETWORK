@@ -10,3 +10,4 @@ export * from './notifications.js';
 export * from './realtime.js';
 export * from './devices.js';
 export * from './activity.js';
+export * from './games.js';

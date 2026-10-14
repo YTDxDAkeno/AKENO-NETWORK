@@ -29,6 +29,13 @@
       "when": 1791941628402,
       "tag": "0003_activity_privacy",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791952584176,
+      "tag": "0004_alpha03_profiles_media_games",
+      "breakpoints": true
     }
   ]
 }

@@ -1,5 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import { rmSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import pg from 'pg';
 import WebSocket from 'ws';
@@ -52,7 +55,10 @@ export async function createTestServer(
   existingDatabase?: string,
 ): Promise<TestServer> {
   const dbName = existingDatabase ?? (await createTestDatabase());
+  // Each test database gets its own media directory, kept across restart() like the database.
+  const mediaDir = env.MEDIA_DIR ?? join(tmpdir(), `akeno-media-${dbName}`);
   const config = loadConfig({
+    MEDIA_DIR: mediaDir,
     NODE_ENV: 'test',
     DATABASE_URL: databaseUrl(dbName),
     PUBLIC_ORIGIN: TEST_ORIGIN,
@@ -74,7 +80,10 @@ export async function createTestServer(
     },
     close: async (options) => {
       await built.app.close();
-      if (!options?.keepDatabase) await dropTestDatabase(dbName);
+      if (!options?.keepDatabase) {
+        await dropTestDatabase(dbName);
+        if (!env.MEDIA_DIR) rmSync(mediaDir, { recursive: true, force: true });
+      }
     },
   };
   return server;
@@ -138,6 +147,26 @@ export class TestClient {
   }
   delete<T = any>(path: string, body?: unknown) {
     return this.request<T>('DELETE', path, body);
+  }
+
+  /** Uploads raw bytes (image endpoints) with the session cookie and CSRF token. */
+  async upload<T = any>(
+    path: string,
+    data: Buffer,
+    contentType = 'image/png',
+    options: { csrf?: boolean; method?: 'PUT' | 'POST' } = {},
+  ): Promise<ApiResponse<T>> {
+    const headers: Record<string, string> = { 'content-type': contentType };
+    if (this.origin) headers.origin = this.origin;
+    if (this.cookie) headers.cookie = this.cookie;
+    if (this.csrf && options.csrf !== false) headers['x-csrf-token'] = this.csrf;
+    const raw = await this.app.inject({ method: options.method ?? 'PUT', url: `/api/v1${path}`, headers, payload: data });
+    return { status: raw.statusCode, body: (raw.body ? JSON.parse(raw.body) : null) as T, raw };
+  }
+
+  /** GET without JSON parsing (binary responses such as media). */
+  async fetchRaw(path: string, headers: Record<string, string> = {}): Promise<LightMyRequestResponse> {
+    return this.app.inject({ method: 'GET', url: path, headers: { ...(this.cookie ? { cookie: this.cookie } : {}), ...headers } });
   }
 
   adopt(response: ApiResponse<AuthSessionResponse>): this {

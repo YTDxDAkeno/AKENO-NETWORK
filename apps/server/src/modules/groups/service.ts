@@ -7,7 +7,7 @@ import type { DbExecutor } from '../../database/client.js';
 import { conversations, groupMembers, groups, invitations, profiles, users } from '../../database/schema/index.js';
 import { Effects } from '../../utils/effects.js';
 import { AppError, Errors } from '../../utils/errors.js';
-import { userCardColumns } from '../users/service.js';
+import { placeholderSummary, userCardColumns } from '../users/service.js';
 
 type GroupRow = typeof groups.$inferSelect;
 
@@ -81,13 +81,7 @@ export class GroupsService {
         name: row.name,
         description: row.description,
         joinPolicy: row.joinPolicy,
-        owner: (ownerId && ownerSummaries.get(ownerId)) || {
-          id: ownerId ?? '',
-          onlineId: 'unknown',
-          displayName: 'Unknown user',
-          avatar: 'bot',
-          deleted: true,
-        },
+        owner: (ownerId && ownerSummaries.get(ownerId)) || placeholderSummary(ownerId ?? ''),
         memberCount: countMap.get(row.id) ?? 0,
         myRole,
         conversationId: myRole ? row.conversationId : null,

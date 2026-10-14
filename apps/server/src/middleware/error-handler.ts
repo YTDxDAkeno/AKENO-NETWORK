@@ -18,7 +18,7 @@ export function registerErrorHandling(app: FastifyInstance): void {
       return reply.status(413).send(body('PAYLOAD_TOO_LARGE', 'The request is too large.', request.id));
     }
     if (error.code === 'FST_ERR_CTP_INVALID_MEDIA_TYPE') {
-      return reply.status(415).send(body('UNSUPPORTED_MEDIA_TYPE', 'Requests must be sent as JSON.', request.id));
+      return reply.status(415).send(body('UNSUPPORTED_MEDIA_TYPE', 'This content type is not accepted here. Send JSON (or an image file on upload endpoints).', request.id));
     }
     const pg = getPgError(error);
     if (pg?.code === '40P01' || pg?.code === '40001') {

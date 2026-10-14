@@ -9,6 +9,8 @@ import {
   PRESENCE_VISIBILITY,
   PROFILE_VISIBILITY,
 } from '../constants.js';
+import { BADGE_IDS, FEATURED_BADGES_MAX } from '../badges.js';
+import { HEX_COLOR_PATTERN, PROFILE_THEME_IDS } from '../themes.js';
 import { gameTitleIdSchema } from './activity.js';
 import { multiLineText, singleLineText } from './common.js';
 
@@ -27,6 +29,26 @@ export const updateProfileSchema = z
   })
   .partial();
 export type UpdateProfileInput = z.input<typeof updateProfileSchema>;
+
+export const hexColorSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .regex(HEX_COLOR_PATTERN, 'Use a colour such as #4f7cff.');
+
+/** Theme, banner overlay and featured badges. Uploaded images have their own endpoints. */
+export const updateAppearanceSchema = z
+  .object({
+    theme: z.enum(PROFILE_THEME_IDS),
+    accentColor: hexColorSchema.nullable(),
+    bannerOverlay: z.boolean(),
+    featuredBadges: z
+      .array(z.enum(BADGE_IDS))
+      .max(FEATURED_BADGES_MAX, `You can feature up to ${FEATURED_BADGES_MAX} badges.`)
+      .refine((ids) => new Set(ids).size === ids.length, 'Each badge can only be featured once.'),
+  })
+  .partial();
+export type UpdateAppearanceInput = z.infer<typeof updateAppearanceSchema>;
 
 export const updatePrivacySchema = z
   .object({

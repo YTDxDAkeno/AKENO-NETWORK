@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, gt, inArray, ne, or, sql } from 'drizzle-orm';
-import type { PartyDto, createPartySchema, updatePartySchema } from '@akeno/shared';
+import type { PartyDto, ProfilePartyDto, createPartySchema, updatePartySchema } from '@akeno/shared';
 import type { z } from 'zod';
 import type { AppContext } from '../../app/context.js';
 import type { DbExecutor } from '../../database/client.js';
@@ -11,7 +11,7 @@ import { userCardColumns } from '../users/service.js';
 type PartyRow = typeof parties.$inferSelect;
 
 export const PARTY_VOICE_STATUS = {
-  available: false as const,
+  available: false,
   reason: 'Voice chat is not available in this release. Use party text chat to talk with your party.',
 };
 
@@ -75,6 +75,7 @@ export class PartiesService {
           user: this.ctx.users.withPresence(row.card, viewerId, friends.has(row.card.id), blocked.has(row.card.id)),
           joinedAt: row.joinedAt.toISOString(),
           isLeader: row.card.id === party.leaderId,
+          voice: { connected: false, muted: null },
         }));
       const isMember = members.some((member) => member.user.id === viewerId);
       return {
@@ -100,6 +101,21 @@ export class PartiesService {
     if (!row) return null;
     const [dto] = await this.toDtos(userId, [row]);
     return dto ?? null;
+  }
+
+  /** The party a profile owner is in, when the viewer may see that party. */
+  async profileParty(viewerId: string, targetId: string): Promise<ProfilePartyDto | null> {
+    const partyId = await this.currentPartyId(targetId);
+    if (!partyId) return null;
+    const [party] = await this.ctx.db.select().from(parties).where(eq(parties.id, partyId));
+    if (!party || !(await this.canView(viewerId, party))) return null;
+    return {
+      id: party.id,
+      name: party.name,
+      memberCount: party.memberCount,
+      maxMembers: party.maxMembers,
+      isMember: (await this.currentPartyId(viewerId)) === party.id,
+    };
   }
 
   /** Parties the user could join: friends' parties open to friends, plus parties they are invited to. */

@@ -57,6 +57,15 @@ const envSchema = z
     RATE_LIMIT_ENABLED: booleanString.default(true),
     RATE_LIMIT_MAX_PER_MINUTE: z.coerce.number().int().min(10).max(100_000).default(300),
 
+    /** Persistent directory for uploaded images (profile pictures, banners, game artwork). */
+    MEDIA_DIR: z.string().default('./data/media'),
+    /** Upper bound for all stored media together; uploads are refused beyond it. */
+    MEDIA_MAX_TOTAL_MB: z.coerce.number().int().min(16).max(1_000_000).default(2048),
+    /** Uploads are refused when the media volume has less free space than this. */
+    MEDIA_MIN_FREE_MB: z.coerce.number().int().min(0).max(1_000_000).default(512),
+    /** Concurrent image decodes (each may use up to ~150 MB of memory for the largest inputs). */
+    MEDIA_PROCESSING_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(1),
+
     /** Directory containing the built web client (apps/web/dist). Empty disables static hosting. */
     WEB_DIST_DIR: z.string().default(''),
     MIGRATE_ON_START: booleanString.default(false),
@@ -115,6 +124,12 @@ export interface AppConfig {
   rateLimit: {
     enabled: boolean;
     maxPerMinute: number;
+  };
+  media: {
+    dir: string;
+    maxTotalBytes: number;
+    minFreeBytes: number;
+    concurrency: number;
   };
   webDistDir: string | null;
   migrateOnStart: boolean;
@@ -182,6 +197,12 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
     rateLimit: {
       enabled: env.RATE_LIMIT_ENABLED,
       maxPerMinute: env.RATE_LIMIT_MAX_PER_MINUTE,
+    },
+    media: {
+      dir: env.MEDIA_DIR.trim(),
+      maxTotalBytes: env.MEDIA_MAX_TOTAL_MB * 1024 * 1024,
+      minFreeBytes: env.MEDIA_MIN_FREE_MB * 1024 * 1024,
+      concurrency: env.MEDIA_PROCESSING_CONCURRENCY,
     },
     webDistDir: env.WEB_DIST_DIR.trim() || null,
     migrateOnStart: env.MIGRATE_ON_START,

@@ -13,6 +13,7 @@ import {
   uuid,
   varchar,
 } from 'drizzle-orm/pg-core';
+import { mediaObjects } from './media.js';
 import {
   accountStatusEnum,
   friendRequestPrivacyEnum,
@@ -83,6 +84,13 @@ export const profiles = pgTable(
     gamePlaytimeVisible: boolean('game_playtime_visible').notNull().default(true),
     /** Title IDs this user excluded: never tracked, and earlier sessions are hidden from others. */
     gameExcludedTitles: text('game_excluded_titles').array().notNull().default(sql`'{}'::text[]`),
+    /** Uploaded profile picture; null shows the preset avatar. */
+    avatarMediaId: varchar('avatar_media_id', { length: 32 }).references((): AnyPgColumn => mediaObjects.id, { onDelete: 'set null' }),
+    bannerMediaId: varchar('banner_media_id', { length: 32 }).references((): AnyPgColumn => mediaObjects.id, { onDelete: 'set null' }),
+    bannerOverlay: boolean('banner_overlay').notNull().default(true),
+    theme: varchar('theme', { length: 16 }).notNull().default('default'),
+    accentColor: varchar('accent_color', { length: 7 }),
+    featuredBadges: text('featured_badges').array().notNull().default(sql`'{}'::text[]`),
     ...timestamps,
   },
   (t) => [index('profiles_display_name_idx').on(sql`lower(${t.displayName})`)],

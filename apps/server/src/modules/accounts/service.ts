@@ -9,6 +9,7 @@ import {
   friendships,
   notifications,
   profiles,
+  userBadges,
   userBlocks,
   users,
 } from '../../database/schema/index.js';
@@ -80,9 +81,16 @@ export class AccountService {
     const userId = auth.userId;
     const formerFriends = await this.ctx.relations.friendIds(userId);
     const effects = new Effects();
-    await this.ctx.db.transaction(async (tx) => {
+    const removedMedia = await this.ctx.db.transaction(async (tx) => {
       await this.removeFootprint(tx, userId, effects);
       const now = new Date();
+      // Uploaded pictures and banners are deleted with the account (files after the commit).
+      const [images] = await tx
+        .select({ avatar: profiles.avatarMediaId, banner: profiles.bannerMediaId })
+        .from(profiles)
+        .where(eq(profiles.userId, userId));
+      const media = await this.ctx.media.softDelete([images?.avatar, images?.banner], tx);
+      await tx.delete(userBadges).where(eq(userBadges.userId, userId));
       await tx
         .update(users)
         .set({
@@ -107,6 +115,11 @@ export class AccountService {
           activity: null,
           activityUpdatedAt: null,
           presencePreference: 'invisible',
+          avatarMediaId: null,
+          bannerMediaId: null,
+          theme: 'default',
+          accentColor: null,
+          featuredBadges: [],
           updatedAt: now,
         })
         .where(eq(profiles.userId, userId));
@@ -114,7 +127,9 @@ export class AccountService {
         { actorId: userId, action: 'account.deleted', targetType: 'user', targetId: userId, ipAddress: meta.ip },
         tx,
       );
+      return media;
     });
+    await this.ctx.media.removeFiles(removedMedia);
     await effects.run((error) => this.ctx.log.error({ err: error }, 'Account deletion side effect failed'));
     this.ctx.hub.disconnectUser(userId, 'This account was deleted.', REALTIME_CLOSE_CODES.sessionRevoked);
     this.ctx.hub.sendToUsers(formerFriends, { type: 'friends.changed', data: { reason: 'friend_removed', userId } });

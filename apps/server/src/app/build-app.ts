@@ -20,6 +20,7 @@ import { gameSessionsRoutes } from '../modules/game-sessions/routes.js';
 import { groupsRoutes } from '../modules/groups/routes.js';
 import { healthRoutes } from '../modules/health/routes.js';
 import { invitationsRoutes } from '../modules/invitations/routes.js';
+import { mediaRoutes } from '../modules/media/routes.js';
 import { messagesRoutes } from '../modules/messages/routes.js';
 import { notificationsRoutes } from '../modules/notifications/routes.js';
 import { partiesRoutes } from '../modules/parties/routes.js';
@@ -142,6 +143,7 @@ export async function buildApp(options: BuildAppOptions): Promise<BuiltApp> {
     { prefix: API_PREFIX },
   );
   await app.register(realtimeGateway(ctx));
+  await app.register(mediaRoutes(ctx));
 
   const servesWeb = config.webDistDir ? await registerStaticWeb(app, config.webDistDir) : false;
   app.setNotFoundHandler((request, reply) => {
@@ -160,6 +162,7 @@ export async function buildApp(options: BuildAppOptions): Promise<BuiltApp> {
       ctx.devices.deleteExpired(),
       ctx.invitations.expireStale(),
       ctx.notifications.prune(),
+      ctx.media.maintenance(),
     ])
       .then(() => ctx.auth.throttle.prune())
       .catch((error: unknown) => ctx.log.error({ err: error }, 'Housekeeping failed'));
@@ -168,6 +171,8 @@ export async function buildApp(options: BuildAppOptions): Promise<BuiltApp> {
 
   let activitySweep: NodeJS.Timeout | null = null;
   app.addHook('onReady', async () => {
+    await ctx.media.init();
+    await ctx.games.load();
     await ctx.activity.load();
     if (options.maintenance !== false) {
       stopMaintenance = startRealtimeMaintenance(ctx);

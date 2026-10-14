@@ -40,6 +40,7 @@ export function isApiLikePath(url: string): boolean {
     url.startsWith('/health') ||
     url === '/ws' ||
     url.startsWith('/ws?') ||
-    url.startsWith('/assets/')
+    url.startsWith('/assets/') ||
+    url.startsWith('/media/')
   );
 }

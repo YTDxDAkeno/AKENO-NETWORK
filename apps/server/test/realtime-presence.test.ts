@@ -67,7 +67,7 @@ describe('presence rules', () => {
   });
 
   it('shows a detected game only to the game audience while the user appears online', () => {
-    const game = { titleId: 'PPSA01234', name: 'Racing Game', platform: 'PS5' as const, startedAt: '2026-01-01T00:00:00.000Z' };
+    const game = { titleId: 'PPSA01234', name: 'Racing Game', platform: 'PS5' as const, startedAt: '2026-01-01T00:00:00.000Z', art: null };
     const playing = { ...base, game };
     expect(computePresenceView(playing, friend).game).toEqual(game); // default audience: friends
     expect(computePresenceView({ ...playing, presenceVisibility: 'everyone' }, stranger).game).toBeNull();

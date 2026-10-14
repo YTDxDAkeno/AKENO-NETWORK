@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { CSRF_HEADER } from '@akeno/shared';
+import { CSRF_HEADER, MEDIA_PATH_PREFIX } from '@akeno/shared';
 import type { AppContext } from '../app/context.js';
 import type { AuthContextData, IssuedSession, RequestMeta } from '../modules/auth/service.js';
 import { deviceRouteDecision } from '../modules/devices/scopes.js';
@@ -19,7 +19,7 @@ const BEARER_PATTERN = /^Bearer[ ]+(\S+)$/i;
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 function needsSession(url: string): boolean {
-  return url.startsWith('/api/') || url === '/ws' || url.startsWith('/ws?');
+  return url.startsWith('/api/') || url === '/ws' || url.startsWith('/ws?') || url.startsWith(`${MEDIA_PATH_PREFIX}/`);
 }
 
 /**

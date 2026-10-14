@@ -116,6 +116,7 @@ export class AdminService {
         lastSeenAt: users.lastSeenAt,
         displayName: profiles.displayName,
         avatar: profiles.avatar,
+        avatarMediaId: profiles.avatarMediaId,
         sessions: sql<number>`(SELECT count(*)::int FROM auth_sessions s WHERE s.user_id = ${users.id})`,
       })
       .from(users)
@@ -201,6 +202,7 @@ export class AdminService {
       .from(users);
     const memory = process.memoryUsage();
     const pool = this.ctx.db.$client;
+    const media = await this.ctx.media.stats();
     return {
       users: { total: counts?.total ?? 0, active: counts?.active ?? 0, suspended: counts?.suspended ?? 0 },
       realtime: { connectedUsers: this.ctx.hub.connectedUserIds().length, connections: this.ctx.hub.connectionCount() },
@@ -211,6 +213,7 @@ export class AdminService {
         nodeVersion: process.version,
       },
       database: { totalConnections: pool.totalCount, idleConnections: pool.idleCount, waitingRequests: pool.waitingCount },
+      media: { ...media, limitBytes: this.ctx.config.media.maxTotalBytes },
     };
   }
 }

@@ -9,7 +9,7 @@ vi.mock('../../src/lib/api', () => ({ api: { get: (path: string) => getMock(path
 
 const { applyRealtimeMessage, catchUpMessages } = await import('../../src/lib/message-sync');
 
-const sender = { id: 'u1', onlineId: 'bob', displayName: 'Bob', avatar: 'nova', deleted: false };
+const sender = { id: 'u1', onlineId: 'bob', displayName: 'Bob', avatar: 'nova', avatarImage: null, deleted: false };
 const message = (id: number): MessageDto => ({
   id,
   conversationId: 'c1',

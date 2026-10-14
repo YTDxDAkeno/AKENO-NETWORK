@@ -34,7 +34,7 @@ describe('formatting helpers', () => {
   });
 
   it('describes notifications with links', () => {
-    const actor = { id: 'u', onlineId: 'bob', displayName: 'Bob', avatar: 'nova', deleted: false };
+    const actor = { id: 'u', onlineId: 'bob', displayName: 'Bob', avatar: 'nova', avatarImage: null, deleted: false };
     expect(describeNotification({ type: 'friend_request.received', actor, requestId: 'r' })).toEqual({
       text: 'Bob sent you a friend request.',
       href: '/friends?tab=requests',

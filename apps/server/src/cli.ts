@@ -1,7 +1,7 @@
 import { createInterface } from 'node:readline';
 import { parseArgs } from 'node:util';
 import { and, eq } from 'drizzle-orm';
-import { ONLINE_ID_PATTERN, checkPasswordQuality, passwordSchema } from '@akeno/shared';
+import { GRANTABLE_BADGE_IDS, ONLINE_ID_PATTERN, checkPasswordQuality, passwordSchema, type BadgeId } from '@akeno/shared';
 import { createContext } from './app/context.js';
 import { createLogger } from './app/logger.js';
 import { loadConfig } from './config/env.js';
@@ -27,6 +27,11 @@ Commands:
        [--note <text>]            Optional note shown in the admin panel.
   reset-password --online-id <id> Set a new password and sign the account out everywhere.
        [--password-stdin]
+  grant-badge --online-id <id> --badge <badge>
+                                  Grant an AKENO badge (any badge except the derived
+                                  "administrator"), e.g. founder. Recorded in the audit log.
+       [--note <text>]
+  revoke-badge --online-id <id> --badge <badge>
   seed                            Create demo data (development only; refused in production).
   help                            Show this help.
 
@@ -90,6 +95,7 @@ async function main(): Promise<void> {
       'max-uses': { type: 'string' },
       'expires-in-hours': { type: 'string' },
       note: { type: 'string' },
+      badge: { type: 'string' },
     },
     allowPositionals: false,
     strict: true,
@@ -177,6 +183,27 @@ async function main(): Promise<void> {
           await ctx.audit.record({ actorId: null, action: 'cli.password_reset', targetType: 'user', targetId: user.id }, tx);
         });
         console.log(`Password for "${user.onlineId}" was reset; all sessions were signed out and all devices unpaired.`);
+        break;
+      }
+
+      case 'grant-badge':
+      case 'revoke-badge': {
+        const onlineId = values['online-id']?.trim().toLowerCase();
+        const badge = values.badge?.trim() as BadgeId | undefined;
+        if (!onlineId) fail('Provide --online-id.');
+        if (!badge || !GRANTABLE_BADGE_IDS.includes(badge)) fail(`Provide --badge, one of: ${GRANTABLE_BADGE_IDS.join(', ')}.`);
+        const [user] = await database.db
+          .select({ id: users.id, onlineId: users.onlineId })
+          .from(users)
+          .where(and(eq(users.onlineIdNormalized, onlineId), eq(users.status, 'active')));
+        if (!user) fail(`No active account with Online ID "${onlineId}".`);
+        if (command === 'grant-badge') {
+          await ctx.badges.grant(null, user.id, badge, (values.note ?? 'Granted by the server operator').slice(0, 100), null);
+          console.log(`"${user.onlineId}" now has the badge "${badge}".`);
+        } else {
+          await ctx.badges.revoke(null, user.id, badge, null);
+          console.log(`The badge "${badge}" was removed from "${user.onlineId}".`);
+        }
         break;
       }
 
