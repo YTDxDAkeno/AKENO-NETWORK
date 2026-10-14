@@ -77,6 +77,8 @@ static const char *pair_state_name(app_pair_state s) {
 
 /* ---- /api/state --------------------------------------------------------------------------- */
 
+static void inbox_summary_json(const akeno_app *app, akeno_buf *b);
+
 static void route_state(akeno_app *app, ui_response *r) {
     akeno_buf *b = &r->body;
     long long now = akeno_now_ms();
@@ -109,11 +111,73 @@ static void route_state(akeno_app *app, ui_response *r) {
     akeno_buf_append_str(b, "},\"notifications\":{");
     json_kv_bool(b, "messages", app->notify_messages, 0);
     json_kv_bool(b, "social", app->notify_social, 1);
-    akeno_buf_append_str(b, "}");
+    json_kv_bool(b, "actionable", app->actionable_notifications, 1);
+    akeno_buf_append_str(b, "},\"activity\":");
+    app_activity_json(app, b, 0);
+    akeno_buf_append_str(b, ",\"inbox\":");
+    inbox_summary_json(app, b);
     json_kv_int(b, "eventsNext", (long long)app->next_seq, 1);
     akeno_buf_append_str(b, "}");
     pthread_mutex_unlock(&app->lock);
     respond_json(r, 200);
+}
+
+/* ---- /api/inbox: recent messages for quick access ----------------------------------------- */
+
+/* Caller holds app->lock. */
+static void recent_json(const app_recent_message *m, long long now, akeno_buf *b) {
+    akeno_buf_printf(b, "{\"seq\":%llu", m->seq);
+    json_kv_str(b, "open", m->open, 1);
+    json_kv_str(b, "kind", m->kind, 1);
+    json_kv_str(b, "from", m->from, 1);
+    json_kv_str(b, "preview", m->preview, 1);
+    json_kv_int(b, "secondsAgo", (now - m->at) / 1000, 1);
+    akeno_buf_append_str(b, "}");
+}
+
+/* {"latestSeq":N,"seenSeq":N,"unseen":N,"latest":{...}|null}; caller holds app->lock. */
+static void inbox_summary_json(const akeno_app *app, akeno_buf *b) {
+    long long now = akeno_now_ms();
+    int unseen = 0;
+    for (int i = 0; i < APP_RECENT_MESSAGES; i++)
+        if (app->recent[i].seq && app->recent[i].seq > app->recent_seen_seq) unseen++;
+    akeno_buf_printf(b, "{\"latestSeq\":%llu,\"seenSeq\":%llu,\"unseen\":%d,\"latest\":", app->recent_seq, app->recent_seen_seq, unseen);
+    const app_recent_message *m = app->recent_seq ? &app->recent[app->recent_seq % APP_RECENT_MESSAGES] : NULL;
+    if (m && m->seq == app->recent_seq) recent_json(m, now, b);
+    else akeno_buf_append_str(b, "null");
+    akeno_buf_append_str(b, "}");
+}
+
+static void route_inbox(akeno_app *app, ui_response *r) {
+    akeno_buf *b = &r->body;
+    long long now = akeno_now_ms();
+    pthread_mutex_lock(&app->lock);
+    akeno_buf_printf(b, "{\"ok\":true,\"seenSeq\":%llu,\"messages\":[", app->recent_seen_seq);
+    int first = 1;
+    unsigned long long newest = app->recent_seq;
+    for (unsigned long long seq = newest; seq > 0 && seq + APP_RECENT_MESSAGES > newest; seq--) {
+        const app_recent_message *m = &app->recent[seq % APP_RECENT_MESSAGES];
+        if (m->seq != seq) continue;
+        if (!first) akeno_buf_append_str(b, ",");
+        recent_json(m, now, b);
+        first = 0;
+    }
+    akeno_buf_append_str(b, "]}");
+    pthread_mutex_unlock(&app->lock);
+    respond_json(r, 200);
+}
+
+static void route_inbox_seen(akeno_app *app, const akeno_json *root, ui_response *r) {
+    int64_t seq = 0;
+    if (!root || akeno_json_int64(akeno_json_get(root, "seq"), &seq) != 0 || seq < 0) {
+        respond_error(r, 400, "INVALID_BODY", "Expected {\"seq\": number}.");
+        return;
+    }
+    pthread_mutex_lock(&app->lock);
+    if ((unsigned long long)seq > app->recent_seq) seq = (int64_t)app->recent_seq;
+    if ((unsigned long long)seq > app->recent_seen_seq) app->recent_seen_seq = (unsigned long long)seq;
+    pthread_mutex_unlock(&app->lock);
+    respond_ok(r);
 }
 
 /* ---- /api/settings ------------------------------------------------------------------------ */
@@ -155,6 +219,10 @@ static void route_settings(akeno_app *app, const akeno_json *root, ui_response *
     if (name) snprintf(app->device_name, sizeof(app->device_name), "%s", name);
     app->notify_messages = akeno_json_get_bool(root, "notifyMessages", app->notify_messages);
     app->notify_social = akeno_json_get_bool(root, "notifySocial", app->notify_social);
+    int activity_before = app->activity_enabled;
+    app->activity_enabled = akeno_json_get_bool(root, "activityEnabled", app->activity_enabled);
+    if (app->activity_enabled && !activity_before) app->act_wanted = 1;
+    app->actionable_notifications = akeno_json_get_bool(root, "actionableNotifications", app->actionable_notifications);
     if (server_changed) app->credentials_changed = 1;
     pthread_mutex_unlock(&app->lock);
     if (app_save_settings(app) != AKENO_OK) {
@@ -355,7 +423,16 @@ static void route_diagnostics(akeno_app *app, ui_response *r) {
     json_kv_int(b, "sent", app->notifications_sent, 1);
     json_kv_int(b, "failed", app->notifications_failed, 1);
     json_kv_int(b, "dropped", app->notifications_dropped, 1);
-    akeno_buf_append_str(b, "},\"realtime\":{");
+    akeno_buf_append_str(b, ",\"actionable\":{");
+    json_kv_bool(b, "enabled", app->actionable_notifications, 0);
+    json_kv_str(b, "method", app->platform.actionable, 1);
+    json_kv_str(b, "status", akeno_platform_actionable_status(), 1);
+    json_kv_int(b, "sent", app->actionable_sent, 1);
+    json_kv_int(b, "refused", app->actionable_failed, 1);
+    json_kv_int(b, "unavailable", app->actionable_unavailable, 1);
+    akeno_buf_append_str(b, "}},\"activity\":");
+    app_activity_json(app, b, 1);
+    akeno_buf_append_str(b, ",\"realtime\":{");
     json_kv_str(b, "state", app->rt_state, 0);
     json_kv_str(b, "detail", app->rt_detail, 1);
     akeno_buf_append_str(b, "}");
@@ -415,6 +492,23 @@ static void route_connection_test(akeno_app *app, ui_response *r) {
             akeno_status_name(status), elapsed, tls, status == AKENO_OK ? "" : err);
 }
 
+/* ---- /t/<ticket>: one-time links from notification buttons ------------------------------- */
+
+static void route_ticket(akeno_app *app, const char *id, ui_response *r) {
+    char open[APP_OPEN_MAX];
+    if (app_ticket_redeem(app, id, open, sizeof(open)) != 0 || !app_valid_open(open)) {
+        r->status = 403;
+        r->content_type = "text/plain; charset=utf-8";
+        akeno_buf_append_str(&r->body, "This AKENO NETWORK link has expired or was already used. Start AKENO NETWORK again to open its page.\n");
+        app_log(app, AKENO_LOG_WARN, "ui.ticket_rejected", "A notification link was used after expiry, twice, or was invalid.");
+        return;
+    }
+    /* The page secret goes only into the fragment of a same-origin redirect, as when AKENO opens the page. */
+    r->status = 302;
+    akeno_buf_printf(&r->location, "/#t=%s%s%s", app->session_token, open[0] ? "&open=" : "", open);
+    app_log(app, AKENO_LOG_INFO, "ui.ticket_redeemed", "Opened the page from a notification (%s).", open[0] ? open : "home");
+}
+
 /* ---- Dispatcher --------------------------------------------------------------------------- */
 
 static int is(const ui_request *req, const char *method, const char *path) {
@@ -459,8 +553,15 @@ void app_route(akeno_app *app, const ui_request *req, const char *body, size_t b
             respond_error(r, 403, "FORBIDDEN", "Not allowed.");
             return;
         }
-        app_open_ui(app);
+        /* A second launch reopens the page at the newest message the page has not shown yet. */
+        char open[APP_OPEN_MAX];
+        app_latest_message_target(app, open, sizeof(open));
+        app_open_ui_at(app, open);
         respond_ok(r);
+        return;
+    }
+    if (strcmp(req->method, "GET") == 0 && strncmp(req->path, "/t/", 3) == 0) {
+        route_ticket(app, req->path + 3, r);
         return;
     }
     if (strncmp(req->path, "/api/", 5) != 0) {
@@ -483,6 +584,11 @@ void app_route(akeno_app *app, const ui_request *req, const char *body, size_t b
         route_state(app, r);
     } else if (is(req, "GET", "/api/events")) {
         route_events(app, req, r);
+    } else if (is(req, "GET", "/api/inbox")) {
+        route_inbox(app, r);
+    } else if (is(req, "POST", "/api/inbox/seen")) {
+        doc = akeno_json_parse(body ? body : "", body_len, NULL, 0);
+        route_inbox_seen(app, akeno_json_root(doc), r);
     } else if (is(req, "POST", "/api/settings")) {
         doc = akeno_json_parse(body ? body : "", body_len, NULL, 0);
         route_settings(app, akeno_json_root(doc), r);
@@ -503,6 +609,12 @@ void app_route(akeno_app *app, const ui_request *req, const char *body, size_t b
         route_diagnostics(app, r);
     } else if (is(req, "POST", "/api/diagnostics/connection")) {
         route_connection_test(app, r);
+    } else if (is(req, "POST", "/api/diagnostics/actionable-test")) {
+        int rc = app_test_actionable(app);
+        respond_json(r, 200);
+        akeno_buf_printf(&r->body, "{\"ok\":%s,\"result\":%d", rc == 0 ? "true" : "false", rc);
+        json_kv_str(&r->body, "status", akeno_platform_actionable_status(), 1);
+        akeno_buf_append_str(&r->body, "}");
     } else if (is(req, "POST", "/api/exit")) {
         app_log(app, AKENO_LOG_INFO, "app.exit_requested", "Exit requested from the console page.");
         app->stop = 1;

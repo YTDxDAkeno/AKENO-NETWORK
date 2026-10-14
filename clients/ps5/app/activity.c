@@ -21,11 +21,12 @@
 
 #include "app_internal.h"
 #include "client_internal.h"
+#include "transport.h"
 
 #define DEFAULT_SCAN_MS 10000
 #define DEFAULT_HEARTBEAT_MS 60000
 #define CONFIRM_SCANS 2
-#define MAX_PROCS 2048
+#define MAX_PROCS 1024
 #define RETRY_MS 15000
 #define RATE_LIMITED_MS 60000
 #define DISABLED_RETRY_MS (5 * 60 * 1000)
@@ -90,15 +91,22 @@ void app_activity_json(const akeno_app *app, akeno_buf *b, int diagnostics) {
                          a->last_scan_at ? (now - a->last_scan_at) / 1000 : -1, a->last_heartbeat_at ? (now - a->last_heartbeat_at) / 1000 : -1);
         akeno_buf_append_str(b, ",\"lastScan\":{\"result\":");
         akeno_buf_append_json_string(b, a->last_scan_at ? akeno_scan_kind_name(s->kind) : "not yet");
-        akeno_buf_printf(b, ",\"processes\":%d,\"appProcesses\":%d,\"stoppedGames\":%d,\"altLayoutHits\":%d,\"candidates\":[",
-                         s->processes, s->app_processes, s->stopped_games, s->alt_layout_hits);
+        akeno_buf_printf(b, ",\"processes\":%d,\"appProcesses\":%d,\"stoppedGames\":%d,\"candidates\":[", s->processes, s->app_processes,
+                         s->stopped_games);
         for (int i = 0; i < s->candidates && i < AKENO_SCAN_MAX_CANDIDATES; i++) {
             if (i) akeno_buf_append_str(b, ",");
             akeno_buf_append_json_string(b, s->candidate_ids[i]);
         }
+        akeno_buf_append_str(b, "],\"layout\":");
+        akeno_buf_append_json_string(b, akeno_layout_name(s->layout));
+        akeno_buf_printf(b, ",\"layoutVotes\":{\"offset20\":%d,\"offset16\":%d},\"probes\":[", s->layout_votes_ps, s->layout_votes_alt);
+        for (int i = 0; i < s->probe_count && i < AKENO_SCAN_PROBES; i++) {
+            if (i) akeno_buf_append_str(b, ",");
+            akeno_buf_append_json_string(b, s->probes[i]);
+        }
         akeno_buf_append_str(b, "],\"error\":");
         akeno_buf_append_json_string(b, s->error);
-        akeno_buf_append_str(b, "}");
+        akeno_buf_append_str(b, "},\"focus\":\"not determined: a running game process is reported, not the application in the foreground\"");
     }
     akeno_buf_append_str(b, "}");
 }
@@ -237,6 +245,10 @@ static void scan(act_ctx *c) {
     char err[120] = "";
     int n = akeno_platform_list_apps(c->procs, MAX_PROCS, &total, err, sizeof(err));
     akeno_game_scan result;
+    if (n >= 0 && total > (size_t)n) {
+        n = -1; /* A truncated list could hide a second game: no claim. */
+        snprintf(err, sizeof(err), "More than %d processes; the list was not evaluated.", MAX_PROCS);
+    }
     if (n < 0) {
         memset(&result, 0, sizeof(result));
         result.kind = AKENO_SCAN_FAILED;

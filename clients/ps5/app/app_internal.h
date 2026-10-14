@@ -57,14 +57,30 @@ typedef struct {
     akeno_game_scan scan;
 } app_activity;
 
-/* One-time links for notification buttons: exchange for the page secret once, then expire. */
+/*
+ * One-time links for notification buttons. A button's URL ends up in the system's notification
+ * list, so it never contains the page secret: it carries a random ticket that the local server
+ * exchanges once, within APP_TICKET_MS, for a redirect to the page (see /t/ in app_routes.c).
+ */
 #define APP_TICKETS 8
-#define APP_TICKET_MS (15 * 60 * 1000)
+#define APP_TICKET_MS (10 * 60 * 1000)
+#define APP_OPEN_MAX 64
 typedef struct {
     char id[33];
-    char open[64];  /* What the page should show, e.g. "conversation:<id>" or "". */
+    char open[APP_OPEN_MAX]; /* What the page should show, e.g. "conversation:<id>" or "". */
     long long expires_at;
 } app_ticket;
+
+/* Recent messages from other people, newest last, for the page's quick-access list (app->lock). */
+#define APP_RECENT_MESSAGES 12
+typedef struct {
+    unsigned long long seq;  /* Increasing; 0 = empty slot. */
+    char open[APP_OPEN_MAX]; /* Page target: "conversation:<id>", "party" or "messages". */
+    char kind[12];           /* direct, group, party */
+    char from[80];
+    char preview[160];
+    long long at;            /* Local time received (ms). */
+} app_recent_message;
 
 struct akeno_app {
     akeno_app_options opt;
@@ -88,8 +104,8 @@ struct akeno_app {
     char device_name[64];
     int notify_messages;
     int notify_social;
-    int activity_enabled;          /* Detect and share the game being played. */
-    int actionable_notifications;  /* Experimental button notifications. */
+    int activity_enabled;          /* Detect and share the game being played (default on). */
+    int actionable_notifications;  /* Experimental button notifications (default off). */
 
     /* Local UI (immutable after start). */
     int port;
@@ -138,11 +154,14 @@ struct akeno_app {
     int act_wanted;
     app_activity act;
 
-    /* Quick access to the last message notification (lock). */
-    char quick_open[64];  /* "conversation:<id>" or "party:<id>" */
-    char quick_from[80];
-    long long quick_at;
+    /* Quick access to recent messages (lock). */
+    app_recent_message recent[APP_RECENT_MESSAGES];
+    unsigned long long recent_seq;
+    unsigned long long recent_seen_seq; /* The page has shown everything up to here. */
     app_ticket tickets[APP_TICKETS];
+    int actionable_sent;
+    int actionable_failed;      /* The system refused a button notification (plain one sent instead). */
+    int actionable_unavailable; /* The function could not be loaded (plain one sent instead). */
 
     /* Events for the UI (lock). */
     app_event events[APP_EVENT_RING];
@@ -179,6 +198,14 @@ void app_pair_cancel(akeno_app *app);
 void app_mark_unpaired(akeno_app *app, const char *why);
 /* Opens the page in the system browser; returns 0 when the system accepted the request. */
 int app_open_ui(akeno_app *app);
+/* Same, showing `open` (a page target as in app_recent_message, or "" for the default view). */
+int app_open_ui_at(akeno_app *app, const char *open);
+/* The target of the newest recent message the page has not shown yet, or "" (copies into out). */
+void app_latest_message_target(akeno_app *app, char *out, size_t out_len);
+/* 1 when target is a page target the console app itself produces (see app_valid_open). */
+int app_valid_open(const char *target);
+/* Sends a test button notification (Diagnostics). Returns the platform result (0, -1, -2). */
+int app_test_actionable(akeno_app *app);
 void app_copy_str(char *dst, size_t dst_len, const char *src);
 /* Starts a worker thread with an explicit stack size. Returns 0 on success. */
 int app_start_worker(pthread_t *thread, void *(*fn)(void *), void *arg);
@@ -187,6 +214,8 @@ int app_exit_requested(void);
 int app_ticket_url(akeno_app *app, const char *open, char *url, size_t url_len);
 /* Redeems a ticket: copies its target and returns 0 once; -1 when unknown, used or expired. */
 int app_ticket_redeem(akeno_app *app, const char *id, char *open, size_t open_len);
+
+/* platform: diagnostics text of the experimental button notifications. */
 
 /* activity.c (main thread) */
 void app_activity_init(akeno_app *app);
@@ -199,6 +228,7 @@ void app_activity_json(const akeno_app *app, akeno_buf *b, int diagnostics);
 typedef struct {
     int status;
     const char *content_type;
+    akeno_buf location; /* Redirect target (status 302), empty otherwise. */
     akeno_buf body;
     const char *static_body; /* Alternative to body for embedded assets. */
     size_t static_len;

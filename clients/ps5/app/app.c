@@ -21,6 +21,7 @@
 #include "crypto_util.h"
 #include "json_write.h"
 #include "transport.h"
+#include "ui_http.h"
 
 #define LOG_ROTATE_BYTES (512 * 1024)
 #define SETTINGS_MAX_BYTES 8192
@@ -88,7 +89,7 @@ static void open_log(akeno_app *app) {
 
 /* ---- Small helpers ------------------------------------------------------------------------ */
 
-static void copy_str(char *dst, size_t dst_len, const char *src) { snprintf(dst, dst_len, "%s", src ? src : ""); }
+void app_copy_str(char *dst, size_t dst_len, const char *src) { snprintf(dst, dst_len, "%s", src ? src : ""); }
 
 static void random_hex(akeno_app *app, char *out, size_t bytes) {
     unsigned char raw[32];
@@ -138,9 +139,11 @@ static int write_private_file(const char *path, const char *data, size_t len) {
 /* ---- Settings ----------------------------------------------------------------------------- */
 
 static void load_settings(akeno_app *app) {
-    copy_str(app->device_name, sizeof(app->device_name), "PlayStation 5");
+    app_copy_str(app->device_name, sizeof(app->device_name), "PlayStation 5");
     app->notify_messages = 1;
     app->notify_social = 1;
+    app->activity_enabled = 1;
+    app->actionable_notifications = 0;
     int fd = open(app->settings_path, O_RDONLY);
     if (fd < 0) return;
     char data[SETTINGS_MAX_BYTES];
@@ -152,11 +155,13 @@ static void load_settings(akeno_app *app) {
         return;
     }
     const akeno_json *root = akeno_json_root(doc);
-    copy_str(app->server, sizeof(app->server), akeno_json_get_string(root, "server", ""));
+    app_copy_str(app->server, sizeof(app->server), akeno_json_get_string(root, "server", ""));
     const char *name = akeno_json_get_string(root, "deviceName", "");
-    if (name[0]) copy_str(app->device_name, sizeof(app->device_name), name);
+    if (name[0]) app_copy_str(app->device_name, sizeof(app->device_name), name);
     app->notify_messages = akeno_json_get_bool(root, "notifyMessages", 1);
     app->notify_social = akeno_json_get_bool(root, "notifySocial", 1);
+    app->activity_enabled = akeno_json_get_bool(root, "activityEnabled", 1);
+    app->actionable_notifications = akeno_json_get_bool(root, "actionableNotifications", 0);
     akeno_json_free(doc);
 }
 
@@ -168,8 +173,9 @@ akeno_status app_save_settings(akeno_app *app) {
     rc |= akeno_buf_append_json_string(&out, app->server);
     rc |= akeno_buf_append_str(&out, ",\"deviceName\":");
     rc |= akeno_buf_append_json_string(&out, app->device_name);
-    rc |= akeno_buf_printf(&out, ",\"notifyMessages\":%s,\"notifySocial\":%s}\n", app->notify_messages ? "true" : "false",
-                           app->notify_social ? "true" : "false");
+    rc |= akeno_buf_printf(&out, ",\"notifyMessages\":%s,\"notifySocial\":%s,\"activityEnabled\":%s,\"actionableNotifications\":%s}\n",
+                           app->notify_messages ? "true" : "false", app->notify_social ? "true" : "false",
+                           app->activity_enabled ? "true" : "false", app->actionable_notifications ? "true" : "false");
     pthread_mutex_unlock(&app->lock);
     akeno_status status = AKENO_ERR_NO_MEMORY;
     if (rc == 0) status = write_private_file(app->settings_path, out.data, out.len) == 0 ? AKENO_OK : AKENO_ERR_STORAGE;
@@ -183,7 +189,7 @@ akeno_status app_save_settings(akeno_app *app) {
 akeno_status app_make_client(akeno_app *app, akeno_client **out) {
     char server[300];
     pthread_mutex_lock(&app->lock);
-    copy_str(server, sizeof(server), app->server);
+    app_copy_str(server, sizeof(server), app->server);
     pthread_mutex_unlock(&app->lock);
     *out = NULL;
     if (!server[0]) return AKENO_ERR_ARGUMENT;
@@ -207,8 +213,11 @@ static void reload_ui_client(akeno_app *app) {
     pthread_mutex_lock(&app->lock);
     app->paired = status == AKENO_OK && akeno_client_is_paired(app->ui_client);
     const char *online_id = app->paired ? akeno_client_online_id(app->ui_client) : NULL;
-    copy_str(app->online_id, sizeof(app->online_id), online_id);
-    if (app->paired) app->rt_wanted = 1;
+    app_copy_str(app->online_id, sizeof(app->online_id), online_id);
+    if (app->paired) {
+        app->rt_wanted = 1;
+        app->act_wanted = 1;
+    }
     pthread_mutex_unlock(&app->lock);
     if (status != AKENO_OK && status != AKENO_ERR_ARGUMENT)
         app_log(app, AKENO_LOG_WARN, "app.client_failed", "The server address cannot be used (%s).", akeno_status_name(status));
@@ -262,11 +271,8 @@ void app_push_event(akeno_app *app, const char *type, const char *data_json) {
     akeno_buf_free(&tail);
 }
 
-void app_notify(akeno_app *app, int social, const char *text) {
-    char clean[240];
-    copy_str(clean, sizeof(clean), text);
-    sanitize_line(clean);
-    utf8_truncate(clean, 200);
+/* Token bucket shared by all notifications. Returns 1 when one may be shown now. */
+static int notify_allowed(akeno_app *app, int social) {
     pthread_mutex_lock(&app->lock);
     int enabled = social ? app->notify_social : app->notify_messages;
     long long now = akeno_now_ms();
@@ -277,7 +283,19 @@ void app_notify(akeno_app *app, int social, const char *text) {
     if (allowed) app->notify_tokens -= 1.0;
     else if (enabled) app->notifications_dropped++;
     pthread_mutex_unlock(&app->lock);
-    if (!allowed) return;
+    return allowed;
+}
+
+static void clean_text(char *dst, size_t dst_len, const char *src, size_t max_bytes) {
+    app_copy_str(dst, dst_len, src);
+    sanitize_line(dst);
+    utf8_truncate(dst, max_bytes);
+}
+
+/* The proven plain notification (sceKernelSendNotificationRequest on the PS5). */
+static void send_plain(akeno_app *app, const char *text) {
+    char clean[240];
+    clean_text(clean, sizeof(clean), text, 200);
     int rc = akeno_platform_notify(clean);
     pthread_mutex_lock(&app->lock);
     if (rc == 0) app->notifications_sent++;
@@ -286,21 +304,181 @@ void app_notify(akeno_app *app, int social, const char *text) {
     if (rc != 0) app_log(app, AKENO_LOG_WARN, "notify.failed", "The system did not accept a notification.");
 }
 
-/* Builds the notification text for a realtime event, or returns 0 if it does not warrant one. */
-static int notification_text(const char *self, const char *type, const akeno_json *data, char *out, size_t out_len, int *social) {
-    *social = 1;
-    if (strcmp(type, "message.created") == 0) {
-        const akeno_json *message = akeno_json_get(data, "message");
-        const akeno_json *sender = akeno_json_get(message, "sender");
-        const char *online_id = akeno_json_get_string(sender, "onlineId", "");
-        if (!online_id[0] || strcmp(online_id, self) == 0) return 0;
-        const char *name = akeno_json_get_string(sender, "displayName", online_id);
-        const char *kind = akeno_json_get_string(data, "conversationKind", "direct");
-        const char *where = strcmp(kind, "party") == 0 ? " (party)" : strcmp(kind, "group") == 0 ? " (group)" : "";
-        snprintf(out, out_len, "AKENO: %s%s: %s", name[0] ? name : online_id, where, akeno_json_get_string(message, "body", ""));
-        *social = 0;
-        return 1;
+void app_notify(akeno_app *app, int social, const char *text) {
+    if (notify_allowed(app, social)) send_plain(app, text);
+}
+
+/*
+ * Tries the experimental button notification (only when turned on in the settings). Returns the
+ * platform result: 0 shown, -1 refused, -2 unavailable, -3 no ticket. Never shows a plain one.
+ */
+static int send_actionable(akeno_app *app, const char *title, const char *body, const char *button, const char *open) {
+    char url[160];
+    if (app_ticket_url(app, open, url, sizeof(url)) != 0) return -3;
+    char t[160], b[240], label[60];
+    clean_text(t, sizeof(t), title, 100);
+    clean_text(b, sizeof(b), body, 200);
+    clean_text(label, sizeof(label), button, 40);
+    int rc = akeno_platform_notify_action(t, b, label, url);
+    pthread_mutex_lock(&app->lock);
+    int first_problem = rc != 0 && app->actionable_failed + app->actionable_unavailable == 0;
+    if (rc == 0) {
+        app->actionable_sent++;
+        app->notifications_sent++;
+    } else if (rc == -2) {
+        app->actionable_unavailable++;
+    } else {
+        app->actionable_failed++;
     }
+    pthread_mutex_unlock(&app->lock);
+    if (first_problem)
+        app_log(app, AKENO_LOG_WARN, "notify.actionable_failed", "Button notification %s (%s); plain notifications are used instead.",
+                rc == -2 ? "unavailable" : "refused", akeno_platform_actionable_status());
+    return rc;
+}
+
+/* A message notification: with a button when enabled and working, otherwise the proven plain one. */
+static void notify_message(akeno_app *app, const char *plain, const char *title, const char *body, const char *open) {
+    if (!notify_allowed(app, 0)) return;
+    pthread_mutex_lock(&app->lock);
+    int actionable = app->actionable_notifications;
+    pthread_mutex_unlock(&app->lock);
+    if (actionable && send_actionable(app, title, body, "Open in AKENO", open) == 0) return;
+    send_plain(app, plain);
+}
+
+int app_test_actionable(akeno_app *app) {
+    int rc = send_actionable(app, "AKENO NETWORK test", "Select the button to open AKENO. If nothing appears, turn button notifications off.",
+                             "Open AKENO", "messages");
+    app_log(app, rc == 0 ? AKENO_LOG_INFO : AKENO_LOG_WARN, "notify.actionable_test", "Test button notification: result %d (%s).", rc,
+            akeno_platform_actionable_status());
+    return rc;
+}
+
+/* ---- Quick access: page targets, tickets and recent messages ------------------------------- */
+
+static int is_uuid(const char *s) {
+    if (strlen(s) != 36) return 0;
+    for (int i = 0; i < 36; i++) {
+        char c = s[i];
+        if (i == 8 || i == 13 || i == 18 || i == 23) {
+            if (c != '-') return 0;
+        } else if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int app_valid_open(const char *target) {
+    if (!target) return 0;
+    static const char *const plain[] = { "", "messages", "party", "friends", "games", "invitations" };
+    for (size_t i = 0; i < sizeof(plain) / sizeof(plain[0]); i++)
+        if (strcmp(target, plain[i]) == 0) return 1;
+    return strncmp(target, "conversation:", 13) == 0 && is_uuid(target + 13);
+}
+
+int app_ticket_url(akeno_app *app, const char *open, char *url, size_t url_len) {
+    if (!app_valid_open(open) || app->port <= 0) return -1;
+    unsigned char raw[16];
+    if (akeno_random_bytes(raw, sizeof(raw)) != 0) return -1;
+    char id[33];
+    static const char hex[] = "0123456789abcdef";
+    for (size_t i = 0; i < sizeof(raw); i++) {
+        id[i * 2] = hex[raw[i] >> 4];
+        id[i * 2 + 1] = hex[raw[i] & 15];
+    }
+    id[32] = '\0';
+    memset(raw, 0, sizeof(raw));
+    long long now = akeno_now_ms();
+    pthread_mutex_lock(&app->lock);
+    app_ticket *slot = &app->tickets[0];
+    for (int i = 0; i < APP_TICKETS; i++) {
+        app_ticket *t = &app->tickets[i];
+        if (!t->id[0] || t->expires_at <= now) {
+            slot = t;
+            break;
+        }
+        if (t->expires_at < slot->expires_at) slot = t; /* All in use: replace the oldest. */
+    }
+    memcpy(slot->id, id, sizeof(slot->id));
+    app_copy_str(slot->open, sizeof(slot->open), open);
+    slot->expires_at = now + APP_TICKET_MS;
+    pthread_mutex_unlock(&app->lock);
+    int n = snprintf(url, url_len, "http://127.0.0.1:%d/t/%s", app->port, id);
+    memset(id, 0, sizeof(id));
+    return n > 0 && (size_t)n < url_len ? 0 : -1;
+}
+
+int app_ticket_redeem(akeno_app *app, const char *id, char *open, size_t open_len) {
+    if (open_len) open[0] = '\0';
+    if (!id || strlen(id) != 32) return -1;
+    for (int i = 0; i < 32; i++)
+        if (!((id[i] >= '0' && id[i] <= '9') || (id[i] >= 'a' && id[i] <= 'f'))) return -1;
+    long long now = akeno_now_ms();
+    int rc = -1;
+    pthread_mutex_lock(&app->lock);
+    for (int i = 0; i < APP_TICKETS; i++) {
+        app_ticket *t = &app->tickets[i];
+        if (!t->id[0] || !ui_http_secret_equal(t->id, id)) continue;
+        if (t->expires_at > now) {
+            app_copy_str(open, open_len, t->open);
+            rc = 0;
+        }
+        memset(t, 0, sizeof(*t)); /* Single use, expired or not. */
+    }
+    pthread_mutex_unlock(&app->lock);
+    return rc;
+}
+
+/* Records a message from someone else for the page's quick-access list. */
+static void remember_message(akeno_app *app, const char *open, const char *kind, const char *from, const char *body) {
+    pthread_mutex_lock(&app->lock);
+    unsigned long long seq = ++app->recent_seq;
+    app_recent_message *m = &app->recent[seq % APP_RECENT_MESSAGES];
+    memset(m, 0, sizeof(*m));
+    m->seq = seq;
+    m->at = akeno_now_ms();
+    app_copy_str(m->open, sizeof(m->open), open);
+    app_copy_str(m->kind, sizeof(m->kind), kind);
+    clean_text(m->from, sizeof(m->from), from, 64);
+    clean_text(m->preview, sizeof(m->preview), body, 120);
+    pthread_mutex_unlock(&app->lock);
+}
+
+void app_latest_message_target(akeno_app *app, char *out, size_t out_len) {
+    pthread_mutex_lock(&app->lock);
+    const app_recent_message *m = app->recent_seq ? &app->recent[app->recent_seq % APP_RECENT_MESSAGES] : NULL;
+    app_copy_str(out, out_len, m && m->seq == app->recent_seq && m->seq > app->recent_seen_seq ? m->open : "");
+    pthread_mutex_unlock(&app->lock);
+}
+
+/* message.created from someone else: remember it and notify (with a button when enabled). */
+static void on_message(akeno_app *app, const char *self, const akeno_json *data) {
+    const akeno_json *message = akeno_json_get(data, "message");
+    const akeno_json *sender = akeno_json_get(message, "sender");
+    const char *online_id = akeno_json_get_string(sender, "onlineId", "");
+    if (!online_id[0] || strcmp(online_id, self) == 0) return;
+    const char *name = akeno_json_get_string(sender, "displayName", "");
+    if (!name[0]) name = online_id;
+    const char *kind = akeno_json_get_string(data, "conversationKind", "direct");
+    const char *conversation = akeno_json_get_string(data, "conversationId", "");
+    const char *body = akeno_json_get_string(message, "body", "");
+    char open[APP_OPEN_MAX] = "messages";
+    if (strcmp(kind, "party") == 0) app_copy_str(open, sizeof(open), "party");
+    else if (strcmp(kind, "direct") == 0 && is_uuid(conversation)) snprintf(open, sizeof(open), "conversation:%s", conversation);
+    remember_message(app, open, kind, name, body);
+
+    const char *where = strcmp(kind, "party") == 0 ? " (party)" : strcmp(kind, "group") == 0 ? " (group)" : "";
+    char plain[400], title[160];
+    snprintf(plain, sizeof(plain), "AKENO: %s%s: %s", name, where, body);
+    snprintf(title, sizeof(title), "AKENO: %s%s", name, where);
+    notify_message(app, plain, title, body, open);
+}
+
+/* Builds the notification text for a realtime event, or returns 0 if it does not warrant one. */
+static int notification_text(const char *type, const akeno_json *data, char *out, size_t out_len, int *social) {
+    *social = 1;
     if (strcmp(type, "notification.created") != 0) return 0;
     const akeno_json *n = akeno_json_path(data, "notification.data");
     const char *kind = akeno_json_get_string(n, "type", "");
@@ -331,7 +509,7 @@ static int notification_text(const char *self, const char *type, const akeno_jso
  * which is not documented for PS5 payloads. */
 #define WORKER_STACK_BYTES ((size_t)1 << 20)
 
-static int start_worker(pthread_t *thread, void *(*fn)(void *), void *arg) {
+int app_start_worker(pthread_t *thread, void *(*fn)(void *), void *arg) {
     pthread_attr_t attr;
     if (pthread_attr_init(&attr) != 0) return -1;
     int rc = pthread_attr_setstacksize(&attr, WORKER_STACK_BYTES);
@@ -344,8 +522,8 @@ static int start_worker(pthread_t *thread, void *(*fn)(void *), void *arg) {
 
 static void rt_set_state(akeno_app *app, const char *state, const char *detail) {
     pthread_mutex_lock(&app->lock);
-    copy_str(app->rt_state, sizeof(app->rt_state), state);
-    copy_str(app->rt_detail, sizeof(app->rt_detail), detail);
+    app_copy_str(app->rt_state, sizeof(app->rt_state), state);
+    app_copy_str(app->rt_detail, sizeof(app->rt_detail), detail);
     app->rt_changed_at = akeno_now_ms();
     pthread_mutex_unlock(&app->lock);
 }
@@ -376,11 +554,15 @@ static void rt_on_event(void *user, const char *type, const akeno_json *data) {
 
     char self[40];
     pthread_mutex_lock(&app->lock);
-    copy_str(self, sizeof(self), app->online_id);
+    app_copy_str(self, sizeof(self), app->online_id);
     pthread_mutex_unlock(&app->lock);
+    if (strcmp(type, "message.created") == 0) {
+        on_message(app, self, data);
+        return;
+    }
     char text[400];
     int social = 1;
-    if (notification_text(self, type, data, text, sizeof(text), &social)) app_notify(app, social, text);
+    if (notification_text(type, data, text, sizeof(text), &social)) app_notify(app, social, text);
 }
 
 static int rt_should_stop(void *user) {
@@ -453,7 +635,7 @@ static void *pair_main(void *arg) {
         break;
     }
     char online_id[40];
-    copy_str(online_id, sizeof(online_id), status == AKENO_OK ? akeno_client_online_id(app->pair_client) : "");
+    app_copy_str(online_id, sizeof(online_id), status == AKENO_OK ? akeno_client_online_id(app->pair_client) : "");
     memset(&app->pairing, 0, sizeof(app->pairing));
     app->pair_thread_done = 1;
     pthread_mutex_unlock(&app->lock);
@@ -480,7 +662,7 @@ akeno_status app_pair_start(akeno_app *app, char *err, size_t err_len) {
     }
     char name[64];
     pthread_mutex_lock(&app->lock);
-    copy_str(name, sizeof(name), app->device_name);
+    app_copy_str(name, sizeof(name), app->device_name);
     pthread_mutex_unlock(&app->lock);
     akeno_pairing pairing;
     akeno_response response;
@@ -494,7 +676,7 @@ akeno_status app_pair_start(akeno_app *app, char *err, size_t err_len) {
         akeno_client_destroy(client);
         pthread_mutex_lock(&app->lock);
         app->pair_state = PAIR_FAILED;
-        copy_str(app->pair_error, sizeof(app->pair_error), err);
+        app_copy_str(app->pair_error, sizeof(app->pair_error), err);
         pthread_mutex_unlock(&app->lock);
         return status;
     }
@@ -504,14 +686,14 @@ akeno_status app_pair_start(akeno_app *app, char *err, size_t err_len) {
     app->pair_client = client;
     app->pair_state = PAIR_WAITING;
     app->pair_error[0] = '\0';
-    copy_str(app->pair_code, sizeof(app->pair_code), pairing.user_code);
-    copy_str(app->pair_uri, sizeof(app->pair_uri), pairing.verification_uri);
-    copy_str(app->pair_uri_complete, sizeof(app->pair_uri_complete), pairing.verification_uri_complete);
+    app_copy_str(app->pair_code, sizeof(app->pair_code), pairing.user_code);
+    app_copy_str(app->pair_uri, sizeof(app->pair_uri), pairing.verification_uri);
+    app_copy_str(app->pair_uri_complete, sizeof(app->pair_uri_complete), pairing.verification_uri_complete);
     app->pair_expires_at = akeno_now_ms() + (long long)pairing.expires_in * 1000;
     app->pair_cancel = 0;
     app->pair_thread_done = 0;
     pthread_mutex_unlock(&app->lock);
-    if (start_worker(&app->pair_thread, pair_main, app) != 0) {
+    if (app_start_worker(&app->pair_thread, pair_main, app) != 0) {
         akeno_client_destroy(client);
         pthread_mutex_lock(&app->lock);
         app->pair_client = NULL;
@@ -539,7 +721,7 @@ static void start_realtime(akeno_app *app) {
     app->rt_stop = 0;
     app->rt_thread_done = 0;
     pthread_mutex_unlock(&app->lock);
-    if (start_worker(&app->rt_thread, rt_main, app) == 0) {
+    if (app_start_worker(&app->rt_thread, rt_main, app) == 0) {
         app->rt_thread_running = 1;
     } else {
         app_log(app, AKENO_LOG_ERROR, "realtime.thread_failed", "Could not start the realtime worker.");
@@ -575,12 +757,18 @@ void app_tick(akeno_app *app) {
     if (!paired && app->rt_thread_running) app->rt_stop = 1;
     pthread_mutex_unlock(&app->lock);
     if (paired && wanted && !app->rt_thread_running && !app->stop) start_realtime(app);
+    app_activity_tick(app);
 }
 
-int app_open_ui(akeno_app *app) {
-    char url[200];
-    snprintf(url, sizeof(url), "http://127.0.0.1:%d/#t=%s", app->port, app->session_token);
+int app_open_ui(akeno_app *app) { return app_open_ui_at(app, ""); }
+
+int app_open_ui_at(akeno_app *app, const char *open) {
+    char url[260];
+    int with_target = open && open[0] && app_valid_open(open);
+    snprintf(url, sizeof(url), "http://127.0.0.1:%d/#t=%s%s%s", app->port, app->session_token, with_target ? "&open=" : "",
+             with_target ? open : "");
     int rc = akeno_platform_open_browser(url);
+    memset(url, 0, sizeof(url));
     pthread_mutex_lock(&app->lock);
     app->browser_launches++;
     app->browser_last_rc = rc;
@@ -624,6 +812,7 @@ static void shutdown_workers(akeno_app *app) {
     app->stop = 1;
     app->pair_cancel = 1;
     app->rt_stop = 1;
+    app_activity_shutdown(app); /* Reports the end of a running game session first (bounded by the I/O timeout). */
     if (app->pair_thread_running) {
         pthread_join(app->pair_thread, NULL);
         app->pair_thread_running = 0;
@@ -646,9 +835,9 @@ int akeno_app_main(const akeno_app_options *options) {
     app->started_at = akeno_now_ms();
     app->notify_tokens = NOTIFY_BURST;
     app->notify_refill_at = app->started_at;
-    copy_str(app->rt_state, sizeof(app->rt_state), "idle");
+    app_copy_str(app->rt_state, sizeof(app->rt_state), "idle");
 
-    copy_str(app->data_dir, sizeof(app->data_dir), options->data_dir);
+    app_copy_str(app->data_dir, sizeof(app->data_dir), options->data_dir);
     snprintf(app->settings_path, sizeof(app->settings_path), "%s/settings.json", app->data_dir);
     snprintf(app->credential_path, sizeof(app->credential_path), "%s/device.json", app->data_dir);
     snprintf(app->log_path, sizeof(app->log_path), "%s/akeno.log", app->data_dir);
@@ -684,8 +873,9 @@ int akeno_app_main(const akeno_app_options *options) {
     }
 
     load_settings(app);
+    app_activity_init(app);
     if (options->server && options->server[0]) {
-        copy_str(app->server, sizeof(app->server), options->server);
+        app_copy_str(app->server, sizeof(app->server), options->server);
         app_save_settings(app);
     }
     reload_ui_client(app);
@@ -719,7 +909,7 @@ int akeno_app_main(const akeno_app_options *options) {
         app_log(app, AKENO_LOG_WARN, "app.instance_key", "Could not write the instance key; a second launch cannot reopen the page.");
     app_log(app, AKENO_LOG_INFO, "ui.listening", "Local page on http://127.0.0.1:%d/ (this console only).", app->port);
 
-    akeno_platform_notify("AKENO NETWORK Alpha 0.1 started.");
+    akeno_platform_notify("AKENO NETWORK Alpha 0.2 started.");
     if (options->open_browser) {
         if (app_open_ui(app) != 0) pair_without_page(app);
     } else {
@@ -753,5 +943,4 @@ out:
     return exit_code;
 }
 
-int app_exit_requested(void);
 int app_exit_requested(void) { return g_exit_requested; }

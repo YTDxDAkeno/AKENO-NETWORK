@@ -75,6 +75,7 @@ static const char *reason(int status) {
     switch (status) {
     case 200: return "OK";
     case 204: return "No Content";
+    case 302: return "Found";
     case 400: return "Bad Request";
     case 401: return "Unauthorized";
     case 403: return "Forbidden";
@@ -94,10 +95,12 @@ static void send_response(int fd, const ui_response *r, int head_only) {
     const char *body = r->static_body ? r->static_body : r->body.data;
     size_t body_len = r->static_body ? r->static_len : r->body.len;
     if (r->status == 204) body_len = 0;
-    char head[1024];
+    char head[1280];
+    int redirect = r->status == 302 && r->location.len > 0 && r->location.len < 256;
     int n = snprintf(head, sizeof(head),
                      "HTTP/1.1 %d %s\r\n"
                      "Content-Length: %zu\r\n"
+                     "%s%s%s"
                      "%s%s%s"
                      "Cache-Control: no-store\r\n"
                      "X-Content-Type-Options: nosniff\r\n"
@@ -108,7 +111,8 @@ static void send_response(int fd, const ui_response *r, int head_only) {
                      "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'\r\n"
                      "Connection: close\r\n\r\n",
                      r->status, reason(r->status), body_len, r->content_type ? "Content-Type: " : "",
-                     r->content_type ? r->content_type : "", r->content_type ? "\r\n" : "");
+                     r->content_type ? r->content_type : "", r->content_type ? "\r\n" : "", redirect ? "Location: " : "",
+                     redirect ? r->location.data : "", redirect ? "\r\n" : "");
     long long deadline = akeno_now_ms() + WRITE_DEADLINE_MS;
     if (n <= 0 || (size_t)n >= sizeof(head) || write_all(fd, head, (size_t)n, deadline) != 0) return;
     if (!head_only && body_len > 0) write_all(fd, body, body_len, deadline);
@@ -118,6 +122,7 @@ static void send_error(int fd, int status, const char *code, const char *message
     ui_response r;
     memset(&r, 0, sizeof(r));
     akeno_buf_init(&r.body, 4096);
+    akeno_buf_init(&r.location, 16);
     r.status = status;
     r.content_type = "application/json; charset=utf-8";
     akeno_buf_append_str(&r.body, "{\"ok\":false,\"error\":{\"code\":");
@@ -127,6 +132,7 @@ static void send_error(int fd, int status, const char *code, const char *message
     akeno_buf_append_str(&r.body, "}}");
     send_response(fd, &r, 0);
     akeno_buf_free(&r.body);
+    akeno_buf_free(&r.location);
 }
 
 static void handle_connection(akeno_app *app, int fd) {
@@ -177,6 +183,7 @@ static void handle_connection(akeno_app *app, int fd) {
         ui_response r;
         memset(&r, 0, sizeof(r));
         akeno_buf_init(&r.body, RESPONSE_LIMIT);
+        akeno_buf_init(&r.location, 512);
         size_t body_len = (size_t)(req.content_length > 0 ? req.content_length : 0);
         app_route(app, &req, body_len ? in.data + req.head_len : NULL, body_len, &r);
         if (r.status == 0) {
@@ -185,6 +192,8 @@ static void handle_connection(akeno_app *app, int fd) {
         }
         send_response(fd, &r, head_only);
         akeno_buf_free(&r.body);
+        if (r.location.data) memset(r.location.data, 0, r.location.len);
+        akeno_buf_free(&r.location);
     }
 done:
     akeno_buf_free(&in);

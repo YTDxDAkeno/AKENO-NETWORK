@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import type {
+  ApiErrorBody,
   DevicePairingStartResponse,
   DeviceScope,
   DeviceTokenResponse,
@@ -34,6 +35,25 @@ afterAll(async () => {
   await server.close();
 });
 
+/** A heartbeat is answered with the session on success and with the API's error body otherwise. */
+type HeartbeatResult = GameHeartbeatResponse | ApiErrorBody;
+
+function isApiError(body: unknown): body is ApiErrorBody {
+  return typeof body === 'object' && body !== null && 'error' in body;
+}
+
+/** The body of an accepted heartbeat; fails the test with the server's answer otherwise. */
+function accepted(response: ApiResponse<HeartbeatResult>): GameHeartbeatResponse {
+  if (isApiError(response.body)) throw new Error(`Heartbeat refused: HTTP ${response.status} ${response.body.error.code}`);
+  return response.body;
+}
+
+/** The error of a refused heartbeat; fails the test if it was accepted. */
+function refusal(response: ApiResponse<HeartbeatResult>): ApiErrorBody['error'] {
+  if (!isApiError(response.body)) throw new Error(`Heartbeat unexpectedly accepted: HTTP ${response.status}`);
+  return response.body.error;
+}
+
 /** A paired device (bearer token, no cookies, no Origin). */
 class Device {
   constructor(
@@ -52,7 +72,7 @@ class Device {
   }
 
   heartbeat(titleId: string, titleName?: string) {
-    return this.request<GameHeartbeatResponse>('POST', '/activity/heartbeat', {
+    return this.request<HeartbeatResult>('POST', '/activity/heartbeat', {
       titleId,
       platform: 'PS5',
       ...(titleName ? { titleName } : {}),
@@ -123,19 +143,19 @@ describe('automatic game activity', () => {
 
     const first = await device.heartbeat('PPSA01234', 'Racing Game');
     expect(first.status).toBe(200);
-    expect(first.body.session.created).toBe(true);
-    expect(first.body.heartbeatIntervalSeconds).toBe(60);
+    expect(accepted(first).session.created).toBe(true);
+    expect(accepted(first).heartbeatIntervalSeconds).toBe(60);
     const update = await watcher.waitFor('presence.updated', (e) => e.data.userId === player.id && e.data.presence.game !== null);
     expect(update.data.presence.game).toMatchObject({ titleId: 'PPSA01234', name: 'Racing Game', platform: 'PS5' });
     expect(await friendGame(friend, player.id)).toMatchObject({ titleId: 'PPSA01234', name: 'Racing Game' });
     await online.waitFor('activity.self', (e) => e.data.game?.titleId === 'PPSA01234');
 
     const again = await device.heartbeat('PPSA01234');
-    expect(again.body.session).toMatchObject({ id: first.body.session.id, created: false });
+    expect(accepted(again).session).toMatchObject({ id: accepted(first).session.id, created: false });
     expect((await friendGame(friend, player.id))?.name).toBe('Racing Game'); // name kept without re-sending it
 
     const switched = await device.heartbeat('CUSA05678', 'Older Game');
-    expect(switched.body.session.created).toBe(true);
+    expect(accepted(switched).session.created).toBe(true);
     const rows = await sessionsOf(player.id);
     expect(rows.find((r) => r.titleId === 'PPSA01234')).toMatchObject({ endReason: 'switched' });
     expect(rows.find((r) => r.titleId === 'CUSA05678')).toMatchObject({ endedAt: null });
@@ -162,7 +182,7 @@ describe('automatic game activity', () => {
     const device = await pair(player);
     const online = await device.connect();
     const started = await device.heartbeat('PPSA00001', 'Long Game');
-    await age(started.body.session.id, 3600); // started an hour ago, last heartbeat an hour ago
+    await age(accepted(started).session.id, 3600); // started an hour ago, last heartbeat an hour ago
     // Not yet swept, but already hidden: no heartbeat for longer than the stale limit.
     expect(server.ctx.activity.currentOf(player.id)).not.toBeNull(); // cache still holds the old heartbeat time
     expect(server.ctx.activity.currentOf(player.id, Date.now() + 200_000)).toBeNull();
@@ -178,7 +198,7 @@ describe('automatic game activity', () => {
 
     // After rest mode the game is reported again: that is a new session, not a continued one.
     const resumed = await device.heartbeat('PPSA00001');
-    expect(resumed.body.session.created).toBe(true);
+    expect(accepted(resumed).session.created).toBe(true);
     await online.close();
   });
 
@@ -186,11 +206,11 @@ describe('automatic game activity', () => {
     const player = await registerUser(server, 'ga_gap');
     const device = await pair(player);
     const first = await device.heartbeat('PPSA00002');
-    await age(first.body.session.id, 600); // last heartbeat 10 minutes ago, not swept yet
+    await age(accepted(first).session.id, 600); // last heartbeat 10 minutes ago, not swept yet
     const next = await device.heartbeat('PPSA00002');
-    expect(next.body.session.created).toBe(true);
+    expect(accepted(next).session.created).toBe(true);
     const rows = await sessionsOf(player.id);
-    const old = rows.find((r) => r.id === first.body.session.id)!;
+    const old = rows.find((r) => r.id === accepted(first).session.id)!;
     expect(old.endReason).toBe('stale');
     expect(old.endedAt!.getTime()).toBe(old.lastHeartbeatAt.getTime());
   });
@@ -201,7 +221,7 @@ describe('automatic game activity', () => {
     const b = await pair(player);
     const fromA = await a.heartbeat('PPSA00003');
     const fromB = await b.heartbeat('PPSA00003');
-    expect(fromB.body.session).toMatchObject({ id: fromA.body.session.id, created: false });
+    expect(accepted(fromB).session).toMatchObject({ id: accepted(fromA).session.id, created: false });
     expect((await sessionsOf(player.id)).filter((r) => r.endedAt === null)).toHaveLength(1);
 
     // A stop from the device that did not send the last heartbeat leaves the shared session running.
@@ -221,7 +241,7 @@ describe('automatic game activity', () => {
     const limited = await pair(player, ['profile:read', 'realtime']);
     const denied = await limited.heartbeat('PPSA01234');
     expect(denied.status).toBe(403);
-    expect(denied.body.error.code).toBe('DEVICE_SCOPE_DENIED');
+    expect(refusal(denied).code).toBe('DEVICE_SCOPE_DENIED');
 
     const device = await pair(player);
     for (const titleId of ['ppsa01234', 'PPSA1234', 'PPSA012345', '../../etc', 'NPXS40001x']) {
@@ -289,7 +309,7 @@ describe('automatic game activity', () => {
     expect((await sessionsOf(player.id))[0]).toMatchObject({ endReason: 'tracking_disabled' });
     const refused = await device.heartbeat('PPSA00020');
     expect(refused.status).toBe(409);
-    expect(refused.body.error.code).toBe('ACTIVITY_TRACKING_DISABLED');
+    expect(refusal(refused).code).toBe('ACTIVITY_TRACKING_DISABLED');
     expect((await sessionsOf(player.id)).filter((r) => r.endedAt === null)).toHaveLength(0);
     await player.patch('/profile/privacy', { gameActivityTracking: true });
     expect((await device.heartbeat('PPSA00020')).status).toBe(200);

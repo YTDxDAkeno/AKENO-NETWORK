@@ -663,7 +663,7 @@ if (appBinary) {
     assert.equal(state.configured, true);
     assert.equal(state.paired, false);
     assert.equal(state.server, server);
-    assert.ok(notifications(app).includes('AKENO NETWORK Alpha 0.1 started.'));
+    assert.ok(notifications(app).includes('AKENO NETWORK Alpha 0.2 started.'));
   });
 
   await step('console app: refuses to proxy before pairing and outside the allow-list', async () => {

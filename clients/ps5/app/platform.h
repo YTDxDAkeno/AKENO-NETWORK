@@ -41,10 +41,15 @@ const char *akeno_platform_metadata_root(void);
 
 /*
  * Experimental: a notification with one button that should open url. Returns 0 when the system
- * accepted it, -1 when it refused, -2 when this platform has no such notification. Whether the
- * button opens the URL is not known before it is tried on a console.
+ * accepted it, -1 when it refused, -2 when the function is not available on this system (on the
+ * PS5: libSceNotification.sprx or sceNotificationSend could not be loaded at run time). Whether
+ * the button opens the URL is not known before it is tried on a console. Callers fall back to
+ * akeno_platform_notify() on any non-zero result.
  */
 int akeno_platform_notify_action(const char *title, const char *text, const char *button, const char *url);
+
+/* Short diagnostic text about the button notification function ("loaded", "not loaded", why it failed). */
+const char *akeno_platform_actionable_status(void);
 
 /* Writes one diagnostic line to the platform's debug channel (in addition to the log file). */
 void akeno_platform_debug_line(const char *line);

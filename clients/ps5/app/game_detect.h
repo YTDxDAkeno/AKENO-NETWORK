@@ -9,7 +9,8 @@
  *
  * What "detected" means: a process of a game title (PPSA..... or CUSA.....) exists and is not
  * stopped. Whether that game has the input focus cannot be determined with the interfaces this
- * app uses (see docs/GAME_ACTIVITY.md); background system processes never count.
+ * app uses (see docs/GAME_ACTIVITY.md): it is reported as "running", never as "in focus".
+ * Background system processes (NPXS.....) never count.
  */
 #ifndef AKENO_GAME_DETECT_H
 #define AKENO_GAME_DETECT_H
@@ -23,23 +24,45 @@
 
 typedef enum { AKENO_PROC_ACTIVE = 0, AKENO_PROC_STOPPED = 1 } akeno_proc_state;
 
+/*
+ * sceKernelGetAppInfo fills a structure that Sony does not document. The pinned SDK's samples
+ * disagree on its layout: samples/ps reads the title ID at offset 20 (after an app_type field),
+ * samples/test_privileges at offset 16. AKENO does not guess: it reads the raw bytes into a
+ * zeroed, oversized buffer and records what looks like a title ID ([A-Z]{4}[0-9]{5}, NUL-
+ * terminated) at either offset. A real title ID can only match at one of the two offsets, so the
+ * console's own answers decide the layout (see akeno_game_classify).
+ */
+#define AKENO_APPINFO_OFFSET_TITLE_PS 20  /* samples/ps */
+#define AKENO_APPINFO_OFFSET_TITLE_ALT 16 /* samples/test_privileges */
+#define AKENO_APPINFO_RAW_HEAD 32         /* Bytes kept per process for the diagnostics probe. */
+
 typedef struct {
     int pid;
     akeno_proc_state state;
-    int has_app_info;               /* The system returned application info for this process. */
+    int has_app_info;                       /* The system returned application info for this process. */
     unsigned int app_id;
-    unsigned int app_type;
-    char title_id[AKENO_TITLE_ID_MAX];
+    char title_id[AKENO_TITLE_ID_MAX];      /* Title ID at the samples/ps offset, "" if none is there. */
+    char title_id_alt[AKENO_TITLE_ID_MAX];  /* Title ID at the samples/test_privileges offset, "" if none. */
     char comm[24];
-    int alt_title_layout;           /* Diagnostics only: see platform_ps5.c. */
+    unsigned char raw_head[AKENO_APPINFO_RAW_HEAD]; /* First bytes of the raw application info. */
 } akeno_proc_info;
 
 typedef enum {
     AKENO_SCAN_NONE = 0,   /* No running game process. */
     AKENO_SCAN_GAME,       /* Exactly one game title has running processes. */
     AKENO_SCAN_AMBIGUOUS,  /* More than one game title: nothing is reported. */
-    AKENO_SCAN_FAILED      /* The process list could not be read: nothing is reported. */
+    AKENO_SCAN_FAILED,     /* The process list could not be read: nothing is reported. */
+    AKENO_SCAN_UNVERIFIED  /* Title IDs appeared at both layout offsets: nothing is reported. */
 } akeno_scan_kind;
+
+typedef enum {
+    AKENO_LAYOUT_UNKNOWN = 0, /* No title ID seen at either offset (nothing to decide from). */
+    AKENO_LAYOUT_PS,          /* Title IDs only at offset 20. */
+    AKENO_LAYOUT_ALT,         /* Title IDs only at offset 16. */
+    AKENO_LAYOUT_CONFLICT     /* Title IDs at both offsets: the layout is not trusted. */
+} akeno_appinfo_layout;
+
+#define AKENO_SCAN_PROBES 4
 
 typedef struct {
     akeno_scan_kind kind;
@@ -49,16 +72,34 @@ typedef struct {
     int stopped_games;        /* Game processes ignored because they are stopped. */
     int candidates;           /* Distinct game titles with running processes. */
     char candidate_ids[AKENO_SCAN_MAX_CANDIDATES][AKENO_TITLE_ID_MAX];
-    int alt_layout_hits;
+    akeno_appinfo_layout layout;
+    int layout_votes_ps;      /* Processes with a title ID at offset 20. */
+    int layout_votes_alt;     /* Processes with a title ID at offset 16. */
+    int probe_count;
+    char probes[AKENO_SCAN_PROBES][96]; /* "pid comm: hex of the first raw bytes" */
     char error[120];
 } akeno_game_scan;
+
+/*
+ * Fills app_id, title_id, title_id_alt and raw_head of out from the raw bytes the system wrote
+ * (len bytes, the rest of the caller's zeroed buffer). Never reads outside raw[0..len).
+ */
+void akeno_appinfo_parse(const unsigned char *raw, size_t len, akeno_proc_info *out);
+
+/* 1 when s is shaped like any PlayStation title ID ([A-Z]{4}[0-9]{5}), games or not. */
+int akeno_looks_like_title_id(const char *s);
+
+const char *akeno_layout_name(akeno_appinfo_layout layout);
 
 /* 1 for PlayStation game title IDs: PPSA (PS5) or CUSA (PS4) followed by five digits. */
 int akeno_is_game_title_id(const char *title_id);
 
 const char *akeno_scan_kind_name(akeno_scan_kind kind);
 
-/* Classifies one process listing. self_pid (this app) is ignored. */
+/*
+ * Classifies one process listing. self_pid (this app) is ignored. The layout is decided from this
+ * listing first (see akeno_appinfo_layout); with a conflicting layout nothing is reported.
+ */
 void akeno_game_classify(const akeno_proc_info *procs, size_t count, int self_pid, akeno_game_scan *scan);
 
 /*

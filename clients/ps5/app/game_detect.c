@@ -26,36 +26,115 @@ int akeno_is_game_title_id(const char *id) {
     return 1;
 }
 
+int akeno_looks_like_title_id(const char *s) {
+    if (!s || strlen(s) != 9) return 0;
+    for (int i = 0; i < 4; i++)
+        if (s[i] < 'A' || s[i] > 'Z') return 0;
+    for (int i = 4; i < 9; i++)
+        if (s[i] < '0' || s[i] > '9') return 0;
+    return 1;
+}
+
 const char *akeno_scan_kind_name(akeno_scan_kind kind) {
     switch (kind) {
     case AKENO_SCAN_NONE: return "none";
     case AKENO_SCAN_GAME: return "game";
     case AKENO_SCAN_AMBIGUOUS: return "ambiguous";
     case AKENO_SCAN_FAILED: return "failed";
+    case AKENO_SCAN_UNVERIFIED: return "unverified-layout";
     }
     return "none";
+}
+
+const char *akeno_layout_name(akeno_appinfo_layout layout) {
+    switch (layout) {
+    case AKENO_LAYOUT_UNKNOWN: return "unknown";
+    case AKENO_LAYOUT_PS: return "samples/ps (title ID at offset 20)";
+    case AKENO_LAYOUT_ALT: return "samples/test_privileges (title ID at offset 16)";
+    case AKENO_LAYOUT_CONFLICT: return "conflicting";
+    }
+    return "unknown";
+}
+
+/* Copies a title ID found at raw[offset]: nine visible characters followed by a NUL byte. */
+static void title_at(const unsigned char *raw, size_t len, size_t offset, char *out, size_t out_len) {
+    out[0] = '\0';
+    if (offset + 10 > len || out_len < 10) return;
+    if (raw[offset + 9] != 0) return;
+    char candidate[10];
+    memcpy(candidate, raw + offset, 9);
+    candidate[9] = '\0';
+    if (akeno_looks_like_title_id(candidate)) memcpy(out, candidate, 10);
+}
+
+void akeno_appinfo_parse(const unsigned char *raw, size_t len, akeno_proc_info *out) {
+    out->app_id = 0;
+    if (len >= 4) out->app_id = (unsigned int)raw[0] | (unsigned int)raw[1] << 8 | (unsigned int)raw[2] << 16 | (unsigned int)raw[3] << 24;
+    title_at(raw, len, AKENO_APPINFO_OFFSET_TITLE_PS, out->title_id, sizeof(out->title_id));
+    title_at(raw, len, AKENO_APPINFO_OFFSET_TITLE_ALT, out->title_id_alt, sizeof(out->title_id_alt));
+    memset(out->raw_head, 0, sizeof(out->raw_head));
+    memcpy(out->raw_head, raw, len < sizeof(out->raw_head) ? len : sizeof(out->raw_head));
+}
+
+static void add_probe(akeno_game_scan *scan, const akeno_proc_info *p) {
+    if (scan->probe_count >= AKENO_SCAN_PROBES) return;
+    static const char hex[] = "0123456789abcdef";
+    char *out = scan->probes[scan->probe_count++];
+    size_t cap = sizeof(scan->probes[0]);
+    int n = snprintf(out, cap, "%d %.12s:", p->pid, p->comm);
+    size_t o = n > 0 && (size_t)n < cap ? (size_t)n : 0;
+    for (size_t i = 0; i < AKENO_APPINFO_RAW_HEAD && o + 2 < cap; i++) {
+        out[o++] = hex[p->raw_head[i] >> 4];
+        out[o++] = hex[p->raw_head[i] & 15];
+    }
+    out[o] = '\0';
 }
 
 void akeno_game_classify(const akeno_proc_info *procs, size_t count, int self_pid, akeno_game_scan *scan) {
     memset(scan, 0, sizeof(*scan));
     scan->kind = AKENO_SCAN_NONE;
     scan->processes = (int)count;
+
+    /* 1. Which offset holds the title ID on this console? Decided from this listing only. */
     for (size_t i = 0; i < count; i++) {
         const akeno_proc_info *p = &procs[i];
-        if (p->pid == self_pid) continue;
-        if (p->has_app_info && p->title_id[0]) scan->app_processes++;
-        if (p->alt_title_layout) scan->alt_layout_hits++;
-        if (!p->has_app_info || !akeno_is_game_title_id(p->title_id)) continue;
+        if (p->pid == self_pid || !p->has_app_info) continue;
+        int ps = akeno_looks_like_title_id(p->title_id);
+        int alt = akeno_looks_like_title_id(p->title_id_alt);
+        scan->layout_votes_ps += ps;
+        scan->layout_votes_alt += alt;
+        if (ps || alt) {
+            scan->app_processes++;
+            add_probe(scan, p);
+        }
+    }
+    if (scan->layout_votes_ps && scan->layout_votes_alt) scan->layout = AKENO_LAYOUT_CONFLICT;
+    else if (scan->layout_votes_ps) scan->layout = AKENO_LAYOUT_PS;
+    else if (scan->layout_votes_alt) scan->layout = AKENO_LAYOUT_ALT;
+    else scan->layout = AKENO_LAYOUT_UNKNOWN;
+    if (scan->layout == AKENO_LAYOUT_CONFLICT) {
+        scan->kind = AKENO_SCAN_UNVERIFIED;
+        snprintf(scan->error, sizeof(scan->error), "Title IDs at both known offsets (%d/%d); nothing is reported.", scan->layout_votes_ps,
+                 scan->layout_votes_alt);
+        return;
+    }
+
+    /* 2. Games with running processes, read at the offset the console itself confirmed. */
+    for (size_t i = 0; i < count; i++) {
+        const akeno_proc_info *p = &procs[i];
+        if (p->pid == self_pid || !p->has_app_info) continue;
+        const char *title = scan->layout == AKENO_LAYOUT_ALT ? p->title_id_alt : p->title_id;
+        if (!akeno_is_game_title_id(title)) continue;
         if (p->state != AKENO_PROC_ACTIVE) {
             scan->stopped_games++;
             continue;
         }
         int known = 0;
         for (int c = 0; c < scan->candidates && c < AKENO_SCAN_MAX_CANDIDATES; c++)
-            if (strcmp(scan->candidate_ids[c], p->title_id) == 0) known = 1;
+            if (strcmp(scan->candidate_ids[c], title) == 0) known = 1;
         if (known) continue;
         if (scan->candidates < AKENO_SCAN_MAX_CANDIDATES)
-            snprintf(scan->candidate_ids[scan->candidates], AKENO_TITLE_ID_MAX, "%s", p->title_id);
+            snprintf(scan->candidate_ids[scan->candidates], AKENO_TITLE_ID_MAX, "%s", title);
         scan->candidates++;
     }
     if (scan->candidates == 1) {
@@ -195,7 +274,7 @@ int akeno_param_sfo_title(const unsigned char *data, size_t len, const char *exp
         if (key_offset >= len) return -1;
         const char *key = (const char *)data + key_offset;
         size_t key_max = len - key_offset;
-        if (strnlen(key, key_max) == key_max) return -1;
+        if (!memchr(key, 0, key_max)) return -1; /* Unterminated key. */
         if (strcmp(key, "TITLE") == 0) sfo_string(data, len, data_start, entry, title, sizeof(title));
         else if (strcmp(key, "TITLE_ID") == 0) sfo_string(data, len, data_start, entry, title_id, sizeof(title_id));
     }
@@ -237,15 +316,16 @@ static char *read_small_file(const char *path, size_t max, size_t *len) {
  * verification item. A miss only means the name stays unknown.
  */
 static const struct {
-    const char *pattern;
+    const char *dir;    /* Below the root, before the title ID. */
+    const char *suffix; /* After the title ID. */
     int sfo;
 } META_PATHS[] = {
-    { "%s/system_data/priv/appmeta/%s/param.json", 0 },
-    { "%s/system_data/priv/appmeta/%s/param.sfo", 1 },
-    { "%s/user/appmeta/%s/param.json", 0 },
-    { "%s/user/appmeta/%s/param.sfo", 1 },
-    { "%s/mnt/sandbox/pfsmnt/%s-app0/sce_sys/param.json", 0 },
-    { "%s/mnt/sandbox/pfsmnt/%s-app0/sce_sys/param.sfo", 1 },
+    { "/system_data/priv/appmeta/", "/param.json", 0 },
+    { "/system_data/priv/appmeta/", "/param.sfo", 1 },
+    { "/user/appmeta/", "/param.json", 0 },
+    { "/user/appmeta/", "/param.sfo", 1 },
+    { "/mnt/sandbox/pfsmnt/", "-app0/sce_sys/param.json", 0 },
+    { "/mnt/sandbox/pfsmnt/", "-app0/sce_sys/param.sfo", 1 },
 };
 
 int akeno_game_meta_lookup(const char *root, const char *title_id, char *name, size_t name_len, char *source, size_t source_len) {
@@ -254,7 +334,8 @@ int akeno_game_meta_lookup(const char *root, const char *title_id, char *name, s
     if (!root || !akeno_is_game_title_id(title_id)) return -1; /* Also keeps the path free of traversal. */
     for (size_t i = 0; i < sizeof(META_PATHS) / sizeof(META_PATHS[0]); i++) {
         char path[600];
-        snprintf(path, sizeof(path), META_PATHS[i].pattern, root, title_id);
+        int n = snprintf(path, sizeof(path), "%s%s%s%s", root, META_PATHS[i].dir, title_id, META_PATHS[i].suffix);
+        if (n < 0 || (size_t)n >= sizeof(path)) continue; /* Never open a truncated path. */
         size_t len = 0;
         char *data = read_small_file(path, META_PATHS[i].sfo ? PARAM_SFO_MAX_BYTES : PARAM_JSON_MAX_BYTES, &len);
         if (!data) continue;

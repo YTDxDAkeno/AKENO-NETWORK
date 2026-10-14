@@ -3,9 +3,12 @@
  * browser requests are written to stdout as JSON lines so the test harness can observe them.
  *
  * Game detection is simulated: AKENO_SIM_PROCESSES names a file with one process per line,
- * "<pid> <title-id or -> [stopped]", re-read on every scan (a missing file means no processes).
- * AKENO_SIM_METADATA_ROOT is the directory that stands in for the console's root when title
- * names are looked up. Without these variables the host build reports no game detection.
+ * "<pid> <title-id or -> [stopped]", re-read on every scan (a missing file means no processes,
+ * a file containing only "fail" a listing error). Each title ID is written into a zeroed raw
+ * application-info buffer at the offset AKENO_SIM_APPINFO_LAYOUT selects ("ps" = 20, the
+ * default; "alt" = 16; "mixed" = alternating, i.e. an inconsistent console) and decoded with the
+ * same parser as on the PS5. AKENO_SIM_METADATA_ROOT stands in for the console's root when
+ * title names are looked up. Without these variables the host build reports no game detection.
  */
 #define _POSIX_C_SOURCE 200809L
 #include "platform.h"
@@ -66,7 +69,24 @@ int akeno_platform_open_browser(const char *url) {
     return failed ? -1 : 0;
 }
 
+/* Test switch AKENO_TEST_ACTIONABLE: "unavailable" (-2) or "refused" (-1) simulate a console
+ * where the button notification cannot be used, so the fallback can be tested. */
+static const char *actionable_mode(void) {
+    const char *mode = getenv("AKENO_TEST_ACTIONABLE");
+    return mode ? mode : "";
+}
+
+const char *akeno_platform_actionable_status(void) {
+    const char *mode = actionable_mode();
+    if (strcmp(mode, "unavailable") == 0) return "not available (simulated)";
+    if (strcmp(mode, "refused") == 0) return "loaded; the system refuses (simulated)";
+    return "printed to standard output (host build)";
+}
+
 int akeno_platform_notify_action(const char *title, const char *text, const char *button, const char *url) {
+    const char *mode = actionable_mode();
+    if (strcmp(mode, "unavailable") == 0) return -2;
+    if (strcmp(mode, "refused") == 0) return -1;
     pthread_mutex_lock(&g_out);
     fputs("{\"event\":\"notification\",\"text\":", stdout);
     print_json_string(title);
@@ -89,11 +109,18 @@ int akeno_platform_list_apps(akeno_proc_info *out, size_t max, size_t *total, ch
         snprintf(err, err_len, "Game detection is only available on the PS5.");
         return -1;
     }
+    const char *layout = getenv("AKENO_SIM_APPINFO_LAYOUT");
+    int mode = !layout || strcmp(layout, "alt") != 0 ? (layout && strcmp(layout, "mixed") == 0 ? 2 : 0) : 1;
     FILE *f = fopen(path, "r");
     if (!f) return 0;
     char line[256];
     size_t n = 0;
     while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "fail", 4) == 0) {
+            fclose(f);
+            snprintf(err, err_len, "Simulated process listing failure.");
+            return -1;
+        }
         int pid = 0;
         char title[32] = "", state[16] = "";
         if (line[0] == '#' || sscanf(line, "%d %31s %15s", &pid, title, state) < 2) continue;
@@ -104,8 +131,19 @@ int akeno_platform_list_apps(akeno_proc_info *out, size_t max, size_t *total, ch
         o->pid = pid;
         o->state = strcmp(state, "stopped") == 0 ? AKENO_PROC_STOPPED : AKENO_PROC_ACTIVE;
         o->has_app_info = strcmp(title, "-") != 0;
-        if (o->has_app_info) snprintf(o->title_id, sizeof(o->title_id), "%s", title);
         snprintf(o->comm, sizeof(o->comm), "sim%d", pid);
+        if (!o->has_app_info) continue;
+        /* What sceKernelGetAppInfo would have written, with the title ID at the simulated offset. */
+        unsigned char raw[128];
+        memset(raw, 0, sizeof(raw));
+        raw[0] = (unsigned char)(pid & 0xFF);
+        raw[1] = (unsigned char)((pid >> 8) & 0xFF);
+        int alt = mode == 1 || (mode == 2 && (n % 2) == 0);
+        size_t offset = alt ? AKENO_APPINFO_OFFSET_TITLE_ALT : AKENO_APPINFO_OFFSET_TITLE_PS;
+        size_t len = strnlen(title, sizeof(title));
+        if (len > 13) len = 13; /* The title field is at most 14 bytes in either layout. */
+        memcpy(raw + offset, title, len);
+        akeno_appinfo_parse(raw, sizeof(raw), o);
     }
     fclose(f);
     return (int)n;
