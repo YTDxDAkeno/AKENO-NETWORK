@@ -41,7 +41,8 @@ typedef struct {
 
 /* What the activity worker last saw and reported (app->lock). */
 typedef struct {
-    char state[24];   /* off, starting, unsupported, idle, playing, excluded, permission-missing, disabled-on-server, signed-out */
+    char state[24];   /* off, starting, unsupported, server-unsupported, idle, playing, excluded, permission-missing,
+                         disabled-on-server, signed-out */
     char detail[200];
     char title_id[AKENO_TITLE_ID_MAX];
     char name[AKENO_TITLE_NAME_MAX];

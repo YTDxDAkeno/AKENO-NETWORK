@@ -53,6 +53,7 @@ typedef struct {
     int scope_denied;   /* Paired without "activity:write" (the owner can grant it later on the website). */
     int server_off;     /* Turned off in the website's privacy settings. */
     int excluded;       /* The owner excluded this game on the website. */
+    int server_old;     /* The server has no game activity routes (older revision). */
     int net_problem;
     int signed_out;
     int unsupported;
@@ -124,6 +125,8 @@ static void publish(act_ctx *c) {
                  "\"Allow game activity\" for this console; no new pairing is needed.";
     } else if (c->server_off) {
         state = "disabled-on-server", detail = "Game activity is turned off in your privacy settings on the AKENO NETWORK website.";
+    } else if (c->server_old) {
+        state = "server-unsupported", detail = "Your AKENO server does not support game activity yet. Update the server to share games.";
     } else if (c->debounce.current[0] && c->excluded) {
         state = "excluded", detail = "You excluded this game in your privacy settings on the AKENO website; it is not shared.";
     } else if (c->debounce.current[0]) {
@@ -199,6 +202,7 @@ static void heartbeat(act_ctx *c) {
         c->server_off = 0;
         c->scope_denied = 0;
         c->excluded = 0;
+        c->server_old = 0;
         c->net_problem = 0;
         c->next_beat = now + c->heartbeat_ms;
     } else {
@@ -216,6 +220,10 @@ static void heartbeat(act_ctx *c) {
             c->next_beat = slow_retry;
         } else if (strcmp(response.error_code, "ACTIVITY_TITLE_EXCLUDED") == 0) {
             c->excluded = 1;
+            c->reported = 0;
+            c->next_beat = slow_retry;
+        } else if (response.http_status == 404) {
+            c->server_old = 1; /* Retried slowly: the server may be updated meanwhile. */
             c->reported = 0;
             c->next_beat = slow_retry;
         } else if (status == AKENO_ERR_UNAUTHORIZED) {

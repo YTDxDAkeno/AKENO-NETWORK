@@ -1,198 +1,166 @@
-# AKENO NETWORK for PS5 — Alpha 0.1
+# AKENO NETWORK for PS5 — Alpha 0.2 (release candidate)
 
 The AKENO NETWORK console app is a homebrew payload for a jailbroken PS5. It connects to **your
 own AKENO NETWORK server** over verified HTTPS/WSS, pairs with your account through a code you
-approve on the website, and shows friends, presence, messages, invitations, parties and game
-sessions in a page that opens in the console's web browser. New messages, friend requests and
-invitations appear as PS5 system notifications while it runs.
+approve on the website, and shows friends, presence, messages, invitations, parties, game
+sessions and **the games you play** in a page that opens in the console's web browser. New
+messages, friend requests and invitations appear as PS5 system notifications, also while a game
+is running. With Alpha 0.2 it also detects the game you are playing and records your playtime.
 
 It is independent of PlayStation Network. It does **not** change the console's own friends
 list, parties, voice chat or Game Base (no documented interface exists for that; see
 [PS5_GAMEBASE_RESEARCH.md](PS5_GAMEBASE_RESEARCH.md)).
 
-> **Hardware status (2026-10-13): the console app itself has not run on a PS5 yet.**
-> What is proven on hardware is that a diagnostic ELF built with the same pinned SDK runs on
-> firmware 12.20 (kstuff) and shows a system notification with the same call this app uses.
-> Everything else below is tested on Linux only. Please follow the [hardware test plan](#hardware-test-plan)
-> and report the results so they can be recorded in [FIRMWARE_COMPATIBILITY.md](FIRMWARE_COMPATIBILITY.md).
+> **Hardware status (2026-10-14)**
+> - **Alpha 0.1 ran on a real PS5 with firmware 12.20** (kstuff, user report with screenshots):
+>   the ELF started, the system browser opened automatically, the full AKENO page appeared, the
+>   console connected to the production server over HTTPS, pairing completed, the user's account
+>   signed in, the page showed the connected realtime state, and native AKENO message
+>   notifications appeared on the home screen **and while a game was running**.
+> - **Alpha 0.2 has not run on a PS5 yet.** Everything new is tested on Linux only. Follow
+>   [HARDWARE_TEST_PLAN_ALPHA_0.2.md](HARDWARE_TEST_PLAN_ALPHA_0.2.md); results go into
+>   [FIRMWARE_COMPATIBILITY.md](FIRMWARE_COMPATIBILITY.md).
+> - Firmware 13.60: nothing tested.
 
 ## What is tested where
 
-| Feature | Linux (host build, real server) | PS5 hardware |
+| Feature | Linux (host build, real server) | PS5 hardware (12.20) |
 | --- | --- | --- |
-| ELF builds with the pinned SDK, imports only reviewed system functions | n/a | Compiled in CI; not run |
-| Verified TLS (mbedTLS 3.6.7, chain + host name, Mozilla roots or your CA file) | 24 end-to-end scenarios | Not tested |
-| Device pairing (code on the page and as a notification, approval on the website) | Tested | Not tested |
-| Credential and settings storage (mode 0600, in `/data/akeno`) | Tested | Not tested (`/data` writability unverified) |
-| Friends, presence, requests, messages, invitations, party and party chat, game sessions | Tested (API and in Chromium) | Not tested |
-| Realtime updates with bounded reconnects; sign-out when unpaired on the website | Tested | Not tested |
-| System notifications | Printed by the host build | **The call works on 12.20** (diagnostic); not tested from this app |
-| Opening the page in the system browser (`sceSystemServiceLaunchWebBrowser`) | n/a | **Not tested** — the key open question |
-| Controller navigation in the page | Keyboard-only navigation tested in Chromium | Not tested (depends on the PS5 browser) |
-| Clean exit, second launch reopens the page | Tested | Not tested |
+| ELF starts, imports only reviewed system functions | n/a | **Alpha 0.1: yes.** Alpha 0.2 adds one optional (weak) import; not run |
+| Opening the page in the system browser | n/a | **Alpha 0.1: works** |
+| Verified TLS (mbedTLS 3.6.7), HTTPS + WSS to your server | Tested | **Alpha 0.1: works** (production server) |
+| Device pairing (page + notification, approval on the website) | Tested | **Alpha 0.1: works** |
+| Friends, messages, invitations, party chat, game sessions, realtime | Tested (API and Chromium) | **Alpha 0.1: page and realtime state work** |
+| Native message notifications, also during a game | Printed by the host build | **Alpha 0.1: works** |
+| Game detection and playtime (Alpha 0.2) | Tested with a simulated process list | Not tested |
+| Games tab, newest-message banner, drafts, Change Server fix | Tested in Chromium | Not tested |
+| Notifications with a button (experimental) | Fallback logic tested | Not tested |
+| Controller navigation in the page | Keyboard-only navigation in Chromium | Partly seen in Alpha 0.1; details not recorded |
 | Firmware 13.60 | n/a | Not tested at all |
-
-"Tested on Linux" means the exact same C sources and the same TLS library, built for Linux and
-run against a disposable AKENO server with a private certificate authority. The PS5 browser is
-not Chromium; layout and script compatibility there are unverified.
 
 ## Requirements
 
-- A PS5 you own, already jailbroken with **kstuff**, on firmware **12.20** (confirmed for the
-  SDK toolchain) or 13.60 (not yet tested). etaHEN is **not** required and not used.
-- An **ELF loader for ps5-payload-sdk payloads** — use the same one that ran the diagnostic
-  ELF (for example [ps5-payload-elfldr](https://github.com/ps5-payload-dev/elfldr), which listens
-  on port 9021). The loader is not part of AKENO and was not chosen or tested by this project.
-  The app keeps running until you exit it; whether your loader stays usable meanwhile is
-  untested.
-- Your AKENO NETWORK server reachable from the console over **HTTPS** (IPv4; the PS5 SDK's
-  resolver has no IPv6). The server must include device pairing (any revision from commit
-  `e5bd019` on). **The production VPS revision is unverified**; if it lacks pairing, the app
-  says "This server does not support device pairing".
+- A PS5 you own, jailbroken with **kstuff**, on firmware **12.20** (Alpha 0.1 verified) or
+  13.60 (untested). etaHEN is **not** required and not used.
+- An **ELF loader for ps5-payload-sdk payloads** — the one you used for Alpha 0.1.
+- Your AKENO NETWORK server reachable from the console over **HTTPS** (IPv4). Game activity and
+  the new privacy settings need a server at this revision (migration `0003`); older servers work
+  for everything else, and the console says "Server update needed" in the Games tab.
 - An account on that server, signed in on a phone or PC to approve the pairing code.
 
 ## Install and start
 
-1. Download the artifact **akeno-network-ps5-alpha-0.1** from the "PS5 console build" GitHub
-   Actions run of the commit you approved.
-2. Check the checksum against `SHA256SUMS` in the artifact (and the value in the run log):
-   - Linux/macOS: `sha256sum -c SHA256SUMS`
-   - Windows PowerShell: `Get-FileHash .\akeno-network-ps5.elf -Algorithm SHA256`
-3. Send `akeno-network-ps5.elf` to the console **with your loader, the same way you sent the
-   diagnostic**. With ps5-payload-elfldr from Linux/macOS, for example:
-   `socat -u FILE:akeno-network-ps5.elf TCP:<ps5-ip>:9021`. Nothing in this project sends files
-   to a console automatically.
-4. A notification "AKENO NETWORK Alpha 0.1 started." appears and the browser should open the
-   AKENO page. If the browser does not open, AKENO keeps running and tells you by notification.
-   **Fallback without the page:** if `/data/akeno/settings.json` already names your server (copy
-   it via FTP, format below), AKENO then starts pairing by itself and shows the pairing code as a
-   notification; after approval, message and invitation notifications work without the page.
+1. Download the artifact **akeno-network-ps5-alpha-0.2-rc** from the "PS5 console build"
+   GitHub Actions run of the commit you approved. It contains `akeno-network-ps5.elf` (Alpha
+   0.2), `fallback-alpha-0.1/akeno-network-ps5-alpha-0.1.elf` (the hardware-tested Alpha 0.1,
+   rebuilt and verified byte-identical), `SHA256SUMS`, `BUILDINFO.txt`, this README, the release
+   notes and the hardware test plan.
+2. Check the checksum: `sha256sum -c SHA256SUMS` (Linux/macOS) or
+   `Get-FileHash .\akeno-network-ps5.elf -Algorithm SHA256` (Windows) and compare with the run log.
+3. Send `akeno-network-ps5.elf` with your loader, exactly as you did with Alpha 0.1. Nothing in
+   this project sends files to a console automatically.
+4. Notification "AKENO NETWORK Alpha 0.2 started." and the browser opens the page. An existing
+   Alpha 0.1 pairing in `/data/akeno` is kept.
+5. First run only: enter your server (`https://...`) and a console name, select **Show pairing
+   code**, approve it on the website (`https://<your server>/pair`). Leave "Share the game you
+   are playing" ticked if you want game activity.
+6. **Paired with Alpha 0.1?** On the website: Settings → Security → Paired devices → **Allow game
+   activity**. No new pairing is needed.
 
-   ```json
-   {"version":1,"server":"https://your-akeno-server.example","deviceName":"PlayStation 5","notifyMessages":true,"notifySocial":true}
-   ```
-5. First run: enter your server address (`https://...`) and a name for the console, select
-   **Show pairing code**, then on your phone/PC open the shown address (normally
-   `https://<your server>/pair`), enter the code, choose permissions and approve. The code is
-   also shown as a notification.
+Sending the ELF again while AKENO runs does not start a second copy: the running app reopens its
+page — at the newest conversation you have not seen yet, if any. Use **Exit AKENO** to stop it.
 
-Sending the ELF again while AKENO runs does not start a second copy; it asks the running app to
-reopen its page. Use **Exit AKENO** (top right) to stop it.
+**Fallback without the page:** if `/data/akeno/settings.json` names your server, AKENO pairs by
+notification when the browser cannot open. Settings file (all keys optional except `server`):
+
+```json
+{"version":1,"server":"https://your-akeno-server.example","deviceName":"PlayStation 5","notifyMessages":true,"notifySocial":true,"activityEnabled":true,"actionableNotifications":false}
+```
+
+**Going back to Alpha 0.1:** Exit AKENO, send `fallback-alpha-0.1/akeno-network-ps5-alpha-0.1.elf`.
+It uses the same `/data/akeno` and ignores the new settings keys.
 
 ## Using it
 
-- **Friends**: presence and activity, incoming requests (accept/decline), select a friend to chat.
-- **Messages**: conversations with unread counts; the on-screen keyboard is the browser's own.
-- **Invitations**: party, group and game-session invitations (accept/decline) and recent activity.
-- **Party**: your party, members, text chat, leave; join friends' parties or create one. Voice
-  chat does not exist in AKENO.
-- **Game sessions**: sessions you are in and open ones (read-only in this alpha).
-- **Diagnostics**: version, firmware, TLS library, trusted roots, random source, browser and
-  notification results, feature report, connection test, recent log (tokens redacted).
-- **Settings**: notification switches, unpair this console.
-- Status selector (Online/Away/Do not disturb/Invisible) in the top bar; the dot next to "Live"
-  shows the realtime connection.
-
-Controller: the page relies on the browser's own controller handling. Arrow keys / D-pad move
-focus between controls when the browser forwards them, ✕ activates, ◯ goes back. If the
-browser exposes the Gamepad API, the page also reads the D-pad, ✕ and ◯ directly. Which of these
-the PS5 browser supports is part of the hardware test.
+- **Friends**: presence, "Playing <game> · PlayStation 5 · <duration>", requests, chat.
+- **Messages**: conversations with unread counts. A **New message** banner appears anywhere in the
+  app and takes the focus when you come back to the page. Half-written replies are kept.
+- **Games**: what this console detects right now and your tracked history (last played, last
+  session, total tracked). See [GAME_ACTIVITY.md](GAME_ACTIVITY.md).
+- **Invitations**, **Party**, **Game sessions**: as in Alpha 0.1.
+- **Diagnostics**: version, firmware, TLS, browser and notification results, **game detection**
+  (layout evidence, raw probes, heartbeats), **button notifications** (status, test), connection
+  test, recent log (tokens redacted).
+- **Settings**: notifications, the experimental button notifications, game activity on this
+  console, unpair.
+- Controller: D-pad moves the focus, ✕ selects, ◯ (Escape) goes back — also out of the server
+  form and out of a conversation. Text input uses the browser's on-screen keyboard.
 
 ## Files on the console
 
-All in `/data/akeno` (created with mode 0700):
+All in `/data/akeno` (mode 0700): `settings.json` (0600), `device.json` (device token, 0600),
+`akeno.log` / `.1` (redacted, rotated at 512 KiB), `instance.key` (removed on exit), optional
+`ca.pem`. **Uninstall:** Exit AKENO, unpair on the website, delete `/data/akeno`.
 
-| File | Content |
-| --- | --- |
-| `settings.json` | Server address, console name, notification switches (mode 0600). Can be edited via FTP. |
-| `device.json` | Device token for this server only (mode 0600). Deleted on unpair or when the server revokes it. |
-| `akeno.log`, `akeno.log.1` | Diagnostic log, tokens and device codes redacted; rotated at 512 KiB. |
-| `instance.key` | Random key that lets a second launch reopen the page; removed on exit. |
-| `ca.pem` (optional) | Put a PEM CA bundle here to trust a private CA instead of the built-in Mozilla roots. |
+## System functions used by AKENO code
 
-**Uninstall**: Exit AKENO, unpair the console on the website (Settings → Paired devices), delete
-`/data/akeno`. AKENO installs nothing else and changes no system files.
+All taken from samples of the pinned SDK (`f5d40f0`). CI fails if the ELF imports any other
+`sce*` function, if a strong import is not in `console/reviewed-imports.txt` (the import set of
+the hardware-tested Alpha 0.1), if an optional import is not weak, or if code other than the
+platform layer loads libraries at run time (`console/check-imports.sh`).
 
-## How it is built and why it is safe to try
+| Function | Purpose | How it is linked | Hardware status |
+| --- | --- | --- | --- |
+| `sceKernelSendNotificationRequest` | Notifications | strong (as Alpha 0.1) | Works on 12.20 |
+| `sceUserServiceInitialize` / `Terminate` | Needed to open the browser | strong (as Alpha 0.1) | Works on 12.20 |
+| `sceSystemServiceLaunchWebBrowser` | Open the page | strong (as Alpha 0.1) | Works on 12.20 |
+| `sceNetResolver*`, `sceNetPool*` | DNS via the SDK's `getaddrinfo` | strong (as Alpha 0.1) | Works on 12.20 |
+| `sysctl(KERN_PROC_PROC)` | Process list for game detection (read-only) | libc (as Alpha 0.1's libc set) | Not tested |
+| `sceKernelGetAppInfo` | Title ID per process (read-only) | **weak**: missing → detection "unavailable", app still starts | Not tested |
+| `sceNotificationSend` | Button notifications (opt-in) | **not linked**: `dlopen("libSceNotification.sprx")` + `dlsym` when enabled | Not tested |
+| `kernel_get_fw_version` (SDK runtime) | Show the firmware version | as Alpha 0.1 | Works on 12.20 |
 
-- **Verified TLS only.** mbedTLS 3.6.7 with mandatory certificate-chain and host-name (or IP
-  SAN) checks, TLS 1.2 minimum. Roots: the Mozilla bundle from certifi 2026.07.22 embedded at
-  build time, or your `ca.pem`. There is no switch to disable verification. Randomness comes from
-  the kernel CSPRNG (`kern.arandom`, else `/dev/urandom`); if neither works, AKENO stops instead
-  of using a weak source. Both inputs are downloaded at pinned versions with SHA-256 checks
-  (`clients/ps5/scripts/fetch-deps.sh`).
-- **Page on this console only.** The page is served on `127.0.0.1:8642` and is not reachable from
-  the network. Every API call needs a random per-launch secret (passed in the URL fragment and
-  removed from the address bar), an exact loopback `Host` (DNS-rebinding defence) and a
-  same-origin `Origin`; responses carry a strict Content-Security-Policy. The device token never
-  reaches the browser: the page can only call an allow-listed set of AKENO API routes, and the
-  server additionally enforces the permissions you granted at pairing.
-- **Bounded everything.** Request and response sizes, timeouts, reconnect attempts, a
-  notification rate limit (burst 5, then one per 3 s).
-- **System functions used by AKENO code** (all from samples of the pinned SDK; CI fails the build
-  if any other `sce*` function is imported — `clients/ps5/console/check-imports.sh`):
+Why the last two are not ordinary imports: the SDK runtime (`crt/rtld_payload.c`) refuses to
+start a payload when a needed library or a strong symbol cannot be resolved. A new strong import
+could therefore stop the proven app from starting on a firmware that lacks it.
 
-  | Function | Purpose | Hardware status |
-  | --- | --- | --- |
-  | `sceKernelSendNotificationRequest` | Notifications | Works on 12.20 (diagnostic) |
-  | `sceUserServiceInitialize` / `Terminate` | Required before opening the browser | Not tested |
-  | `sceSystemServiceLaunchWebBrowser` | Open the page | Not tested |
-  | `sceNetResolver*`, `sceNetPool*` | DNS, through the SDK's `getaddrinfo` | Not tested |
-  | `kernel_get_fw_version` (SDK runtime, read-only) | Show the firmware version | Not tested |
+**SDK runtime disclosure.** Every ps5-payload-sdk payload (Alpha 0.1 and the diagnostic
+included) starts with the SDK's `crt`, which raises its own process's credentials using the
+loader's kernel access and per-firmware offsets maintained by the SDK. AKENO's own code contains
+no offsets and calls none of the SDK's kernel-memory helpers (checked in CI); it never touches
+another process, system files or Sony services. See [SAFETY.md](SAFETY.md).
 
-  plus ordinary BSD socket, file and thread functions of the SDK's libc.
+## Security of the local page
 
-- **What the SDK runtime does (disclosure).** Every payload built with ps5-payload-sdk — including
-  the diagnostic that already ran on your console — starts with the SDK's runtime (`crt`), which
-  uses the kernel read/write access provided by the loader to raise **its own process's**
-  credentials and syscall permissions, using firmware-specific offsets maintained by the SDK
-  (12.20 and 13.60 are in its table). AKENO's own code contains no offsets and calls none of the
-  SDK's kernel-memory helpers (checked in CI). It does not touch other processes, system files or
-  Sony services.
-
-## Hardware test plan
-
-Use a console you can afford to reboot, with your data backed up. Stop at the first problem and
-report it. For each step note: works / does not work / what you saw.
-
-| # | Step | Expected |
-| --- | --- | --- |
-| H1 | Send the ELF with your loader | Notification "AKENO NETWORK Alpha 0.1 started." |
-| H2 | Wait 5 s | The browser opens the AKENO page (if not: notification "The browser could not be opened"; then try the fallback above and continue with H5/H7/H8 via notifications) |
-| H3 | Move with D-pad/left stick, press ✕ and ◯ | Report which inputs move the focus or a cursor |
-| H4 | Enter the server address and console name with the on-screen keyboard | Pairing screen appears |
-| H5 | Show pairing code, approve it on your phone/PC | "paired as …" notification; Friends tab loads |
-| H6 | Diagnostics → Test connection | "OK … TLSv1.3/1.2 …", firmware shows 12.20 |
-| H7 | Send a message to a friend; have the friend reply | Reply appears in the chat and as a notification |
-| H8 | Close the browser, have the friend send another message | Notification still appears |
-| H9 | Send the ELF again | The page reopens; no second copy starts |
-| H10 | Exit AKENO | Notification "AKENO NETWORK stopped." |
-| H11 | Repeat H1–H10 on 13.60 (only after 12.20 works) | Same |
-
-Afterwards please copy `/data/akeno/akeno.log` via FTP (it contains no tokens) and note the
-kstuff and loader versions.
+Page on `127.0.0.1:8642` only; per-launch secret in the URL fragment (removed from the address
+bar); exact loopback `Host` and same-origin `Origin`; strict CSP; device token never leaves the
+app (allow-listed proxy; the server enforces the device's permissions). Notification buttons use
+**one-time links** (`/t/<ticket>`, 128-bit, single use, 10 minutes) instead of the secret; see
+[QUICK_ACCESS.md](QUICK_ACCESS.md).
 
 ## Troubleshooting
 
 | Symptom | Cause / fix |
 | --- | --- |
-| "The server's certificate could not be verified" | The server's certificate is not from a public CA or its host name differs. Use the exact host from the certificate, or put your CA into `/data/akeno/ca.pem`. |
-| "This server does not support device pairing" | The server runs an older revision; update it (see VPS_DEPLOYMENT.md). |
-| "Port 8642 is used by another program" | Another payload uses that port. |
-| Page says "This page has expired" | The browser lost the page secret (e.g. reopened from history). Send the ELF again. |
-| "Live updates off" | Pairing did not grant the `realtime` permission; unpair and pair again with it. |
-| "Could not create the data folder" | `/data` is not writable in your environment; report this. |
+| Games tab: "Permission needed" | Website → Settings → Security → Paired devices → Allow game activity |
+| Games tab: "Server update needed" | The server predates game activity; deploy this revision |
+| Games tab: "Game detection unavailable" | The process list or `sceKernelGetAppInfo` is not available; send Diagnostics → Game detection |
+| Diagnostics shows layout "conflicting" | Title IDs appeared at both known offsets; AKENO reports nothing. Send the raw probes |
+| A game shows as PPSA… instead of its name | The console's metadata files are not readable from the payload; an administrator can name the title on the server |
+| No notification after turning on button notifications | Turn the experiment off; plain notifications return |
+| "The server's certificate could not be verified" | Use the certificate's exact host name, or put your CA in `/data/akeno/ca.pem` |
+| "Port 8642 is used by another program" | Another payload uses that port |
+| "This page has expired" | Send the ELF again (keeps the pairing) |
 
 ## Building from source
 
 ```sh
-clients/ps5/scripts/fetch-deps.sh                      # pinned mbedTLS + CA bundle
+clients/ps5/scripts/fetch-deps.sh                      # pinned mbedTLS 3.6.7 + CA bundle (SHA-256 checked)
 export PS5_PAYLOAD_SDK=/opt/ps5-payload-sdk            # SDK commit f5d40f02770e9b0001dd9e18056eca70b3da8b40
 make -C clients/ps5/console                            # -> clients/ps5/build-ps5/akeno-network-ps5.elf
 clients/ps5/console/check-imports.sh clients/ps5/build-ps5
 ```
 
-The Linux build of the same app (`akeno-app`) and its tests: `pnpm test:client`
-(see [TESTING.md](TESTING.md)). Source layout: `clients/ps5/src` (client library and both TLS
-transports), `clients/ps5/app` (console app, local page server, platform layers),
-`clients/ps5/app/web` (the page), `clients/ps5/console` (PS5 build).
+The build is reproducible: rebuilding Alpha 0.1 (`592c23a`) locally and in CI gives exactly the
+SHA-256 of the build that ran on the console. Linux build and tests: `pnpm test:client` (see
+[TESTING.md](TESTING.md)).

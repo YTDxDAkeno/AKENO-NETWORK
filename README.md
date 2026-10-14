@@ -26,7 +26,7 @@ directory — running on your own PC or a small Linux VPS.
 | Game sessions | Lobby directory with search and filters, visibility, instant or approval-based joining, invitations, capacity enforced under concurrency, connection details for participants only |
 | Paired devices | Code-based device pairing approved on the website (no password on the device), scoped and revocable device tokens for API and realtime, paired-device management in Settings |
 | Device client | Portable C11 client library + `akeno-cli` (`clients/ps5`): pairing, friends, presence, messages, invitations, parties, game sessions, realtime with bounded reconnects. Tested on Linux with OpenSSL and mbedTLS |
-| PS5 console app (Alpha 0.1) | Payload for a jailbroken PS5: verified HTTPS/WSS, code pairing, a controller-friendly page in the system browser, system notifications ([docs/PS5_CLIENT.md](docs/PS5_CLIENT.md)). ELF built in CI and tested on Linux; **not yet run on a PS5** |
+| PS5 console app (Alpha 0.2 RC) | Payload for a jailbroken PS5: verified HTTPS/WSS, code pairing, a controller-friendly page in the system browser, system notifications, **automatic game activity and playtime**, quick access to messages ([docs/PS5_CLIENT.md](docs/PS5_CLIENT.md)). **Alpha 0.1 ran on a PS5 with firmware 12.20**; Alpha 0.2 is tested on Linux and awaits its hardware test |
 | Administration | Invitation codes (shown once, stored hashed), member suspension and roles, audit log, system stats |
 | Operations | Docker Compose deployment, Caddy automatic HTTPS, health checks, backups and restore, structured logs |
 
@@ -98,6 +98,9 @@ docs               Architecture, API, security, deployment and status documentat
 - Devices and PS5: [PS5 console app](docs/PS5_CLIENT.md) · [Device pairing](docs/DEVICE_PAIRING.md) · [Client installation](docs/INSTALLATION.md) ·
   [Firmware compatibility](docs/FIRMWARE_COMPATIBILITY.md) · [Safety](docs/SAFETY.md) ·
   [Game Base research](docs/PS5_GAMEBASE_RESEARCH.md) · [PSN compatibility research](docs/PSN_COMPATIBILITY_RESEARCH.md)
+- Alpha 0.2: [Game activity and playtime](docs/GAME_ACTIVITY.md) · [Quick access and notifications](docs/QUICK_ACCESS.md) ·
+  [Release notes](docs/RELEASE_NOTES_ALPHA_0.2.md) · [Hardware test plan](docs/HARDWARE_TEST_PLAN_ALPHA_0.2.md) ·
+  [Branch reconciliation](docs/BRANCH_RECONCILIATION.md)
 - [Project status](docs/PROJECT_STATUS.md) — what is implemented, tested, incomplete or deferred
 
 ## License

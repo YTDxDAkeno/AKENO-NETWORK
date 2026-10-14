@@ -11,6 +11,10 @@ const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD ?? 'e2e-admin-password-123
 const RUN = Date.now().toString(36).slice(-4);
 const GAME = { titleId: 'PPSA01234', titleName: 'Astro Test Drive', platform: 'PS5' };
 
+// The second test signs in as the users the first one registered: registration is rate-limited
+// per IP (10 per 15 minutes) and the whole E2E suite shares one address.
+test.describe.configure({ mode: 'serial' });
+
 async function createInvitationCodes(baseURL: string, count: number): Promise<string[]> {
   const api = await playwrightRequest.newContext({ baseURL, extraHTTPHeaders: { Origin: baseURL } });
   const login = await api.post('/api/v1/auth/login', { data: { onlineId: 'e2e_admin', password: ADMIN_PASSWORD } });
@@ -38,6 +42,14 @@ async function openUser(browser: Browser): Promise<{ page: Page; errors: string[
     if (message.type() === 'error' && !message.text().startsWith('Failed to load resource')) errors.push(message.text());
   });
   return { page, errors, close: () => context.close() };
+}
+
+async function signIn(page: Page, onlineId: string): Promise<void> {
+  await page.goto('/login');
+  await page.getByLabel('Online ID').fill(onlineId);
+  await page.getByLabel('Password').fill(PASSWORD);
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
 }
 
 async function register(page: Page, code: string, onlineId: string, displayName: string): Promise<void> {
@@ -179,20 +191,23 @@ test('a paired console shares the game being played; friends see it live and pri
 });
 
 test('an older console is allowed to share games later; excluded games and hidden playtime', async ({ browser, baseURL }) => {
-  const [henryCode, ivyCode] = await createInvitationCodes(baseURL!, 2);
+  // Frank and Grace from the first test, already friends; Frank's history was cleared there.
   const henry = await openUser(browser);
   const ivy = await openUser(browser);
-  const henryId = `henry_${RUN}`;
+  const henryId = `frank_${RUN}`;
   let console_: APIRequestContext;
   let auth: Record<string, string> = {};
   const heartbeat = (titleId = GAME.titleId) => console_.post('/api/v1/activity/heartbeat', { headers: auth, data: { ...GAME, titleId } });
 
-  await test.step('Henry pairs a console without the game activity permission (as Alpha 0.1 consoles were)', async () => {
-    await register(henry.page, henryCode!, henryId, 'Henry');
-    await register(ivy.page, ivyCode!, `ivy_${RUN}`, 'Ivy');
-    const ivyUser = await apiCall(ivy.page, 'GET', '/users/me');
-    const sent = await apiCall(henry.page, 'POST', '/friends/requests', { userId: ivyUser.json.id });
-    expect((await apiCall(ivy.page, 'POST', `/friends/requests/${sent.json.request.id}/accept`)).status).toBe(200);
+  await test.step('Frank pairs a console without the game activity permission (as Alpha 0.1 consoles were)', async () => {
+    await signIn(henry.page, henryId);
+    await signIn(ivy.page, `grace_${RUN}`);
+    const reset = await apiCall(henry.page, 'PATCH', '/profile/privacy', {
+      gameActivityTracking: true,
+      gameActivityVisibility: 'friends',
+      gameHistoryVisibility: 'friends',
+    });
+    expect(reset.status).toBe(200);
 
     console_ = await playwrightRequest.newContext({ baseURL });
     const started = await console_.post('/api/v1/devices/pairings', {
@@ -211,7 +226,7 @@ test('an older console is allowed to share games later; excluded games and hidde
     expect(((await denied.json()) as { error: { code: string } }).error.code).toBe('DEVICE_SCOPE_DENIED');
   });
 
-  await test.step('Henry allows game activity on the website, without pairing again', async () => {
+  await test.step('Frank allows game activity on the website, without pairing again', async () => {
     await henry.page.goto('/settings?tab=security');
     await henry.page.getByRole('button', { name: 'Allow game activity' }).click();
     await expect(henry.page.getByRole('dialog')).toContainText('Allow Old PS5 to share game activity?');
@@ -222,7 +237,7 @@ test('an older console is allowed to share games later; excluded games and hidde
     await console_.post('/api/v1/activity/stop', { headers: auth, data: {} });
   });
 
-  await test.step('Henry hides his playtime: Ivy sees the game but not how long', async () => {
+  await test.step('Frank hides his playtime: Grace sees the game but not how long', async () => {
     await henry.page.goto('/settings?tab=privacy');
     await henry.page.getByRole('switch', { name: 'Show my playtime' }).click();
     await henry.page.getByRole('button', { name: 'Save privacy settings' }).click();
@@ -233,7 +248,7 @@ test('an older console is allowed to share games later; excluded games and hidde
     await expect(history).toContainText('hidden');
   });
 
-  await test.step('Henry excludes the game: never tracked again and hidden from Ivy', async () => {
+  await test.step('Frank excludes the game: never tracked again and hidden from Grace', async () => {
     await henry.page.goto('/settings?tab=privacy');
     const excluded = henry.page.getByTestId('excluded-games');
     await excluded.getByRole('button', { name: 'Exclude Astro Test Drive' }).click();

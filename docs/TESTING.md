@@ -160,14 +160,17 @@ route table only lists existing, non-sensitive routes. The browser scenario appr
 
 ### Device client and console app (`clients/ps5/tests`)
 
-- **Unit (383 checks, ASan + UBSan, also Valgrind; built once per TLS transport):** strict JSON
+- **Unit (488 checks, ASan + UBSan, also Valgrind; built once per TLS transport):** strict JSON
   (escapes, surrogates, depth limit, int64) and JSON output round trips, bounded buffers, HTTP
   heads and chunked bodies (incl. conflicting lengths and unsupported encodings), WebSocket
   framing (RFC 6455 vectors, masking, RSV bits, control-frame rules, non-minimal lengths),
   SHA-1/Base64 vectors, URL parsing, backoff bounds, capability policy (firmware never changes a
   decision), log redaction, HTTP method/path validation, transport init and CSPRNG output, and
   the console app's local HTTP parser against hostile input (missing/duplicate Host, header
-  injection, folding, oversized fields, chunked bodies), Host/Origin checks and secret comparison.
+  injection, folding, oversized fields, chunked bodies), Host/Origin checks and secret comparison;
+  game detection: title IDs, raw application-info parsing at both SDK offsets, layout votes
+  (agreeing, alternative, conflicting, none), classification, debouncing, names from
+  `param.json`/`param.sfo` and hostile metadata files.
 - **End-to-end, CLI (24 scenarios, run for the OpenSSL and the mbedTLS transport):** real server
   build on a fresh database behind a TLS terminator with a throwaway CA. Untrusted certificate,
   wrong host name and IP-vs-DNS mismatches are refused; a DNS-named certificate is accepted;
@@ -178,7 +181,7 @@ route table only lists existing, non-sensitive routes. The browser scenario appr
   world-readable credential files refused; no tokens in logs; malformed HTTP, invalid JSON,
   oversized, truncated and stalled responses, 5xx and refused connections end cleanly; reconnect
   attempts are bounded.
-- **End-to-end, console app (15 scenarios, `--app`):** the host build of the PS5 app against the
+- **End-to-end, console app (15 Alpha 0.1 scenarios, `--app`):** the host build of the PS5 app against the
   same server: page secret, DNS-rebinding Host and cross-site Origin refused; proxy allow-list;
   pairing through the page and the website (code also as notification); friends and messages
   through the proxy; realtime events become page events and system notifications (and respect
@@ -186,28 +189,40 @@ route table only lists existing, non-sensitive routes. The browser scenario appr
   diagnostics and a TLS connection test; a second launch reopens the page; revocation on the
   website deletes the credential; clean exit; untrusted server certificate refused; pairing by
   notification alone when the browser cannot be opened; no tokens in logs; and two **Chromium** runs of the real page (first-run setup and pairing code; keyboard-only
-  navigation, chat, live reply, every tab) with no script or CSP errors. Set
+  navigation, chat, live reply, every tab) with no script or CSP errors; the **Change Server**
+  form stays open with its typed values over more than two refresh cycles and Cancel/Escape
+  change nothing.
+- **End-to-end, Alpha 0.2 console scenarios (10 more, simulated process list via
+  `AKENO_SIM_PROCESSES`):** game activity permission granted later on the website; start,
+  switch, two games (ambiguous), suspended game, close; conflicting and alternative
+  application-info layouts; process-list failure; heartbeats stop after a crash and resume after
+  a restart; console switch, website tracking switch and excluded game; exit ends the session;
+  recent messages and a second launch opening the newest conversation; one-time notification
+  links (no page secret, single use, expiry, malformed tickets, DNS rebinding) and the plain
+  fallback; in Chromium: quick-open link, drafts kept across incoming messages, newest-message
+  banner, Games tab, a friend playing, the new Diagnostics sections. Set
   `AKENO_UI_SCREENSHOTS=<dir>` to save screenshots (CI uploads them as `console-ui-screenshots`).
 
 ## Last verified results
 
-Executed on 2026-10-13 in a cloud development container (Linux, Node.js 22.22.0,
-PostgreSQL 16, Chromium 141 via Playwright 1.56.1, GCC 13, OpenSSL 3.0.13):
+Executed on 2026-10-14 (session 4, Alpha 0.2 release candidate) in a cloud development container
+(Linux, Node.js 22.22.0, pnpm 10.28.0, PostgreSQL 16.15, Chromium via Playwright, GCC 13.3,
+clang 18.1.3, OpenSSL 3.0.13, ps5-payload-sdk `f5d40f0`):
 
 | Command | Result |
 | --- | --- |
-| `pnpm lint` | passed (0 problems) |
+| `pnpm lint` | passed (0 problems; console page limited to ES2017 syntax) |
 | `pnpm typecheck` | passed |
 | `pnpm --filter @akeno/shared test` | 8 / 8 passed |
-| `pnpm --filter @akeno/server test` | 101 / 101 passed |
-| `pnpm --filter @akeno/web test` | 26 / 26 passed |
-| `pnpm test:e2e` | 3 / 3 passed (~27 s; 3 consecutive runs) |
-| `clients/ps5/build-asan/akeno_unit_tests`, `akeno_unit_tests_mbedtls` | 383 checks each, 0 failures (ASan/UBSan; Valgrind clean on the release builds) |
+| `pnpm --filter @akeno/server test` | 116 / 116 passed |
+| `pnpm --filter @akeno/web test` | 27 / 27 passed |
+| `pnpm test:e2e` (website, Chromium) | 5 / 5 passed, two consecutive full runs |
+| `akeno_unit_tests`, `akeno_unit_tests_mbedtls` (ASan/UBSan) | 488 checks each, 0 failures; Valgrind clean on the release builds |
 | `node clients/ps5/tests/integration/run.mjs …/akeno-cli` | 24 / 24 passed |
-| `node clients/ps5/tests/integration/run.mjs …/akeno-cli-mbedtls --app …/akeno-app` | 39 / 39 passed (incl. Chromium) |
-| `make -C clients/ps5/console` (PS5 SDK `f5d40f0`) + `check-imports.sh` | builds with `-Werror`; import gate passes |
-| Migration upgrade check | database created with the previous revision's migrations + data, upgraded with `0001_devices`: data kept, new tables present |
-| `docker build` + `docker compose up` | image built; stack healthy; registration, backup/restore and HTTPS via Caddy verified manually |
+| `node clients/ps5/tests/integration/run.mjs …/akeno-cli-mbedtls --app …/akeno-app` | 49 / 49 passed (24 client + 25 console-app scenarios, 4 of them in Chromium) |
+| `make -C clients/ps5/console` + `check-imports.sh` | builds with `-Werror`; gate passes; imports = Alpha 0.1's + weak `sceKernelGetAppInfo` |
+| Alpha 0.1 rebuild from `592c23a` | SHA-256 `35f393c6…6b65`, identical to the hardware-tested CI artifact |
+| `node infrastructure/scripts/upgrade-check.mjs --old <592c23a>` | data from the Alpha 0.1 server kept through migrations 0002–0003; new and old server both work on the upgraded database; `--from-dump` restore path also checked |
 
 The GitHub Actions workflow (`.github/workflows/ci.yml`) runs the same checks on every push and
 pull request. Its first run on GitHub (run 38455492193, commit `854d97d`) passed: lint,
@@ -216,8 +231,11 @@ scenarios, the Docker image build and Compose validation.
 
 ## Not covered by automated tests
 
-- **Any PlayStation 5 hardware.** The console app is built for the PS5 in CI but tested on Linux
-  only; only the toolchain diagnostic ELF has run on a PS5 (see FIRMWARE_COMPATIBILITY.md).
+- **PS5 hardware is tested by hand only.** Alpha 0.1 ran on a PS5 with 12.20 (user report);
+  Alpha 0.2 has not run on a console. Game detection on the console is simulated in the tests
+  (`AKENO_SIM_PROCESSES`, both application-info layouts); the real `sceKernelGetAppInfo` layout,
+  metadata paths and the button notification are hardware test items (see
+  HARDWARE_TEST_PLAN_ALPHA_0.2.md).
 - Real mobile devices and the PlayStation 5 browser (phone layouts are tested with Chromium's
   device emulation only).
 - Accessibility audits with screen readers (semantic markup and keyboard support were

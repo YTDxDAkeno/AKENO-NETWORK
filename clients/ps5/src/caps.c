@@ -28,10 +28,12 @@ const char *akeno_cap_state_name(akeno_cap_state state) {
  */
 static const struct {
     int major, minor;
+    int hardware_tested; /* Set only together with an entry in the hardware test log. */
     const char *note;
 } FIRMWARE_TABLE[] = {
-    { 12, 20, "Priority target. A toolchain diagnostic (notification) ran on hardware; the client is not yet tested on hardware." },
-    { 13, 60, "Priority target. Not yet tested on hardware." },
+    { 12, 20, 1, "Priority target. Console app Alpha 0.1 ran on hardware (browser, pairing, HTTPS/WSS, notifications); "
+                 "Alpha 0.2 additions are not yet tested on hardware." },
+    { 13, 60, 0, "Priority target. Not yet tested on hardware." },
 };
 
 int akeno_firmware_parse(const char *text, int *major, int *minor) {
@@ -56,7 +58,7 @@ void akeno_firmware_describe(const char *text, akeno_firmware_info *out) {
     for (size_t i = 0; i < sizeof(FIRMWARE_TABLE) / sizeof(FIRMWARE_TABLE[0]); i++) {
         if (FIRMWARE_TABLE[i].major == out->major && FIRMWARE_TABLE[i].minor == out->minor) {
             out->known = 1;
-            out->hardware_tested = 0;
+            out->hardware_tested = FIRMWARE_TABLE[i].hardware_tested;
             out->note = FIRMWARE_TABLE[i].note;
         }
     }

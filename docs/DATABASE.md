@@ -28,6 +28,12 @@ migrations (`apps/server/src/database/migrations/`). All timestamps are `timesta
 | `invitations` | Group / party / game-session invitations | CHECK: exactly one target column matching `kind`; partial unique pending invitation per target and invitee; `expires_at` |
 | `notifications` | Durable notifications (JSONB payload) | Index `(user_id, id)`; pruned after 90 days |
 | `audit_events` | Security audit log | Never contains passwords, tokens, invitation codes or message bodies |
+| `device_pairings`, `device_credentials` | Code-based pairing and device tokens (migration `0001`) | Only SHA-256 hashes of codes and tokens; scopes per device |
+| `game_activity_sessions` | Tracked game sessions reported by paired devices (`0002`); `private` flag for sessions reported while invisible (`0003`) | Partial unique `(user_id, title_id)` while running (no double counting); server timestamps; CHECKs on heartbeat/end order and end reason |
+| `game_titles` | Curated game names (administrators) | PK `title_id` |
+
+`profiles` also holds the game-activity privacy settings: tracking on/off, audiences for the
+current game and the history (`0002`), playtime visibility and excluded title IDs (`0003`).
 
 The suggested `direct_conversations`, `group_messages`, `party_messages`,
 `direct_conversation_members`, `message_read_state`, `group_invitations`,
@@ -73,6 +79,17 @@ are reported to the client as `409 CONFLICT — please try again`.
   `drizzle.__drizzle_migrations`).
 - Never edit a migration that has been applied in production; add a new one.
 - `GET /health/ready` returns 503 until migrations have been applied.
+- Every migration so far is additive (new tables, or new columns with defaults), so the previous
+  server revision keeps working on an upgraded database. Check an upgrade on a disposable copy
+  first: `node infrastructure/scripts/upgrade-check.mjs --old <deployed checkout>` or
+  `--from-dump <backup.dump>` (a restored production backup); it never touches production.
+
+| Migration | Content |
+| --- | --- |
+| `0000_initial` | V1 schema |
+| `0001_devices` | Device pairing and credentials |
+| `0002_game_activity` | Game sessions, curated names, game-activity privacy columns |
+| `0003_activity_privacy` | `profiles.game_playtime_visible`, `profiles.game_excluded_titles`, `game_activity_sessions.private` |
 
 ## Development data
 

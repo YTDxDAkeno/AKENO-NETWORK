@@ -75,6 +75,7 @@ properties.
 | `POST /devices/pairings/token` | device | `DeviceTokenResponse` once; else `400 AUTHORIZATION_PENDING \| SLOW_DOWN \| ACCESS_DENIED \| EXPIRED_TOKEN \| PAIRING_INVALID` |
 | `POST /devices/pairings/lookup` \| `approve` \| `deny` | website | `{ userCode, scopes? }` |
 | `GET /devices`, `DELETE /devices/:id` | website | List / unpair |
+| `PATCH /devices/:id` | website (owner) | `{ scopes: DeviceScope[] }` → `{ device }`. Reauthorization, e.g. allow `activity:write` for a console paired before it existed. Devices can never call it; removing a permission ends the device's running game session and closes its realtime connection |
 | `GET /devices/current`, `DELETE /devices/current` | device | Self-description / sign-out |
 
 ## Users, profiles, presence
@@ -86,8 +87,20 @@ properties.
 | `GET /users/search?q=&limit=` | `q` 1–32 chars | `{ users: UserSearchResult[] }` (excludes self, blocked, inactive) |
 | `GET /users/:handle` | handle = Online ID or UUID | `PublicProfile` (privacy-filtered; 404 if the user blocked the caller) |
 | `PATCH /profile` | any of `displayName, avatar, bio, statusMessage, favoriteGames[], activity` | `CurrentUser` |
-| `PATCH /profile/privacy` | any of `profileVisibility, presenceVisibility, lastSeenVisibility, messagePrivacy, friendRequestPrivacy` | `CurrentUser` |
+| `PATCH /profile/privacy` | any of `profileVisibility, presenceVisibility, lastSeenVisibility, messagePrivacy, friendRequestPrivacy, gameActivityTracking, gameActivityVisibility, gameHistoryVisibility, gamePlaytimeVisible, gameExcludedTitles[]` (title IDs, max 50) | `CurrentUser` |
 | `PUT /presence` | `{ status: "online" \| "away" \| "dnd" \| "invisible" }` | `{ preference, status }` |
+
+## Game activity
+
+Details, lifecycle and privacy rules: [GAME_ACTIVITY.md](GAME_ACTIVITY.md).
+
+| Method & path | Caller | Body / response |
+| --- | --- | --- |
+| `POST /activity/heartbeat` | device with `activity:write` | `{ titleId, titleName?, platform: "PS5" }` → `{ session: { id, titleId, startedAt, created }, heartbeatIntervalSeconds, staleAfterSeconds }`; `403 DEVICE_ONLY` for web sessions, `403 DEVICE_SCOPE_DENIED`, `409 ACTIVITY_TRACKING_DISABLED`, `409 ACTIVITY_TITLE_EXCLUDED` |
+| `POST /activity/stop` | device with `activity:write` | `{ reason?: "closed" \| "shutdown" }` → `{ ended }` |
+| `GET /users/:handle/activity` | signed in (devices: `profile:read`) | `GameActivityResponse`: `current`, `historyVisible`, `playtimeVisible`, `recentGames` (durations `null` when playtime is hidden), `recentSessions`, `trackedSince`; owner only: `trackingEnabled`, `excluded`/`private` flags |
+| `DELETE /activity/history` | owner, website | `{ deleted }` |
+| `GET/PUT/DELETE /admin/game-titles[/:titleId]` | administrator | Curated game names |
 
 ## Friends and blocks
 

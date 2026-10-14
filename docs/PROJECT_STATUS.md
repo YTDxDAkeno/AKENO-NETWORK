@@ -1,22 +1,104 @@
 # Project status
 
-_Last updated: 2026-10-13 (third session)._ This file is the source of truth for continuing
-work across sessions. Do not mark anything complete that has not actually been run.
+_Last updated: 2026-10-14 (session 4)._ This file is the source of truth for continuing work
+across sessions. Do not mark anything complete that has not actually been run.
 
-Branches: `claude/adoring-johnson-6re0yl` (this session; based on `claude/epic-bell-s1psav` at
-`8105593`, plus the reviewed parts of PR #1). `main` is untouched. See `git log` for details.
+Branches: **`claude/elegant-wright-4qi8gh`** (this session; fast-forwarded from Branch A
+`claude/adoring-johnson-6re0yl` @ `133775c`, then 5+ commits). Branch A, Branch B
+(`claude/epic-bell-s1psav`) and PR #1 (`chatgpt/ps5-http-backend`, open draft) are unchanged.
+`main` is untouched. Reconciliation decisions: [BRANCH_RECONCILIATION.md](BRANCH_RECONCILIATION.md).
 
 ## Summary
 
 | Area | Status |
 | --- | --- |
-| AKENO NETWORK web platform (V1) | Implemented and tested (unchanged this session) |
-| Device pairing + scoped device tokens (server, web UI) | Implemented and tested (unchanged this session) |
-| Device client core `clients/ps5` (C11) | Implemented and tested on Linux with **two** TLS transports (OpenSSL, mbedTLS) |
-| **PS5 console app Alpha 0.1** (`clients/ps5/app`, `clients/ps5/console`) | **Implemented; ELF builds in CI; tested end to end on Linux (host build). Not yet run on a PS5.** See [PS5_CLIENT.md](PS5_CLIENT.md) |
-| PS5 toolchain diagnostic ELF (from PR #1) | **Ran on a real PS5, firmware 12.20 + kstuff** (user-reported, with screenshot): native notification shown |
-| Native Game Base / PSN integration | **Unsupported** — no documented interface; see PS5_GAMEBASE_RESEARCH.md |
-| Production VPS revision | **Unverified** (local commits around `2963980` not reconciled; nothing deployed or changed this session) |
+| AKENO NETWORK web platform (V1) | Implemented and tested |
+| Device pairing + scoped device tokens | Implemented and tested; **owner can now change a device's permissions** (reauthorization) |
+| **PS5 console app Alpha 0.1** | **Ran on a real PS5, firmware 12.20** (user report, screenshots): browser opened, full page, HTTPS to production, pairing, sign-in, realtime connected, native notifications also during a game |
+| **PS5 console app Alpha 0.2** | **Release candidate**: implemented; all automated checks pass locally (see below); ELF builds with the pinned SDK; **not yet run on a PS5** |
+| Automatic game detection + playtime (console, server, website) | Implemented; tested on Linux with a simulated process list; hardware pending |
+| Activity privacy (exclusions, hidden playtime, invisible-safe history) | Implemented and tested (server, website) |
+| Quick access (banner, reopen at newest conversation, one-time links, opt-in button notifications) | Implemented and tested on Linux; button notification unverified on hardware |
+| Change Server bug (Alpha 0.1) | Fixed, regression-tested in Chromium |
+| Native Game Base / PSN, Control Center card, overlay | **Unsupported** (no safe documented mechanism); see QUICK_ACCESS.md, PS5_GAMEBASE_RESEARCH.md |
+| Production VPS | **Not verified, not deployed** this session: this container's network policy blocks `85.190.112.10.sslip.io` (proxy 403) and there is no SSH access |
+
+## Session 4 — Alpha 0.2
+
+### What was done (commits on `claude/elegant-wright-4qi8gh`)
+
+| Commit | Content |
+| --- | --- |
+| `2a2ad2d` | **Green build restored.** TS test typing; host C format issues; `game_detect.c`/`activity.c` in the PS5 build; `sceNotificationSend` no longer linked (run-time `dlopen`, opt-in); `sceKernelGetAppInfo` weak; import gate against Alpha 0.1's proven import set; layout-voting detection; activity worker wired into the app; one-time links; recent-message inbox. GitHub Actions: CI run 38496226143 **green**, PS5 build run 38496226211 **green** |
+| `7efc1cc` | Server: migration `0003` (excluded games, playtime visibility, private sessions while invisible), `PATCH /devices/:id` reauthorization; website settings; console worker states; 10 console end-to-end scenarios |
+| `67bab44` | Console page: Change Server fix, Games tab, banner, quick-open, drafts, diagnostics, ES2017 lint guard; browser tests |
+| (this commit) | Release engineering and docs: PS5 workflow builds an `alpha-0.2-rc` artifact with the **verified Alpha 0.1 fallback** (rebuilt from `592c23a`, SHA-256 must equal `35f393c6…6b65`); `infrastructure/scripts/upgrade-check.mjs`; "server update needed" state; 12.20 marked hardware-tested for Alpha 0.1 in the caps table; docs |
+
+### Key findings (with evidence)
+
+1. **Why the PS5 link failed and why simply linking was wrong.** `sceNotificationSend` lives in
+   `libSceNotification`, which the Makefile did not link. But the SDK runtime
+   (`crt/rtld_payload.c`) aborts the whole payload if a `DT_NEEDED` library or a strong symbol
+   fails to resolve — linking it could have broken the proven start-up. It is now loaded with
+   `dlopen`/`dlsym` (SDK `samples/hello_dlfcn` pattern) only when the user enables the experiment.
+2. **Reproducible build.** Rebuilding Alpha 0.1 (`592c23a`) here gave exactly the CI SHA-256 of
+   the hardware-tested ELF. CI now re-verifies this on every PS5 build.
+3. **Imports.** Alpha 0.2's dynamic imports = Alpha 0.1's + weak `sceKernelGetAppInfo` (a new
+   strong `strnlen` import was removed). Enforced by `console/reviewed-imports.txt`.
+4. **`sceKernelGetAppInfo` layout.** SDK samples disagree (title ID at offset 20 vs 16). Resolved
+   at run time by voting on the console's own data; conflicts report nothing. Raw probes appear in
+   Diagnostics for the hardware test.
+5. **Foreground.** No verified API (`sceSystemServiceGetAppFocusedAppStatus` has a stub but no
+   sample or structure). AKENO reports "game process running", never "in focus".
+6. **Privacy gap found and fixed:** a session played while invisible used to appear in friends'
+   history after it ended. Such sessions are now private.
+7. **Second bug found and fixed:** an incoming message re-rendered the chat and erased a
+   half-typed reply on the console page.
+
+### Tests executed (2026-10-14, Linux container)
+
+lint (incl. ES2017 guard) and typecheck passed; shared 8/8, server 116/116, web 27/27; website
+E2E 5/5 (two consecutive runs); C unit 488 checks × 2 transports under ASan/UBSan, Valgrind clean;
+CLI E2E 24/24; console E2E 49/49 (incl. 4 Chromium scenarios); PS5 ELF + import gate pass;
+Alpha 0.1 rebuild byte-identical; upgrade check from Alpha 0.1 data (seed and `--from-dump`)
+passed, old server works on the upgraded database. Details: [TESTING.md](TESTING.md).
+GitHub Actions results for the final commit: see the run list of this branch (recorded below once
+known).
+
+Not executed: anything on PS5 hardware for Alpha 0.2; firmware 13.60; the production server.
+
+### Next steps (for the user)
+
+1. **Approve and test Alpha 0.2 on 12.20**: download `akeno-network-ps5-alpha-0.2-rc` from the
+   latest green "PS5 console build" run, verify `SHA256SUMS`, follow
+   [HARDWARE_TEST_PLAN_ALPHA_0.2.md](HARDWARE_TEST_PLAN_ALPHA_0.2.md). The verified Alpha 0.1 ELF
+   is in the same download as the fallback.
+2. **Server update (needed for game activity)**, from your PC or the VPS, never with
+   `docker compose down -v`:
+   1. On the VPS: `git status`, `git log -1` — record the deployed commit; reconcile any VPS-only
+      commits first (procedure in the session-2 section below).
+   2. Back up: `./infrastructure/scripts/backup.sh`; copy the dump off the server.
+   3. Check the backup and the upgrade on a disposable database (PC or VPS, not the production
+      database): `pnpm install && pnpm build && UPGRADE_DATABASE_ADMIN_URL=… node
+      infrastructure/scripts/upgrade-check.mjs --from-dump <backup.dump>` (add `--old <checkout of
+      the deployed commit>` to also check rollback).
+   4. Deploy this branch (VPS_DEPLOYMENT.md → Upgrade; migrations `0002`, `0003` are additive),
+      then check `https://<server>/health/ready` and sign in.
+   5. On the website: Settings → Security → Paired devices → **Allow game activity** for the
+      console paired with Alpha 0.1.
+3. Report hardware results; they go into FIRMWARE_COMPATIBILITY.md. Then 13.60.
+
+### Next steps (for the next session)
+
+- Record the GitHub Actions results of the final commit (and the artifact SHA-256) here and in
+  FIRMWARE_COMPATIBILITY.md if not done.
+- After hardware results: fix what fails; if the layout votes show one offset consistently,
+  keep the voting (it costs nothing) but note the confirmed layout per firmware.
+- If button notifications work on hardware, consider making them the default (only with the
+  user's agreement); otherwise remove the experiment.
+- Optional: game names for common titles (admin UI exists), artwork from a licensed source.
+- Ask the user to allow the VPS host in this environment's network settings (or deploy from
+  their PC) before any deployment work.
 
 ## Session 3 — PS5 console app Alpha 0.1
 
@@ -101,6 +183,9 @@ C client + console app E2E with Chromium, Valgrind, Docker) and **PS5 console bu
 Not executed: anything on PS5 hardware; the PS5 browser; firmware 13.60; the production server.
 
 ### Open questions that only hardware can answer (see the test plan in PS5_CLIENT.md)
+
+_Answered by the Alpha 0.1 hardware test on 12.20 (recorded in session 4): 1 yes, 2 yes, 5 yes;
+4 implied (pairing completed, so the credential was stored); 3 and 6 not reported._
 
 1. Does `sceSystemServiceLaunchWebBrowser` open the page from a payload on 12.20/13.60?
 2. Can the PS5 browser load `http://127.0.0.1:8642` and run the page (ES2017, XHR)?

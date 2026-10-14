@@ -705,7 +705,8 @@
   }
   var ACTIVITY_TITLES = {
     playing: 'Now playing', excluded: 'Not shared', 'permission-missing': 'Permission needed', 'disabled-on-server': 'Turned off on the website',
-    unsupported: 'Game detection unavailable', idle: 'No game running', off: 'Game activity is off', starting: 'Starting', 'signed-out': 'Not paired'
+    unsupported: 'Game detection unavailable', 'server-unsupported': 'Server update needed', idle: 'No game running', off: 'Game activity is off',
+    starting: 'Starting', 'signed-out': 'Not paired'
   };
   function nowPlayingPanel() {
     var a = (S.app && S.app.activity) || { state: 'off', detail: '' };

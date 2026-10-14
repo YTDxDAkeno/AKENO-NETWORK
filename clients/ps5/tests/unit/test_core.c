@@ -224,7 +224,7 @@ static void test_capabilities(void) {
     akeno_capability_report r;
     akeno_platform_facts ps5 = { AKENO_PLATFORM_PS5, "PlayStation 5", "12.20", 1, 1, 1, 0 };
     akeno_caps_evaluate(&ps5, &r);
-    CHECK(r.firmware.known && !r.firmware.hardware_tested);
+    CHECK(r.firmware.known && r.firmware.hardware_tested); /* Alpha 0.1, see FIRMWARE_COMPATIBILITY.md. */
     CHECK(r.features[AKENO_FEATURE_REST_API].state == AKENO_CAP_ENABLED);
     CHECK(r.features[AKENO_FEATURE_DEVICE_PAIRING].state == AKENO_CAP_ENABLED);
     CHECK(r.features[AKENO_FEATURE_SYSTEM_NOTIFICATIONS].state == AKENO_CAP_DISABLED); /* No reviewed call declared. */
