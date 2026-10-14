@@ -22,7 +22,7 @@ feature is called compatible. Building for a firmware never counts as testing on
 | ELF loader | User's ps5-payload-sdk loader (name/version not recorded) | — | Unknown | Not chosen by this project |
 | etaHEN | Not used | Not used | Not used | Not required |
 | ps5-payload-sdk `f5d40f0` runtime | **Runs** | Compiled | Compiled; in the SDK offset table | See SAFETY.md |
-| Build | `akeno-network-ps5.elf` SHA-256 `35f393c6…6b65` (commit `592c23a`) | Release candidate (`akeno-network-ps5-alpha-0.2-rc` artifact) | — | Alpha 0.1 is rebuilt and verified byte-identical in every PS5 CI run |
+| Build | `akeno-network-ps5.elf` SHA-256 `35f393c6…6b65` (commit `592c23a`) | Release candidate `06765c7b…b217` (commit `e4e1a28`, PS5 build run 38500880488) | — | Alpha 0.1 is rebuilt and verified byte-identical in every PS5 CI run |
 | App starts | **Tested on hardware** | Not tested | Not tested | |
 | Browser launch (`sceSystemServiceLaunchWebBrowser`) | **Tested on hardware**: opened automatically | Not tested | Not tested | |
 | Page renders and runs in the PS5 browser | **Tested on hardware** (full UI) | Not tested (Games tab, banner, new settings) | Not tested | Page script limited to ES2017 syntax by lint |

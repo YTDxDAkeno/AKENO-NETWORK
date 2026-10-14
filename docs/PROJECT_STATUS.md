@@ -32,7 +32,7 @@ Branches: **`claude/elegant-wright-4qi8gh`** (this session; fast-forwarded from 
 | `2a2ad2d` | **Green build restored.** TS test typing; host C format issues; `game_detect.c`/`activity.c` in the PS5 build; `sceNotificationSend` no longer linked (run-time `dlopen`, opt-in); `sceKernelGetAppInfo` weak; import gate against Alpha 0.1's proven import set; layout-voting detection; activity worker wired into the app; one-time links; recent-message inbox. GitHub Actions: CI run 38496226143 **green**, PS5 build run 38496226211 **green** |
 | `7efc1cc` | Server: migration `0003` (excluded games, playtime visibility, private sessions while invisible), `PATCH /devices/:id` reauthorization; website settings; console worker states; 10 console end-to-end scenarios |
 | `67bab44` | Console page: Change Server fix, Games tab, banner, quick-open, drafts, diagnostics, ES2017 lint guard; browser tests |
-| (this commit) | Release engineering and docs: PS5 workflow builds an `alpha-0.2-rc` artifact with the **verified Alpha 0.1 fallback** (rebuilt from `592c23a`, SHA-256 must equal `35f393c6…6b65`); `infrastructure/scripts/upgrade-check.mjs`; "server update needed" state; 12.20 marked hardware-tested for Alpha 0.1 in the caps table; docs |
+| `e4e1a28` | Release engineering and docs: PS5 workflow builds an `alpha-0.2-rc` artifact with the **verified Alpha 0.1 fallback** (rebuilt from `592c23a`, SHA-256 must equal `35f393c6…6b65`); `infrastructure/scripts/upgrade-check.mjs`; "server update needed" state; 12.20 marked hardware-tested for Alpha 0.1 in the caps table; docs |
 
 ### Key findings (with evidence)
 
@@ -62,8 +62,23 @@ E2E 5/5 (two consecutive runs); C unit 488 checks × 2 transports under ASan/UBS
 CLI E2E 24/24; console E2E 49/49 (incl. 4 Chromium scenarios); PS5 ELF + import gate pass;
 Alpha 0.1 rebuild byte-identical; upgrade check from Alpha 0.1 data (seed and `--from-dump`)
 passed, old server works on the upgraded database. Details: [TESTING.md](TESTING.md).
-GitHub Actions results for the final commit: see the run list of this branch (recorded below once
-known).
+GitHub Actions on `e4e1a28` (release candidate): **CI run 38500880377 green** (lint, typecheck,
+unit/integration, website E2E, C unit + end-to-end incl. Chromium, Valgrind, Docker) and **PS5
+console build run 38500880488 green** (Alpha 0.1 fallback verified byte-identical). The previous
+checkpoint `67bab44` had failed only in the website E2E: `mobile-parties` hit the per-IP
+registration limit after the new game-activity test registered two more users; fixed in
+`e4e1a28` by reusing users. Artifact `akeno-network-ps5-alpha-0.2-rc` (ID 11865294379, kept 90
+days):
+
+| File | SHA-256 |
+| --- | --- |
+| `akeno-network-ps5.elf` (Alpha 0.2 RC) | `06765c7bce57f0eac8423a7b9922e45be8fbe971177b4438a9643073094fb217` |
+| `akeno-network-ps5.debug.elf` | `1e0c6394d19e8f57ccf6980df5ea1096822b13ca1bd7743d1837e4f514b514e5` |
+| `akeno-ps5-diagnostic.elf` | `9ddfc23a425261b30d316eb0c7078d760aa3d7fc9e8f53793b3f937057255cfe` |
+| `fallback-alpha-0.1/akeno-network-ps5-alpha-0.1.elf` | `35f393c64213410585b40262ce203423ec5c1ad66dda97e5919b9b31948b6b65` |
+
+The Alpha 0.2 ELF was also built locally from the same commit with the same SHA-256
+(reproducible).
 
 Not executed: anything on PS5 hardware for Alpha 0.2; firmware 13.60; the production server.
 
@@ -90,8 +105,6 @@ Not executed: anything on PS5 hardware for Alpha 0.2; firmware 13.60; the produc
 
 ### Next steps (for the next session)
 
-- Record the GitHub Actions results of the final commit (and the artifact SHA-256) here and in
-  FIRMWARE_COMPATIBILITY.md if not done.
 - After hardware results: fix what fails; if the layout votes show one offset consistently,
   keep the voting (it costs nothing) but note the confirmed layout per firmware.
 - If button notifications work on hardware, consider making them the default (only with the
