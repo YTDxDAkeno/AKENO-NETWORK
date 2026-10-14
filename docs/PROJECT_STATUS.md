@@ -23,7 +23,7 @@ VPS-only commits must be pushed or merged (procedure in the session-2 section be
 | **Alpha 0.3** (pictures, banners, themes, badges, game artwork, redesign, media backups) | **Release candidate**: implemented; all automated checks pass locally (session 5 below); not deployed |
 | Alpha 0.3 console-page images (profile pictures, artwork, local console icons) | Implemented, tested on Linux; **not run on a PS5** |
 | **Alpha 0.4** (voice parties, desktop + mobile browsers) | **Implemented; tested against a real LiveKit server in Chromium** (session 5, part 2); real two-device test, phones, Firefox/Safari still open; not deployed |
-| Alpha 0.4 PS5 audio | Research only so far (session 5, part 2) |
+| Alpha 0.4 PS5 audio | Research done; experimental **audio lab** ELF (prototypes A and C) builds and passes the import gate; **never run on a PS5**; microphone capture blocked (no SDK interface) |
 | Native Game Base / PSN, Control Center card, overlay | **Unsupported** (no safe documented mechanism) |
 | Production VPS | Not verified, not deployed (network policy, see above) |
 
@@ -68,9 +68,43 @@ VPS-only commits must be pushed or merged (procedure in the session-2 section be
 | LiveKit restart while talking | both clients reconnected with fresh tokens, audio resumed after ~4 s |
 | Load: 6 / 8 participants all talking | LiveKit 8 % / 12 % of a core, 66 / 74 MB; 32 kbit/s up, 150 / 209 kbit/s down per participant |
 
+| Upgrade check from Alpha 0.2 (`9dcc192`) incl. rollback, with the Alpha 0.4 server | passed |
+| CI on GitHub (`6e37eb2`, `4e137c2`) | PS5 build, Docker image, Compose (incl. voice profile), C client + audio lab jobs green; the browser job ran the real-LiveKit voice test and failed at the Settings microphone test (meter at 0) → fixed in `efbf745` (audio context created in the click; also matters for Safari) |
+
 Not executed: a real two-device audio test, real phones, Firefox/Safari, TURN, the production
 VPS (not reachable from this container: its CPU/RAM/bandwidth/firewall were not inspected —
 checklist in VOICE.md).
+
+### PS5 audio research (prototypes A–E)
+
+Details and the hardware test plan: [PS5_AUDIO_RESEARCH.md](PS5_AUDIO_RESEARCH.md).
+
+| Report | Result |
+| --- | --- |
+| Compiles | Release ELF and separate audio lab ELF (`make EXPERIMENTAL_AUDIO=1`), pinned SDK `f5d40f0`, `-Werror`; both pass `check-imports.sh`; identical dynamic imports (96); the release ELF's code is byte-identical to `6e37eb2` (only the page script differs) |
+| Supported by known interfaces | Output only: SDK `libSceAudioOut` stub + declarations from ps5-payload-dev/SDL's PS5 audio driver. No `libSceAudioIn` in the SDK, no PS5 capture implementation found |
+| Tested on Linux | Audio lab with simulated audio: 5 integration scenarios incl. Chromium (also in CI) |
+| Verified on PS5 hardware | Nothing |
+| Unsupported | Microphone capture (B), device enumeration, PS5 in a party (D), audio during games (E), rest mode, 13.60 |
+
+A finding of the import gate: the first audio lab version imported five libc functions never
+proven on a console (`opendir`, `readdir`, `closedir`, `qsort`, `sin`), which could have stopped
+the payload from starting; rewritten without them (stat over a fixed list, oscillator by
+recurrence).
+
+### Next steps (Alpha 0.4)
+
+- **User approvals needed:** production upgrade (Alpha 0.3 + 0.4, no new migration for 0.4);
+  enabling voice (keys, `LIVEKIT_NODE_IP`, firewall 7881/tcp + 7882/udp — your change); any PS5
+  audio lab test (plan in PS5_AUDIO_RESEARCH.md).
+- **Real-device tests still required before calling voice verified:** PC + Android phone and
+  PC + iPhone on different networks in one party (join, hear both ways, mute, speaking ring,
+  leave releases the microphone, phone screen lock behaviour), Firefox and Safari desktop, a
+  restrictive network (UDP blocked → TCP 7881).
+- **PS5 hardware tests (each needs approval):** audio lab prototypes A and C on 12.20 from the
+  home screen; later, only if C works: tone during a game (E), 13.60.
+- Optional later: TURN (LiveKit built-in, second IP or layer-4 forwarding), screen sharing
+  (design notes in VOICE.md), PS5 voice via a server-side bridge if capture becomes possible.
 
 ## Session 5 — Alpha 0.3
 

@@ -299,7 +299,23 @@ route table only lists existing, non-sensitive routes. The browser scenario appr
 
 ## Last verified results
 
-Executed on 2026-10-14 (session 4, Alpha 0.2 release candidate) in a cloud development container
+Alpha 0.4 release candidate, 2026-10-14 (session 5, part 2), cloud development container (Linux,
+Node.js 22.22, PostgreSQL 16, Chromium 141 via Playwright 1.56.1, LiveKit 1.12.0 in Docker,
+clang 18 + ps5-payload-sdk `f5d40f0`):
+
+| Command | Result |
+| --- | --- |
+| `pnpm lint`, `pnpm typecheck` | passed |
+| `pnpm test` | shared 8/8, server 166/166, web 34/34 |
+| `pnpm test:e2e` with `E2E_LIVEKIT_*` (real LiveKit) | 7/7 (voice spec repeated many times while developing) |
+| `pnpm test:e2e` without LiveKit | 6/6 passed, voice spec skipped |
+| C unit tests (ASan/UBSan, both transports) | 496 checks each, 0 failures |
+| `run.mjs akeno-cli-mbedtls --app … --audiolab …` | all scenarios passed (CLI, console app, Alpha 0.2 console, audio lab) |
+| PS5 build: release + audio lab ELF, `check-imports.sh` | both pass; identical dynamic imports; release code byte-identical to the previous commit except the page script |
+| `upgrade-check.mjs --old <Alpha 0.2 9dcc192>` | passed incl. rollback |
+| Production image + Compose `voice` profile, LiveKit restart, load (6/8 participants) | passed / numbers in VOICE.md |
+
+Earlier: executed on 2026-10-14 (session 4, Alpha 0.2 release candidate) in a cloud development container
 (Linux, Node.js 22.22.0, pnpm 10.28.0, PostgreSQL 16.15, Chromium via Playwright, GCC 13.3,
 clang 18.1.3, OpenSSL 3.0.13, ps5-payload-sdk `f5d40f0`):
 
