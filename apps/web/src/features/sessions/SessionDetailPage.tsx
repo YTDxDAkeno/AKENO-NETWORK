@@ -80,7 +80,7 @@ export function SessionDetailPage() {
     if (data.viewerState === 'invited' && data.pendingInvitationId) {
       return (
         <>
-          <Button variant="primary" loading={invitationActions.accept.isPending} onClick={() => invitationActions.accept.mutate(data.pendingInvitationId!)}>
+          <Button variant="primary" loading={invitationActions.accept.isPending} onClick={() => invitationActions.accept.mutate({ id: data.pendingInvitationId! })}>
             Accept invitation
           </Button>
           <Button variant="ghost" onClick={() => invitationActions.decline.mutate(data.pendingInvitationId!)}>

@@ -24,6 +24,7 @@ export const queryKeys = {
   gameSession: (id: string) => ['game-session', id] as const,
   allGameSessionDetails: ['game-session'] as const,
   invitations: ['invitations'] as const,
+  voiceStatus: ['voice', 'status'] as const,
   notifications: ['notifications'] as const,
   authSessions: ['auth', 'sessions'] as const,
   devices: ['devices'] as const,

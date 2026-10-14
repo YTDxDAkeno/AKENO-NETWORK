@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, gt, inArray, ne, or, sql } from 'drizzle-orm';
-import type { PartyDto, ProfilePartyDto, createPartySchema, updatePartySchema } from '@akeno/shared';
+import type { PartyDto, PartyMemberDto, ProfilePartyDto, createPartySchema, updatePartySchema } from '@akeno/shared';
 import type { z } from 'zod';
 import type { AppContext } from '../../app/context.js';
 import type { DbExecutor } from '../../database/client.js';
@@ -9,11 +9,6 @@ import { AppError, Errors } from '../../utils/errors.js';
 import { userCardColumns } from '../users/service.js';
 
 type PartyRow = typeof parties.$inferSelect;
-
-export const PARTY_VOICE_STATUS = {
-  available: false,
-  reason: 'Voice chat is not available in this release. Use party text chat to talk with your party.',
-};
 
 export class PartiesService {
   constructor(private readonly ctx: AppContext) {}
@@ -75,9 +70,11 @@ export class PartiesService {
           user: this.ctx.users.withPresence(row.card, viewerId, friends.has(row.card.id), blocked.has(row.card.id)),
           joinedAt: row.joinedAt.toISOString(),
           isLeader: row.card.id === party.leaderId,
-          voice: { connected: false, muted: null },
+          voice: { connected: false, muted: null } as PartyMemberDto['voice'],
         }));
       const isMember = members.some((member) => member.user.id === viewerId);
+      // Who is in voice is only shown to members of the party.
+      if (isMember) for (const member of members) member.voice = this.ctx.voice.memberState(party.id, member.user.id);
       return {
         id: party.id,
         name: party.name,
@@ -89,7 +86,7 @@ export class PartiesService {
         isMember,
         conversationId: isMember ? party.conversationId : null,
         members,
-        voice: PARTY_VOICE_STATUS,
+        voice: this.ctx.voice.statusFor(isMember),
       };
     });
   }
@@ -242,8 +239,10 @@ export class PartiesService {
     if (currentId === partyId) return;
     if (currentId) await this.leaveCurrentInTx(tx, userId, effects);
 
-    const party = await this.lockParty(partyId, tx);
-    if (await this.ctx.relations.isBlockedEitherWay(userId, party.leaderId, tx)) {
+    await this.lockParty(partyId, tx);
+    // Nobody joins a party (its chat and voice) together with someone they blocked or who blocked them.
+    const members = await this.memberIds(partyId, tx);
+    if ((await this.ctx.relations.blockedSet(userId, members, tx)).size > 0) {
       throw new AppError(403, 'BLOCKED', 'You cannot join this party.');
     }
     const [updated] = await tx
@@ -285,6 +284,7 @@ export class PartiesService {
     if (remaining.length === 0) {
       await tx.delete(conversations).where(eq(conversations.id, party.conversationId));
       effects.add(() => this.notifyChanged([userId], partyId, true));
+      effects.add(() => this.ctx.voice.closeRoomLater(partyId));
       return;
     }
     await tx
@@ -299,6 +299,8 @@ export class PartiesService {
       this.notifyChanged([userId], partyId, true);
       this.notifyChanged(remaining, partyId);
     });
+    // Leaving or being removed ends the voice connection at once.
+    effects.add(() => this.ctx.voice.revoke(partyId, userId));
   }
 
   async kick(leaderId: string, partyId: string, targetId: string): Promise<void> {
@@ -336,6 +338,7 @@ export class PartiesService {
         .from(invitations)
         .where(and(eq(invitations.partyId, partyId), eq(invitations.status, 'pending')));
       await tx.delete(conversations).where(eq(conversations.id, party.conversationId));
+      effects.add(() => this.ctx.voice.closeRoomLater(partyId));
       effects.add(() => {
         this.notifyChanged(memberIds, partyId, true);
         this.ctx.hub.sendToUsers(

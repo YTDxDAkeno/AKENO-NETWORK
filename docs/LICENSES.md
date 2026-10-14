@@ -47,6 +47,9 @@ Server (`apps/server`, installed in the Docker image):
 | pino | 10.4.0 | MIT |
 | zod | 4.6.7 | MIT |
 | ws (via @fastify/websocket) | 8.x | MIT |
+| sharp (image processing, Alpha 0.3) | 0.35.4 | Apache-2.0 |
+| libvips, prebuilt by sharp (`@img/sharp-libvips-linuxmusl-x64` in the image) | 8.18.6 | **LGPL-3.0-or-later**, a separate shared library loaded at run time (not modified; can be replaced) |
+| livekit-server-sdk (voice tokens, room API, webhooks, Alpha 0.4) | 2.19.1 | Apache-2.0 (with `@livekit/protocol` Apache-2.0, `jose` MIT, `@bufbuild/protobuf` Apache-2.0 AND BSD-3-Clause) |
 
 Web client (`apps/web`, bundled into static files):
 
@@ -59,9 +62,12 @@ Web client (`apps/web`, bundled into static files):
 | @fontsource-variable/inter (Inter typeface) | 5.3.0 | SIL Open Font License 1.1 |
 | @fontsource-variable/space-grotesk (Space Grotesk typeface) | 5.3.0 | SIL Open Font License 1.1 |
 | zod (shared validation) | 4.6.7 | MIT |
+| livekit-client (voice, loaded only when joining voice, Alpha 0.4) | 2.22.3 | Apache-2.0 (with `webrtc-adapter` BSD-3-Clause, `sdp-transform`/`sdp`/`loglevel`/`events`/`typed-emitter` MIT, `tslib` 0BSD, `machina` dual MIT / GPL-2.0, **used under MIT**) |
 
 Infrastructure images: Node.js (MIT, with bundled third-party licenses), PostgreSQL
-(PostgreSQL License), Caddy (Apache-2.0), Alpine Linux base packages (various OSI licenses).
+(PostgreSQL License), Caddy (Apache-2.0), Alpine Linux base packages (various OSI licenses),
+and for the optional `voice` profile the LiveKit server image `livekit/livekit-server:v1.12.0`
+(Apache-2.0), run unmodified.
 
 ## Development dependencies (not shipped)
 
@@ -76,6 +82,14 @@ binaries, used only at build time by Tailwind CSS/Vite; they are not distributed
 runtime image or bundle. CC-BY-4.0 applies to a data package (`caniuse-lite`) used at build
 time.
 
+A production-only scan on 2026-10-14 (`pnpm licenses list --prod`, after adding sharp and the
+LiveKit SDKs) found MIT (104), Apache-2.0 (10), ISC (9), BlueOak-1.0.0 (5), BSD-3-Clause (4),
+OFL-1.1 (2), **LGPL-3.0-or-later (2: the libvips binaries for glibc and musl)**,
+Apache-2.0 AND BSD-3-Clause (1), MIT OR GPL (1: `machina`, used under MIT) and 0BSD (1). The
+statement above about GPL-family packages predates Alpha 0.3; libvips is the only LGPL
+component and is used as an unmodified, dynamically loaded library, which the LGPL permits;
+keep its license notice (shipped in the package) when distributing the image.
+
 Re-run the check after dependency updates, for example with `pnpm licenses list --prod`.
 
 ## Reference projects (not used as dependencies)
@@ -85,7 +99,8 @@ Re-run the check after dependency updates, for example with `pnpm licenses list 
 | Omega Dashboard for PS5 | GPL-3.0-or-later | Read as an architecture reference only. Copying its code would require GPL compliance for the combined work; this project deliberately did not copy any. |
 | CutTheCord Standalone | MIT | Not used. |
 | Matrix Synapse | AGPL-3.0 / commercial | Not used (evaluated as an alternative). |
-| LiveKit | Apache-2.0 | Candidate SFU for a future voice phase; not used yet. |
-| coturn | BSD-3-Clause | Candidate TURN server for a future voice phase; not used yet. |
+| LiveKit | Apache-2.0 | **Used since Alpha 0.4** as the voice SFU (official image and SDKs, listed above); no code copied. |
+| mediasoup, Janus | ISC, GPL-3.0 | Evaluated for voice, not used (comparison in VOICE.md). |
+| coturn | BSD-3-Clause | Not used (LiveKit has a TURN server built in; TURN is not enabled yet). |
 | OpenSpy | (game-service replacement for GameSpy protocols) | Not used; not a general PS5 solution. |
 | OrbisNet, Project BlueSphere | Closed source / hosted service | Not used; only public descriptions were read. |

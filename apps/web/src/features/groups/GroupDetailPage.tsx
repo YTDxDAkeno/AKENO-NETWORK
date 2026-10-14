@@ -253,7 +253,7 @@ export function GroupDetailPage() {
               <div className="flex flex-col items-start gap-4">
                 <Notice>You were invited to this group by {pendingInvitation.inviter.displayName}.</Notice>
                 <div className="flex gap-2">
-                  <Button variant="primary" loading={invitationActions.accept.isPending} onClick={() => invitationActions.accept.mutate(pendingInvitation.id)}>
+                  <Button variant="primary" loading={invitationActions.accept.isPending} onClick={() => invitationActions.accept.mutate({ id: pendingInvitation.id })}>
                     Accept invitation
                   </Button>
                   <Button variant="ghost" onClick={() => invitationActions.decline.mutate(pendingInvitation.id)}>

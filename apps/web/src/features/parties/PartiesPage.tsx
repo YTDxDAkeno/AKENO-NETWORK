@@ -95,7 +95,7 @@ function CreatePartyCard() {
 
 function MemberTile({ member, party, isLeader, meId, onAction }: { member: PartyMemberDto; party: PartyDto; isLeader: boolean; meId: string; onAction: (run: () => Promise<unknown>) => void }) {
   const game = member.user.presence.game;
-  const voice = useMemberVoice(member);
+  const voice = useMemberVoice(member, party.id);
   return (
     <li className="flex items-center gap-3 rounded-xl border border-line bg-surface/60 p-3" data-testid="party-member" data-user-id={member.user.id}>
       <Avatar
@@ -117,7 +117,7 @@ function MemberTile({ member, party, isLeader, meId, onAction }: { member: Party
         <VoiceStateLine state={voice} />
         {game ? <GameActivityLine game={game} className="mt-0.5 max-w-full text-xs" /> : null}
       </div>
-      {voice.connected && member.user.id !== meId ? <MemberVolumeControl member={member} /> : null}
+      {voice.quality !== null && member.user.id !== meId ? <MemberVolumeControl member={member} /> : null}
       {isLeader && member.user.id !== meId ? (
         <Menu
           label={`Manage ${member.user.displayName}`}
@@ -255,7 +255,7 @@ function JoinableParties({ inParty }: { inParty: boolean }) {
       if (!ok) return;
     }
     const invitation = invitations.data?.find((entry) => entry.kind === 'party' && entry.target.id === party.id);
-    if (invitation) invitationActions.accept.mutate(invitation.id);
+    if (invitation) invitationActions.accept.mutate({ id: invitation.id });
     else join.mutate(party.id);
   };
 

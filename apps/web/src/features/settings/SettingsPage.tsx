@@ -19,7 +19,7 @@ import { Modal } from '../../components/Modal';
 import { PageHeader } from '../../components/PageHeader';
 import { RelativeTime } from '../../components/RelativeTime';
 import { Skeleton } from '../../components/Spinner';
-import { ErrorState, InlineError, Notice } from '../../components/States';
+import { ErrorState, InlineError } from '../../components/States';
 import { Tabs } from '../../components/Tabs';
 import { useToast } from '../../components/Toast';
 import { ApiError, api, errorMessage } from '../../lib/api';
@@ -29,8 +29,9 @@ import { queryKeys } from '../../lib/query-keys';
 import { useAuth, useCurrentUser } from '../auth/AuthProvider';
 import { PairedDevicesCard } from '../devices/PairedDevicesCard';
 import { AppearanceCard, ProfileMediaCard } from './ProfileCustomization';
+import { VoiceSettings } from './VoiceSettings';
 
-type Tab = 'profile' | 'privacy' | 'security' | 'preferences';
+type Tab = 'profile' | 'privacy' | 'voice' | 'security' | 'preferences';
 
 function ProfileSettings() {
   const user = useCurrentUser();
@@ -694,9 +695,6 @@ function PreferencesPanel() {
             setController(value);
           }}
         />
-        <Notice>
-          Voice chat is not available in this release. Parties currently support text chat only.
-        </Notice>
       </div>
     </Card>
   );
@@ -704,7 +702,7 @@ function PreferencesPanel() {
 
 export function SettingsPage() {
   const [params, setParams] = useSearchParams();
-  const tab = (['profile', 'privacy', 'security', 'preferences'] as const).find((value) => value === params.get('tab')) ?? 'profile';
+  const tab = (['profile', 'privacy', 'voice', 'security', 'preferences'] as const).find((value) => value === params.get('tab')) ?? 'profile';
   return (
     <div className="mx-auto max-w-4xl">
       <PageHeader title="Settings" description="Manage your profile, privacy and account security." icon={<Settings />} />
@@ -716,6 +714,7 @@ export function SettingsPage() {
         items={[
           { value: 'profile', label: 'Profile' },
           { value: 'privacy', label: 'Privacy' },
+          { value: 'voice', label: 'Voice & Audio' },
           { value: 'security', label: 'Account & security' },
           { value: 'preferences', label: 'Preferences' },
         ]}
@@ -723,6 +722,7 @@ export function SettingsPage() {
       <div role="tabpanel" aria-label={tab}>
         {tab === 'profile' ? <ProfileSettings /> : null}
         {tab === 'privacy' ? <PrivacySettingsPanel /> : null}
+        {tab === 'voice' ? <VoiceSettings /> : null}
         {tab === 'security' ? <SecuritySettings /> : null}
         {tab === 'preferences' ? <PreferencesPanel /> : null}
       </div>

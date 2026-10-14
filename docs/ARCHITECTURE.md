@@ -50,7 +50,7 @@ module boundaries for later growth.
 | `config/` | Environment validation (`env.ts`), `.env` loader for development |
 | `database/` | Drizzle schema per domain, generated SQL migrations, migration runner with advisory lock |
 | `middleware/` | Session resolution, CSRF and origin checks, error mapping |
-| `modules/<domain>/` | `service.ts` (business rules, transactions) + `routes.ts` (HTTP handlers): auth, users/profiles, friends, messages, groups, parties, game-sessions, invitations, notifications, administration, accounts, health |
+| `modules/<domain>/` | `service.ts` (business rules, transactions) + `routes.ts` (HTTP handlers): auth, users/profiles, friends, messages, groups, parties, game-sessions, invitations, notifications, administration, accounts, health, media, games, badges, activity, voice (LiveKit tokens, revocation, webhooks — see VOICE.md) |
 | `realtime/` | `RealtimeHub` (connection registry), `PresenceService`, pure `presence-rules.ts`, `gateway.ts` |
 | `services/` | Argon2id password hashing, audit log, static web hosting |
 | `utils/` | Error types, crypto helpers, validation, after-commit effects |
@@ -163,6 +163,7 @@ The V1 target is one instance for 5–20 concurrent users; measured headroom is 
 | React 19, React Router 7, TanStack Query 5, Tailwind CSS 4, Vite | Mature, well-documented stack; Router 7 chosen over 8 for proven stability |
 | TypeScript 5.9 | `typescript-eslint` 8 supports TypeScript < 6.1 |
 | No Redis / message broker | Not needed for one instance; adapter boundary documented above |
+| LiveKit 1.12 SFU (optional container) for party voice | Complete self-hosted SFU with JWT room tokens, server-side removal and signed webhooks; compared with mediasoup and Janus in VOICE.md |
 
 ## Reference projects (researched, not used as code)
 

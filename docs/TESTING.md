@@ -53,6 +53,52 @@ system dependencies with `--with-deps`). The Playwright version is pinned to 1.5
 
 ## What is covered
 
+### Alpha 0.4 additions (party voice)
+
+- **voice.test.ts** (15, server) — against a fake LiveKit room API (Twirp/JSON) that records
+  calls: tokens are room-bound, short-lived, microphone-only, identity = user ID, rooms created
+  with the party's capacity; non-members, anonymous requests, missing CSRF and paired devices
+  are refused; only correctly signed webhooks are accepted (forged secret, altered body);
+  member voice state is shown to members only; intruders reported by LiveKit are removed;
+  kick, leave and close disconnect / delete the room; blocks keep users apart; suspension;
+  signing out the session that requested the token (and joins with such a token are refused);
+  reconciliation; a LiveKit outage only affects voice; voice reported unavailable when not
+  configured; configuration validation; CSP `connect-src`.
+- **voice.test.ts** (7, web unit) — stored preference sanitizing, save/notify/reset,
+  capture constraints, key labels, gate threshold and level-meter scale, microphone errors.
+- **voice.spec.ts** (E2E) — needs a real LiveKit server (skipped otherwise; CI starts one).
+  Two desktop Chromium users with Chromium's fake microphone join a party's voice, **receive
+  each other's audio** (WebRTC inbound RTP with audio energy), see "Speaking" and mute state;
+  "mute for me" stops receiving that person's audio; voice survives in-app navigation (voice
+  bar); a reload leaves the room; the microphone test shows a level; a second tab takes the
+  connection over; the leader removes a member, whose connection and microphone end and who is
+  refused a new token; a phone-sized user joins from a party invitation ("Join voice"), the
+  voice bar sits above the bottom navigation without horizontal overflow; leaving releases the
+  microphone; no console or CSP errors. Test-only instrumentation records peer connections
+  and microphone tracks in the page.
+
+Running the voice E2E locally (LiveKit in Docker with host networking; the webhook points at
+the E2E server port):
+
+```bash
+docker run -d --name livekit-e2e --network host -e LIVEKIT_CONFIG="$(cat <<'YAML'
+port: 7880
+bind_addresses: ["127.0.0.1"]
+rtc: { tcp_port: 7881, udp_port: 7882, use_external_ip: false, node_ip: 127.0.0.1 }
+keys: { akeno-dev: akeno-dev-secret-that-is-long-enough-0123456789 }
+room: { auto_create: false }
+webhook: { api_key: akeno-dev, urls: ["http://127.0.0.1:3200/api/v1/voice/webhook"] }
+YAML
+)" livekit/livekit-server:v1.12.0
+E2E_LIVEKIT_URL=ws://127.0.0.1:7880 E2E_LIVEKIT_API_KEY=akeno-dev \
+  E2E_LIVEKIT_API_SECRET=akeno-dev-secret-that-is-long-enough-0123456789 pnpm test:e2e
+```
+
+Manual checks done for the release candidate (scripts not part of the suite): the production
+image with the Compose `voice` profile (two browsers exchanging audio over UDP 7882, LiveKit
+as non-root with a read-only filesystem) and load measurements with 6 and 8 participants
+(results in VOICE.md).
+
 ### Alpha 0.3 additions
 
 - **media-profile.test.ts** (21) — valid uploads become square WebP/JPEG variants served only to
@@ -280,4 +326,5 @@ scenarios, the Docker image build and Compose validation.
 - Accessibility audits with screen readers (semantic markup and keyboard support were
   implemented but not audited with assistive technology).
 - Multi-instance deployments (not supported in V1).
-- Voice chat (not implemented).
+- Voice on real phones, Firefox and Safari, TURN relays and the production network/firewall
+  (voice is tested in Chromium against a local LiveKit server only).

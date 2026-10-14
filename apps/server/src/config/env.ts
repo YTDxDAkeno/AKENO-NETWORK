@@ -66,6 +66,18 @@ const envSchema = z
     /** Concurrent image decodes (each may use up to ~150 MB of memory for the largest inputs). */
     MEDIA_PROCESSING_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(1),
 
+    /**
+     * Voice parties (LiveKit SFU). All three of URL, key and secret enable voice; leave them empty
+     * to run without voice. LIVEKIT_URL is what browsers use (wss://<domain>/livekit behind Caddy);
+     * LIVEKIT_API_URL is how this server reaches LiveKit's API (default: LIVEKIT_URL over http).
+     */
+    LIVEKIT_URL: z.string().default(''),
+    LIVEKIT_API_URL: z.string().default(''),
+    LIVEKIT_API_KEY: z.string().default(''),
+    LIVEKIT_API_SECRET: z.string().default(''),
+    /** Lifetime of a voice join token. Connected participants are kept connected by LiveKit. */
+    VOICE_TOKEN_TTL_SECONDS: z.coerce.number().int().min(30).max(600).default(120),
+
     /** Directory containing the built web client (apps/web/dist). Empty disables static hosting. */
     WEB_DIST_DIR: z.string().default(''),
     MIGRATE_ON_START: booleanString.default(false),
@@ -79,6 +91,29 @@ const envSchema = z
         message:
           'Open registration is disabled in production. Use REGISTRATION_MODE=invite or explicitly set ALLOW_OPEN_REGISTRATION_IN_PRODUCTION=true.',
       });
+    }
+    const voice = [env.LIVEKIT_URL, env.LIVEKIT_API_KEY, env.LIVEKIT_API_SECRET].filter((value) => value.trim() !== '');
+    if (voice.length > 0 && voice.length < 3) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['LIVEKIT_URL'],
+        message: 'Voice needs LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET together (or none of them to disable voice).',
+      });
+    }
+    // Both end up in LiveKit's YAML configuration (compose voice profile): keep them plain.
+    for (const key of ['LIVEKIT_API_KEY', 'LIVEKIT_API_SECRET'] as const) {
+      if (env[key] && !/^[A-Za-z0-9_-]+$/.test(env[key])) {
+        ctx.addIssue({ code: 'custom', path: [key], message: `${key} may only contain letters, digits, "-" and "_".` });
+      }
+    }
+    if (env.LIVEKIT_API_SECRET && env.LIVEKIT_API_SECRET.length < 32) {
+      ctx.addIssue({ code: 'custom', path: ['LIVEKIT_API_SECRET'], message: 'LIVEKIT_API_SECRET must be at least 32 characters.' });
+    }
+    if (env.LIVEKIT_URL && (!/^wss?:\/\//.test(env.LIVEKIT_URL) || !URL.canParse(env.LIVEKIT_URL))) {
+      ctx.addIssue({ code: 'custom', path: ['LIVEKIT_URL'], message: 'LIVEKIT_URL must start with wss:// (or ws:// for local development).' });
+    }
+    if (env.NODE_ENV === 'production' && env.LIVEKIT_URL.startsWith('ws://') && !/^ws:\/\/(localhost|127\.0\.0\.1)/.test(env.LIVEKIT_URL)) {
+      ctx.addIssue({ code: 'custom', path: ['LIVEKIT_URL'], message: 'Use wss:// for LIVEKIT_URL in production.' });
     }
     if (env.NODE_ENV === 'production' && env.COOKIE_SECURE === 'false') {
       ctx.addIssue({
@@ -124,6 +159,14 @@ export interface AppConfig {
   rateLimit: {
     enabled: boolean;
     maxPerMinute: number;
+  };
+  voice: {
+    enabled: boolean;
+    publicUrl: string;
+    apiUrl: string;
+    apiKey: string;
+    apiSecret: string;
+    tokenTtlSeconds: number;
   };
   media: {
     dir: string;
@@ -197,6 +240,14 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
     rateLimit: {
       enabled: env.RATE_LIMIT_ENABLED,
       maxPerMinute: env.RATE_LIMIT_MAX_PER_MINUTE,
+    },
+    voice: {
+      enabled: Boolean(env.LIVEKIT_URL && env.LIVEKIT_API_KEY && env.LIVEKIT_API_SECRET),
+      publicUrl: env.LIVEKIT_URL.trim(),
+      apiUrl: (env.LIVEKIT_API_URL.trim() || env.LIVEKIT_URL.trim()).replace(/^ws(s?):\/\//, 'http$1://'),
+      apiKey: env.LIVEKIT_API_KEY.trim(),
+      apiSecret: env.LIVEKIT_API_SECRET.trim(),
+      tokenTtlSeconds: env.VOICE_TOKEN_TTL_SECONDS,
     },
     media: {
       dir: env.MEDIA_DIR.trim(),

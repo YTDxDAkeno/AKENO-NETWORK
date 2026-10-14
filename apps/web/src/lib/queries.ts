@@ -22,6 +22,7 @@ import type {
   PublicProfile,
   RegistrationInvitationDto,
   UserSearchResult,
+  VoiceStatusDto,
 } from '@akeno/shared';
 import { api, query } from './api';
 import { queryKeys } from './query-keys';
@@ -128,6 +129,15 @@ export function useCurrentParty() {
     queryKey: queryKeys.currentParty,
     queryFn: () => api.get<CurrentPartyResponse>('/parties/current'),
     select: (data) => data.party,
+  });
+}
+
+/** Whether party voice is set up on this server (rarely changes). */
+export function useVoiceStatus() {
+  return useQuery({
+    queryKey: queryKeys.voiceStatus,
+    queryFn: () => api.get<VoiceStatusDto>('/voice/status'),
+    staleTime: 5 * 60_000,
   });
 }
 

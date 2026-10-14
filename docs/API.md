@@ -175,7 +175,9 @@ duplicate.
 ## Parties
 
 A user is in at most one party. Parties are deleted when the last member leaves or the leader
-closes them. **Voice is not available**; `PartyDto.voice.available` is always `false`.
+closes them. `PartyDto.voice` says whether voice chat can be used (`available`, `reason` in
+English when not); `PartyMemberDto.voice` (`connected`, `muted`) is reported to party members
+only (non-members always see `connected: false`). See [VOICE.md](VOICE.md).
 
 | Method & path | Notes |
 | --- | --- |
@@ -191,6 +193,17 @@ closes them. **Voice is not available**; `PartyDto.voice.available` is always `f
 | `DELETE /parties/:id/members/:userId` | Leader only |
 | `POST /parties/:id/invitations` | `{ userId }`, members may invite their friends |
 | `GET/POST /parties/:id/messages` | Party text chat |
+
+### Party voice (Alpha 0.4)
+
+| Method & path | Notes |
+| --- | --- |
+| `GET /voice/status` | Website session. `{ enabled, reason }`: whether voice is set up on this server |
+| `POST /parties/:id/voice/token` | Website session + CSRF, members only, 20/min per user. `{ url, token, room, identity, expiresAt }`: a LiveKit JWT for this party's room only (identity = user ID, microphone publishing only, lifetime `VOICE_TOKEN_TTL_SECONDS`). Errors: `403 NOT_MEMBER`, `403 BLOCKED` (a blocked user is in the room), `503 VOICE_UNAVAILABLE` (not configured or LiveKit unreachable). Paired devices are refused |
+| `POST /voice/webhook` | Called by LiveKit only (server to server, no Origin check). Body verified against the `Authorization` JWT signed with the API secret (including the body's SHA-256); `401` otherwise. `204` on success |
+
+Realtime: voice joins and leaves are delivered as the existing `party.changed` event (the party
+is refetched), so member voice state stays current without polling.
 
 ## Game sessions
 

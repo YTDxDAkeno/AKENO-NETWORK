@@ -63,7 +63,26 @@ jobs:
       - name: Install Playwright Chromium
         run: pnpm --filter @akeno/web exec playwright install --with-deps chromium
 
+      # A real LiveKit server for the party voice test (voice.spec.ts). Host networking so the
+      # browser reaches its media port and LiveKit reaches the E2E server's webhook on 127.0.0.1.
+      - name: Start LiveKit for the voice test
+        run: |
+          docker run -d --name livekit --network host \
+            -e LIVEKIT_CONFIG="$(printf '%s\n' \
+              'port: 7880' 'bind_addresses: ["127.0.0.1"]' \
+              'rtc:' '  tcp_port: 7881' '  udp_port: 7882' '  use_external_ip: false' '  node_ip: 127.0.0.1' \
+              'keys:' '  akeno-ci: akeno-ci-secret-that-is-long-enough-0123456789' \
+              'room:' '  auto_create: false' \
+              'webhook:' '  api_key: akeno-ci' '  urls:' '    - http://127.0.0.1:3200/api/v1/voice/webhook')" \
+            livekit/livekit-server:v1.12.0
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:7880 >/dev/null && exit 0; sleep 1; done
+          docker logs livekit; exit 1
+
       - name: Browser end-to-end tests
+        env:
+          E2E_LIVEKIT_URL: ws://127.0.0.1:7880
+          E2E_LIVEKIT_API_KEY: akeno-ci
+          E2E_LIVEKIT_API_SECRET: akeno-ci-secret-that-is-long-enough-0123456789
         run: pnpm --filter @akeno/web run test:e2e
 
       - name: Upload Playwright report
@@ -167,4 +186,7 @@ jobs:
         run: docker build -f infrastructure/docker/Dockerfile -t akeno-network:ci .
 
       - name: Validate Compose configuration
-        run: POSTGRES_PASSWORD=ci-placeholder docker compose config --quiet
+        run: |
+          POSTGRES_PASSWORD=ci-placeholder docker compose config --quiet
+          POSTGRES_PASSWORD=ci-placeholder LIVEKIT_API_KEY=akenoci LIVEKIT_API_SECRET=ci0123456789abcdef0123456789abcdef \
+            docker compose --profile https --profile voice config --quiet

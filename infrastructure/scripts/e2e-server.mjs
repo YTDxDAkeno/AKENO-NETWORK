@@ -52,6 +52,11 @@ const env = {
   WEB_DIST_DIR: resolve(root, 'apps/web/dist'),
   MEDIA_DIR: mediaDir,
   MIGRATE_ON_START: 'true',
+  // Voice is off unless a LiveKit server is given for the voice spec (never inherited by accident).
+  LIVEKIT_URL: process.env.E2E_LIVEKIT_URL ?? '',
+  LIVEKIT_API_URL: process.env.E2E_LIVEKIT_API_URL ?? '',
+  LIVEKIT_API_KEY: process.env.E2E_LIVEKIT_API_KEY ?? '',
+  LIVEKIT_API_SECRET: process.env.E2E_LIVEKIT_API_SECRET ?? '',
   LOG_LEVEL: process.env.E2E_LOG_LEVEL ?? 'warn',
   LOG_PRETTY: 'false',
 };

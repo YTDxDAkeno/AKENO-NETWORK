@@ -309,6 +309,7 @@ export class AuthService {
   async logout(auth: AuthContextData, meta: RequestMeta): Promise<void> {
     await this.ctx.db.delete(authSessions).where(eq(authSessions.id, auth.sessionId));
     this.ctx.hub.disconnectSession(auth.sessionId, 'You signed out.', REALTIME_CLOSE_CODES.sessionRevoked);
+    this.ctx.voice.onSessionsRevoked(auth.userId, (id) => id === auth.sessionId);
     this.ctx.audit.recordInBackground({
       actorId: auth.userId,
       action: 'auth.logout',
@@ -342,6 +343,7 @@ export class AuthService {
       .returning({ id: authSessions.id });
     if (deleted.length === 0) throw Errors.notFound('The session');
     this.ctx.hub.disconnectSession(sessionId, 'This session was signed out.', REALTIME_CLOSE_CODES.sessionRevoked);
+    this.ctx.voice.onSessionsRevoked(userId, (id) => id === sessionId);
     this.ctx.audit.recordInBackground({
       actorId: userId,
       action: 'auth.session_revoked',
@@ -362,6 +364,7 @@ export class AuthService {
       REALTIME_CLOSE_CODES.sessionRevoked,
       currentSessionId,
     );
+    this.ctx.voice.onSessionsRevoked(userId, (id) => id !== currentSessionId);
     this.ctx.audit.recordInBackground({
       actorId: userId,
       action: 'auth.other_sessions_revoked',
@@ -409,6 +412,7 @@ export class AuthService {
       REALTIME_CLOSE_CODES.sessionRevoked,
       auth.sessionId,
     );
+    this.ctx.voice.onSessionsRevoked(auth.userId, (id) => id !== auth.sessionId);
   }
 
   async deleteExpiredSessions(): Promise<number> {

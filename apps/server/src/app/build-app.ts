@@ -25,6 +25,7 @@ import { messagesRoutes } from '../modules/messages/routes.js';
 import { notificationsRoutes } from '../modules/notifications/routes.js';
 import { partiesRoutes } from '../modules/parties/routes.js';
 import { usersRoutes } from '../modules/users/routes.js';
+import { voiceRoutes } from '../modules/voice/routes.js';
 import { realtimeGateway, startRealtimeMaintenance } from '../realtime/gateway.js';
 import { isApiLikePath, registerStaticWeb } from '../services/static-web.js';
 import { AppError } from '../utils/errors.js';
@@ -44,6 +45,14 @@ export interface BuildAppOptions {
   logger?: Logger;
   /** Disable background maintenance timers (tests). */
   maintenance?: boolean;
+}
+
+/** CSP connect-src entries for the LiveKit server (signal WebSocket and its HTTP validate endpoint). */
+function voiceOrigins(publicUrl: string | null): string[] {
+  if (!publicUrl) return [];
+  const url = new URL(publicUrl);
+  const secure = url.protocol === 'wss:' || url.protocol === 'https:';
+  return [`${secure ? 'wss' : 'ws'}://${url.host}`, `${secure ? 'https' : 'http'}://${url.host}`];
 }
 
 export async function buildApp(options: BuildAppOptions): Promise<BuiltApp> {
@@ -84,7 +93,7 @@ export async function buildApp(options: BuildAppOptions): Promise<BuiltApp> {
       directives: {
         'default-src': ["'self'"],
         'base-uri': ["'self'"],
-        'connect-src': ["'self'", ...config.allowedOrigins.map((origin) => origin.replace(/^http/, 'ws'))],
+        'connect-src': ["'self'", ...config.allowedOrigins.map((origin) => origin.replace(/^http/, 'ws')), ...voiceOrigins(config.voice.enabled ? config.voice.publicUrl : null)],
         'font-src': ["'self'", 'data:'],
         'form-action': ["'self'"],
         'frame-ancestors': ["'none'"],
@@ -139,6 +148,7 @@ export async function buildApp(options: BuildAppOptions): Promise<BuiltApp> {
       await api.register(notificationsRoutes(ctx));
       await api.register(administrationRoutes(ctx));
       await api.register(activityRoutes(ctx));
+      await api.register(voiceRoutes(ctx));
     },
     { prefix: API_PREFIX },
   );
@@ -170,6 +180,7 @@ export async function buildApp(options: BuildAppOptions): Promise<BuiltApp> {
   housekeeping.unref();
 
   let activitySweep: NodeJS.Timeout | null = null;
+  let voiceReconcile: NodeJS.Timeout | null = null;
   app.addHook('onReady', async () => {
     await ctx.media.init();
     await ctx.games.load();
@@ -181,12 +192,21 @@ export async function buildApp(options: BuildAppOptions): Promise<BuiltApp> {
         ctx.activity.endStale().catch((error: unknown) => ctx.log.error({ err: error }, 'Game activity sweep failed'));
       }, 30_000);
       activitySweep.unref();
+      if (ctx.voice.enabled) {
+        // Voice rooms are re-checked against party membership (covers missed webhooks). A voice
+        // server outage is logged and never affects the rest of the app.
+        const reconcile = () => ctx.voice.reconcile().catch((error: unknown) => ctx.log.warn({ err: error }, 'Voice reconciliation failed'));
+        void reconcile();
+        voiceReconcile = setInterval(reconcile, 30_000);
+        voiceReconcile.unref();
+      }
     }
   });
 
   app.addHook('preClose', async () => {
     clearInterval(housekeeping);
     if (activitySweep) clearInterval(activitySweep);
+    if (voiceReconcile) clearInterval(voiceReconcile);
     stopMaintenance?.();
     try {
       await ctx.presence.flushLastSeen();

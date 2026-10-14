@@ -75,6 +75,10 @@ sudo ufw enable
 sudo ufw status verbose
 ```
 
+Party voice (optional, Alpha 0.4) additionally needs **7881/tcp and 7882/udp** open to the
+internet once you enable the `voice` profile — see [VOICE.md](VOICE.md#deploying-the-voice-server).
+Leave them closed until then.
+
 Note: Docker publishes ports through its own iptables rules, which bypass `ufw`. That is why
 `compose.yaml` binds the app to `127.0.0.1` and does not publish PostgreSQL at all. Keep
 `APP_BIND_ADDRESS=127.0.0.1` on a VPS. Also disable SSH password logins if you use keys
@@ -153,7 +157,8 @@ Other operator commands: `promote --online-id <id>` (grant admin), `reset-passwo
 | Restart the app | `docker compose restart app` (clients reconnect automatically) |
 | Shell in the database | `docker compose exec db psql -U akeno -d akeno` |
 
-Always use `--profile https` with `up`/`stop`/`start` so Caddy is included.
+Always use `--profile https` with `up`/`stop`/`start` so Caddy is included. If party voice is
+enabled, add `--profile voice` to the same commands (LiveKit logs: `docker compose logs livekit`).
 
 ### Upgrade
 
@@ -213,7 +218,8 @@ the restore script.
 
 - [ ] `.env` has a strong, unique `POSTGRES_PASSWORD` and `chmod 600`
 - [ ] `AKENO_PUBLIC_ORIGIN` uses `https://`
-- [ ] Only ports 22, 80 and 443 are reachable (`sudo ss -tlnp`, external port scan)
+- [ ] Only ports 22, 80 and 443 are reachable (`sudo ss -tlnp`, external port scan) — plus
+      7881/tcp and 7882/udp only if party voice is enabled; 7880 is never public
 - [ ] `REGISTRATION_MODE=invite`
 - [ ] Daily backups copied off the server; a restore has been tested
 - [ ] OS security updates enabled (`sudo apt install unattended-upgrades`)

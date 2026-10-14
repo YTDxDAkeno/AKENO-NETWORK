@@ -60,6 +60,11 @@ export default defineConfig(
     extends: [reactHooks.configs.flat.recommended],
   },
   {
+    // AudioWorklet modules run in the audio worklet global scope.
+    files: ['apps/web/src/**/*-worklet.js'],
+    languageOptions: { globals: { ...globals.audioWorklet } },
+  },
+  {
     files: ['**/test/**/*.ts', '**/tests/**/*.{ts,tsx}', '**/*.test.{ts,tsx}'],
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',

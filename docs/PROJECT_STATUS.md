@@ -1,6 +1,6 @@
 # Project status
 
-_Last updated: 2026-10-14 (session 5)._ This file is the source of truth for continuing work
+_Last updated: 2026-10-14 (session 5, part 2)._ This file is the source of truth for continuing work
 across sessions. Do not mark anything complete that has not actually been run.
 
 Branches: **`claude/vibrant-mendel-v55zqf`** (session 5; based on `claude/elegant-wright-4qi8gh`
@@ -22,9 +22,55 @@ VPS-only commits must be pushed or merged (procedure in the session-2 section be
 | **PS5 console app Alpha 0.2** | **Ran on a real PS5, firmware 12.20** (user report with screenshots): launch, browser page, HTTPS, pairing, realtime, friends/messages, notifications while gaming, game detection with full titles, session duration, switching games, recently played visible to a second account, interactive message notifications opening the right conversation |
 | **Alpha 0.3** (pictures, banners, themes, badges, game artwork, redesign, media backups) | **Release candidate**: implemented; all automated checks pass locally (session 5 below); not deployed |
 | Alpha 0.3 console-page images (profile pictures, artwork, local console icons) | Implemented, tested on Linux; **not run on a PS5** |
-| Alpha 0.4 (voice parties) | See session 5, part 2 (in progress at the time of the Alpha 0.3 checkpoint) |
+| **Alpha 0.4** (voice parties, desktop + mobile browsers) | **Implemented; tested against a real LiveKit server in Chromium** (session 5, part 2); real two-device test, phones, Firefox/Safari still open; not deployed |
+| Alpha 0.4 PS5 audio | Research only so far (session 5, part 2) |
 | Native Game Base / PSN, Control Center card, overlay | **Unsupported** (no safe documented mechanism) |
 | Production VPS | Not verified, not deployed (network policy, see above) |
+
+## Session 5, part 2 — Alpha 0.4 voice parties
+
+### Built
+
+| Area | Where |
+| --- | --- |
+| SFU choice: LiveKit 1.12.0 (Apache-2.0) after comparing mediasoup and Janus | docs/VOICE.md |
+| Voice authorization: room per party (`auto_create` off), short-lived microphone-only tokens bound to room + user, membership/block/account/session checks at token, join (signed webhook) and every 30 s, immediate removal on leave/kick/close/block/suspension/account deletion/session sign-out, failure isolation (503 only for voice) | `apps/server/src/modules/voice/`, hooks in parties, friends, administration, auth |
+| Config: `LIVEKIT_URL`, `LIVEKIT_API_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `VOICE_TOKEN_TTL_SECONDS` (all-or-none, validated); CSP `connect-src` adds the LiveKit origin | `apps/server/src/config/env.ts`, `app/build-app.ts` |
+| Web voice client: join/leave, mute, deafen, push-to-talk (key + hold button), voice activity gate (AudioWorklet), per-person volume and mute-for-me (unsubscribe), speaking/mute/quality indicators, reconnection with fresh tokens, autoplay unlock, microphone interruption recovery, one connection per account, voice bar across pages, join from a party invitation | `apps/web/src/features/voice/`, `features/parties/PartiesPage.tsx`, `features/invitations/InvitationsList.tsx`, `app/layouts/AppLayout.tsx` |
+| Settings → Voice & Audio: devices, volumes, modes, sensitivity on the level meter, PTT key capture, microphone test with hear-yourself, EC/NS/AGC, test sound, disconnect | `apps/web/src/features/settings/VoiceSettings.tsx` |
+| Compose `voice` profile (LiveKit non-root, read-only, 512 MB), Caddy `/livekit` route, `.env.example` section, CI starts LiveKit for the voice E2E and validates the voice profile | `compose.yaml`, `infrastructure/caddy/Caddyfile`, `.github/workflows/ci.yml` |
+| No database migration needed (voice state is in memory; preferences in the browser) | — |
+
+### Key decisions and findings
+
+1. **LiveKit** over mediasoup (we would write signalling/auth/TURN ourselves) and Janus (GPL,
+   mixing is CPU heavy). Egress/recording is not deployed.
+2. **Remote audio through `<audio>` elements, not Web Audio** (`webAudioMix: false`): the
+   browser E2E showed the Web Audio path bypasses what Chrome's echo canceller hears; volume is
+   therefore capped at 100 %, and "mute for me"/deafen unsubscribe (works on iOS too).
+3. **LiveKit accepts tokens ~60 s past expiry** (measured). Expiry is not the revocation
+   mechanism; every join is re-checked through the signed webhook.
+4. Voice tokens are bound to the requesting **browser session**: signing that session out ends
+   the voice connection; other sessions of the same user are unaffected.
+5. The E2E found two real bugs, both fixed: the CSP blocked the inlined AudioWorklet (`data:`;
+   now emitted as a file), and the party watcher dropped a voice connection made right after
+   accepting an invitation (acted on stale "current party" data).
+
+### Tests executed (2026-10-14, Linux container, Node 22.22, PostgreSQL 16, Chromium, LiveKit 1.12.0)
+
+| Check | Result |
+| --- | --- |
+| `pnpm lint`, `pnpm typecheck` | passed |
+| `pnpm test` | shared 8/8, **server 166/166** (voice 15), **web 34/34** (voice 7) |
+| Browser E2E with real LiveKit (`E2E_LIVEKIT_URL` set) | **7/7** incl. `voice.spec.ts` (two/three browsers, real audio energy in WebRTC stats) |
+| Browser E2E without LiveKit | 6/6 passed, voice spec skipped |
+| Compose `voice` profile with the production image | two browsers exchanged audio over UDP 7882 |
+| LiveKit restart while talking | both clients reconnected with fresh tokens, audio resumed after ~4 s |
+| Load: 6 / 8 participants all talking | LiveKit 8 % / 12 % of a core, 66 / 74 MB; 32 kbit/s up, 150 / 209 kbit/s down per participant |
+
+Not executed: a real two-device audio test, real phones, Firefox/Safari, TURN, the production
+VPS (not reachable from this container: its CPU/RAM/bandwidth/firewall were not inspected —
+checklist in VOICE.md).
 
 ## Session 5 — Alpha 0.3
 

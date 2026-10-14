@@ -43,6 +43,20 @@ log line for that request.
 | Messages appear only after reloading | The realtime connection is down (see above). Messages are always stored; the client catches up after every (re)connection. Before 2026-10-13 a message sent while a page was loading could be missed until a reload; this was fixed. |
 | Typing indicator never shows | It is only sent while typing and is throttled to every 3 seconds; both users must be connected. |
 
+## Party voice
+
+| Symptom | Cause and fix |
+| --- | --- |
+| Party says "Voice chat is not set up on this server" | `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` are not all set for the app. See VOICE.md. |
+| *Join voice* fails with "The voice server is not reachable right now" (`503 VOICE_UNAVAILABLE`) | The app cannot reach LiveKit's API (`LIVEKIT_API_URL`, default `http://livekit:7880` in Compose). Is the `voice` profile running (`docker compose --profile voice ps`)? Are the app and LiveKit using the same key and secret from `.env` (a mismatch shows as authentication errors in both logs)? |
+| Stuck at "Connecting…", then reconnect attempts | The browser cannot open `wss://<domain>/livekit` (check the Caddy route and that the LiveKit container runs) or no media path: open **7882/udp** and **7881/tcp** in the provider and host firewalls, and set `LIVEKIT_NODE_IP` to the server's public IPv4 if STUN discovery picks the wrong address. Networks allowing only HTTPS on 443 need TURN (not enabled in this release). |
+| "Microphone access was blocked" | Allow the microphone for the site (lock icon in the address bar), then *Join voice* again. The site must be on HTTPS. |
+| Connected, but nobody hears you | Check the meter in Settings → Voice & Audio → *Test microphone*. In voice-activity mode, lower the sensitivity; in push-to-talk mode, hold the key (tab focused) or the on-screen button. |
+| You hear nothing (phones) | Tap *Tap to hear the party* (browsers may block audio until a tap). On iPhone/iPad, use the device volume buttons; websites cannot change the volume there. |
+| Voice ends when the phone locks or the browser goes to the background | A browser limitation on iOS (and often Android); rejoin when you are back. |
+| "Voice moved to another tab or device" | You joined the same party's voice elsewhere; one connection per account. |
+| A removed member is still heard | Should not happen: removal disconnects at once and reconciliation retries every 30 s. Check the app log for `Could not remove a voice participant`. |
+
 ## Paired devices and the device client
 
 | Symptom | Cause and fix |

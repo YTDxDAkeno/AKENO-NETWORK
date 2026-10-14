@@ -24,7 +24,12 @@ export function isAllowedOrigin(request: FastifyRequest, allowedOrigins: string[
  * Device pairing endpoints are called by consoles and other non-browser clients, which send no
  * Origin header. They neither read nor set cookies, so they are not exposed to CSRF.
  */
-const NON_BROWSER_PATHS = new Set([`${API_PREFIX}/devices/pairings`, `${API_PREFIX}/devices/pairings/token`]);
+const NON_BROWSER_PATHS = new Set([
+  `${API_PREFIX}/devices/pairings`,
+  `${API_PREFIX}/devices/pairings/token`,
+  // Signed server-to-server webhook from the voice server (LiveKit); it carries no cookies.
+  `${API_PREFIX}/voice/webhook`,
+]);
 
 /**
  * CSRF defense in depth: every state-changing API request must come from an allowed origin.

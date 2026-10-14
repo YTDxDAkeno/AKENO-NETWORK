@@ -15,6 +15,7 @@ import { ProfilePage } from '../features/profile/ProfilePage';
 import { SessionDetailPage } from '../features/sessions/SessionDetailPage';
 import { SessionsPage } from '../features/sessions/SessionsPage';
 import { SettingsPage } from '../features/settings/SettingsPage';
+import { VoiceProvider } from '../features/voice/VoiceProvider';
 import { RouteErrorBoundary } from './ErrorBoundary';
 import { AppLayout } from './layouts/AppLayout';
 import { NotFoundPage } from './NotFoundPage';
@@ -24,9 +25,11 @@ function AuthenticatedShell() {
   return (
     <RequireAuth>
       <RealtimeProvider>
-        <AppLayout>
-          <Outlet />
-        </AppLayout>
+        <VoiceProvider>
+          <AppLayout>
+            <Outlet />
+          </AppLayout>
+        </VoiceProvider>
       </RealtimeProvider>
     </RequireAuth>
   );

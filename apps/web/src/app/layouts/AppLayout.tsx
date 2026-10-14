@@ -24,6 +24,8 @@ import { useAuth, useCurrentUser } from '../../features/auth/AuthProvider';
 import { useGamepadNavigation } from '../../hooks/useGamepadNavigation';
 import { getControllerNavigation } from '../../lib/preferences';
 import { useApplyUserTheme } from '../../lib/theme';
+import { VoiceBar, VoicePartyWatcher } from '../../features/voice/VoiceBar';
+import { useVoice } from '../../features/voice/VoiceProvider';
 import { useConversations, useCurrentParty, useFriendRequests, useGroups } from '../../lib/queries';
 import { ConnectionBanner, ConnectionPill } from './ConnectionStatus';
 import { NotificationsMenu } from './NotificationsMenu';
@@ -167,6 +169,8 @@ export function AppLayout({ children }: { children?: ReactNode }) {
   }, []);
 
   const isChatRoute = /^\/(messages\/[^/]+|groups\/[^/]+|parties)/.test(location.pathname);
+  const voice = useVoice();
+  const voiceBarShown = Boolean(voice && voice.partyId && voice.status !== 'idle' && voice.status !== 'error');
 
   return (
     <div className="min-h-dvh lg:pl-64">
@@ -184,6 +188,7 @@ export function AppLayout({ children }: { children?: ReactNode }) {
           ))}
         </nav>
         <div className="mt-auto flex flex-col gap-1 border-t border-line pt-4">
+          <VoiceBar className="mb-2" />
           <SecondaryLinks />
           <SignOutButton />
         </div>
@@ -208,10 +213,15 @@ export function AppLayout({ children }: { children?: ReactNode }) {
         </div>
       </header>
 
-      <main id="main" className={cn('mx-auto w-full max-w-7xl px-3 pb-28 pt-5 sm:px-6 lg:pb-10', isChatRoute && 'lg:pb-6')}>
+      <main id="main" className={cn('mx-auto w-full max-w-7xl px-3 pt-5 sm:px-6 lg:pb-10', voiceBarShown ? 'pb-44' : 'pb-28', isChatRoute && 'lg:pb-6')}>
         <ConnectionBanner />
         {children ?? <Outlet />}
       </main>
+
+      <VoicePartyWatcher />
+      <div className="fixed inset-x-3 bottom-[calc(4.25rem+env(safe-area-inset-bottom))] z-30 lg:hidden">
+        <VoiceBar className="shadow-card" />
+      </div>
 
       <nav
         aria-label="Quick navigation"

@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Gamepad2, Inbox, PartyPopper, UsersRound } from 'lucide-react';
+import { Gamepad2, Headphones, Inbox, PartyPopper, UsersRound } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import type { AcceptInvitationResponse, InvitationDto } from '@akeno/shared';
 import { Button } from '../../components/Button';
@@ -7,7 +7,9 @@ import { RelativeTime } from '../../components/RelativeTime';
 import { EmptyState } from '../../components/States';
 import { useToast } from '../../components/Toast';
 import { api, errorMessage } from '../../lib/api';
+import { useVoiceStatus } from '../../lib/queries';
 import { queryKeys } from '../../lib/query-keys';
+import { useVoiceController } from '../voice/VoiceProvider';
 
 const ICONS = { group: UsersRound, party: PartyPopper, game_session: Gamepad2 };
 const LABELS = { group: 'Group', party: 'Party', game_session: 'Game session' };
@@ -21,11 +23,14 @@ export function useInvitationActions() {
       void queryClient.invalidateQueries({ queryKey: key });
     }
   };
+  const voice = useVoiceController();
   const accept = useMutation({
-    mutationFn: (id: string) => api.post<AcceptInvitationResponse>(`/invitations/${id}/accept`),
-    onSuccess: (result) => {
+    mutationFn: ({ id }: { id: string; joinVoice?: boolean }) => api.post<AcceptInvitationResponse>(`/invitations/${id}/accept`),
+    onSuccess: (result, { joinVoice }) => {
       refresh();
       toast.success('Invitation accepted.');
+      // Still inside the click's user activation, so the microphone prompt and audio can start.
+      if (joinVoice && result.kind === 'party') void voice?.join(result.targetId);
       void navigate(result.kind === 'group' ? `/groups/${result.targetId}` : result.kind === 'party' ? '/parties' : `/sessions/${result.targetId}`);
     },
     onError: (error) => {
@@ -43,6 +48,7 @@ export function useInvitationActions() {
 
 export function InvitationsList({ invitations }: { invitations: InvitationDto[] }) {
   const { accept, decline } = useInvitationActions();
+  const voiceStatus = useVoiceStatus();
   if (invitations.length === 0) {
     return <EmptyState icon={<Inbox className="size-6" />} title="No pending invitations" description="Group, party and game session invitations appear here." />;
   }
@@ -64,9 +70,20 @@ export function InvitationsList({ invitations }: { invitations: InvitationDto[] 
               </div>
             </div>
             <div className="flex gap-2">
-              <Button size="sm" variant="primary" loading={accept.isPending && accept.variables === invitation.id} onClick={() => accept.mutate(invitation.id)}>
+              <Button size="sm" variant="primary" loading={accept.isPending && accept.variables?.id === invitation.id && !accept.variables.joinVoice} onClick={() => accept.mutate({ id: invitation.id })}>
                 Accept
               </Button>
+              {invitation.kind === 'party' && voiceStatus.data?.enabled ? (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon={<Headphones aria-hidden className="size-4" />}
+                  loading={accept.isPending && accept.variables?.id === invitation.id && accept.variables.joinVoice}
+                  onClick={() => accept.mutate({ id: invitation.id, joinVoice: true })}
+                >
+                  Join voice
+                </Button>
+              ) : null}
               <Button size="sm" variant="ghost" onClick={() => decline.mutate(invitation.id)}>
                 Decline
               </Button>

@@ -73,6 +73,9 @@ private group. This document describes the threat model, the controls that are i
    therefore exempt from the Origin and CSRF checks; browsers cannot attach that header
    cross-origin without a CORS preflight, which is not allowed. The two unauthenticated pairing
    endpoints set and read no cookies.
+6. `POST /api/v1/voice/webhook` is exempt from the Origin check because LiveKit calls it server
+   to server; it reads no cookies and accepts only bodies whose signature (a JWT signed with
+   the LiveKit API secret, containing the body's SHA-256) verifies.
 
 ## Authorization and privacy
 
@@ -130,6 +133,27 @@ Badges are granted only by administrators (audited) or the operator CLI; the Adm
 is derived from the role; administrators cannot grant authority badges to themselves; users can
 only feature badges they hold (validated on the server).
 
+### Voice (Alpha 0.4)
+
+Details in [VOICE.md](VOICE.md). In short:
+
+- The AKENO server is the only authority: LiveKit creates no rooms by itself
+  (`auto_create: false`), and joining needs a JWT issued by the API after checking party
+  membership, blocks and the account state. Tokens are bound to one room and identity, expire
+  after `VOICE_TOKEN_TTL_SECONDS` (default 120 s) and may publish microphone audio only.
+- Membership, blocks, account state and the issuing browser session are checked again when
+  LiveKit reports a join and every 30 s; leaving or removal from the party, closing, blocking,
+  suspension, account deletion and signing out the issuing session disconnect the participant
+  at once. Paired devices cannot obtain voice tokens.
+- Voice traffic is encrypted by WebRTC (DTLS-SRTP) between each browser and the SFU; the SFU
+  can technically access the audio it forwards (it is not end-to-end encrypted). Nothing is
+  recorded: no egress service is deployed and no audio passes through the API.
+- The LiveKit API key and secret live in `.env` (letters, digits, `-`, `_`; secret ≥ 32
+  characters, validated at startup). The signalling/API port is not published publicly; only
+  the media ports 7881/tcp and 7882/udp are, after the operator opens them.
+- The Content-Security-Policy `connect-src` adds only the configured LiveKit origin; the
+  microphone worklet is served from the app's own origin (`script-src 'self'`).
+
 ## Logging and audit
 
 - Structured JSON logs (pino). Cookies, authorization and CSRF headers, `Set-Cookie`,
@@ -155,7 +179,8 @@ only feature badges they hold (validated on the server).
 ## Deployment hardening
 
 - The container runs as the unprivileged `node` user with a read-only root filesystem,
-  `cap_drop: ALL` and `no-new-privileges` (`compose.yaml`).
+  `cap_drop: ALL` and `no-new-privileges` (`compose.yaml`). The optional LiveKit container
+  (`voice` profile) uses the same restrictions with a non-root UID and a 512 MB memory limit.
 - PostgreSQL is on an internal Docker network without internet access and is never
   published. The app port is bound to `127.0.0.1`; only Caddy is public.
 - Secrets live in `.env` (ignored by Git; `.env.example` contains placeholders only).
@@ -169,7 +194,8 @@ only feature badges they hold (validated on the server).
 | No multi-factor authentication | Use long unique passwords; MFA (TOTP/WebAuthn) is a candidate for a later release |
 | No email / password-reset by email | Operators reset passwords with `cli.js reset-password` |
 | In-memory login throttle and presence | Reset on restart; acceptable for one instance (see ARCHITECTURE.md scaling path) |
-| No end-to-end encryption | Stated above; do not claim E2EE |
+| No end-to-end encryption | Stated above; do not claim E2EE (also for voice: the SFU can access the audio it forwards) |
+| Voice participant cache and token-session map are in memory | Rebuilt from LiveKit every 30 s; after a restart the issuing-session check applies only to new tokens |
 | No content moderation tools beyond blocking, group roles and admin suspension | Suitable for small trusted groups |
 | No automated dependency vulnerability scanning in CI yet | Run `pnpm audit` periodically and keep images updated |
 | Independent security review not performed | Recommended before exposing to people outside your circle of friends |

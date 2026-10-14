@@ -1,11 +1,19 @@
 # Caddy terminates HTTPS (automatic Let's Encrypt certificates) and forwards everything,
-# including WebSocket upgrades on /ws, to the AKENO NETWORK app container.
+# including WebSocket upgrades on /ws, to the AKENO NETWORK app container (and /livekit to
+# the optional LiveKit voice server).
 # AKENO_DOMAIN must have DNS A/AAAA records pointing at this server, and ports 80/443 open.
 
 {$AKENO_DOMAIN} {
-	encode zstd gzip
+	# Party voice signalling (LiveKit, `voice` compose profile): wss://<domain>/livekit.
+	# Media itself goes directly to LiveKit on 7881/tcp and 7882/udp, not through Caddy.
+	handle_path /livekit/* {
+		reverse_proxy livekit:7880
+	}
 
-	reverse_proxy app:3000
+	handle {
+		encode zstd gzip
+		reverse_proxy app:3000
+	}
 
 	header {
 		Strict-Transport-Security "max-age=31536000"

@@ -18,6 +18,7 @@ import { NotificationsService } from '../modules/notifications/service.js';
 import { PartiesService } from '../modules/parties/service.js';
 import { RelationsService } from '../modules/users/relations.js';
 import { UsersService } from '../modules/users/service.js';
+import { VoiceService } from '../modules/voice/service.js';
 import { RealtimeHub } from '../realtime/hub.js';
 import { PresenceService } from '../realtime/presence.js';
 import { AuditService } from '../services/audit.js';
@@ -52,6 +53,7 @@ export interface AppContext {
   media: MediaService;
   games: GameCatalogService;
   badges: BadgesService;
+  voice: VoiceService;
 }
 
 export function createContext(config: AppConfig, db: Database, log: FastifyBaseLogger): AppContext {
@@ -77,5 +79,6 @@ export function createContext(config: AppConfig, db: Database, log: FastifyBaseL
   ctx.media = new MediaService(ctx);
   ctx.games = new GameCatalogService(ctx);
   ctx.badges = new BadgesService(ctx);
+  ctx.voice = new VoiceService(ctx);
   return ctx;
 }
