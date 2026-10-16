@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { isPlayerTwoActive } from '../features/shareplay/player-two';
 
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -42,6 +43,11 @@ export function useGamepadNavigation(enabled: boolean): void {
     };
 
     const tick = () => {
+      // While the controller is Player 2 in SharePlay, its buttons must not click around the app.
+      if (isPlayerTwoActive()) {
+        frame = requestAnimationFrame(tick);
+        return;
+      }
       for (const pad of navigator.getGamepads()) {
         if (!pad) continue;
         if (edge(pad, 12) || edge(pad, 14)) moveFocus(-1); // D-pad up / left

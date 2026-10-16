@@ -24,6 +24,8 @@ import { useAuth, useCurrentUser } from '../../features/auth/AuthProvider';
 import { useGamepadNavigation } from '../../hooks/useGamepadNavigation';
 import { getControllerNavigation } from '../../lib/preferences';
 import { useApplyUserTheme } from '../../lib/theme';
+import { SharePlayBar } from '../../features/shareplay/SharePlayBar';
+import { SharePlayPartyWatcher } from '../../features/shareplay/SharePlayProvider';
 import { VoiceBar, VoicePartyWatcher } from '../../features/voice/VoiceBar';
 import { useVoice } from '../../features/voice/VoiceProvider';
 import { useConversations, useCurrentParty, useFriendRequests, useGroups } from '../../lib/queries';
@@ -188,6 +190,7 @@ export function AppLayout({ children }: { children?: ReactNode }) {
           ))}
         </nav>
         <div className="mt-auto flex flex-col gap-1 border-t border-line pt-4">
+          <SharePlayBar className="mb-2" />
           <VoiceBar className="mb-2" />
           <SecondaryLinks />
           <SignOutButton />
@@ -219,7 +222,9 @@ export function AppLayout({ children }: { children?: ReactNode }) {
       </main>
 
       <VoicePartyWatcher />
-      <div className="fixed inset-x-3 bottom-[calc(4.25rem+env(safe-area-inset-bottom))] z-30 lg:hidden">
+      <SharePlayPartyWatcher />
+      <div className="fixed inset-x-3 bottom-[calc(4.25rem+env(safe-area-inset-bottom))] z-30 flex flex-col gap-2 lg:hidden">
+        <SharePlayBar className="shadow-card" />
         <VoiceBar className="shadow-card" />
       </div>
 
