@@ -95,11 +95,24 @@ int akeno_platform_capture_file_exists(const char *library);
 int akeno_platform_capture_process_info_available(void);
 
 /*
- * RESOLVE tier (runs only after an explicit user action): loads library at run time and records
- * in found[i] whether it exports names[i]. Only looks the names up; nothing is called. Returns 0
- * when the library loaded, -1 otherwise (err says why).
+ * Sink called by the RESOLVE tier immediately BEFORE and AFTER every individual dlopen and dlsym
+ * operation, so a persistent, flushed record of the last attempted operation exists even if the
+ * next one crashes or hangs the process. The implementation must flush the line to stable storage
+ * before it returns. detail is already redacted (never a path, address or credential).
  */
-int akeno_platform_capture_lookup(const char *library, const char *const *names, int *found, size_t count, char *err, size_t err_len);
+typedef void (*akeno_capture_log_fn)(void *ctx, const char *event, const char *detail);
+
+/*
+ * RESOLVE tier for ONE library (runs only after an explicit, per-library user action). Loads the
+ * library at run time (dlopen) and records in found[i] whether it exports names[i] (dlsym). It
+ * only looks the names up; nothing is ever called. It NEVER unloads the library: a freshly loaded
+ * system module is left in place because stopping/unloading an unverified system module is not
+ * known to be safe and is the most likely cause of the resolve crash. Every dlopen/dlsym step is
+ * reported through log_fn before and after it runs. Returns 0 when the library loaded, -1
+ * otherwise (err says why).
+ */
+int akeno_platform_capture_probe_one(const char *library, const char *const *names, int *found, size_t count,
+                                     char *err, size_t err_len, akeno_capture_log_fn log_fn, void *log_ctx);
 
 /*
  * Read-only, redacted summary of the local DNS resolver configuration (e.g. "2 nameserver

@@ -233,15 +233,36 @@ int akeno_platform_capture_file_exists(const char *library) { return sim_capture
 
 int akeno_platform_capture_process_info_available(void) { return getenv("AKENO_SIM_CAPTURE_PROCINFO") != NULL; }
 
-int akeno_platform_capture_lookup(const char *library, const char *const *names, int *found, size_t count, char *err, size_t err_len) {
-    (void)names;
+int akeno_platform_capture_probe_one(const char *library, const char *const *names, int *found, size_t count,
+                                     char *err, size_t err_len, akeno_capture_log_fn log_fn, void *log_ctx) {
+    for (size_t i = 0; i < count; i++) found[i] = 0;
+    err[0] = '\0';
+    char line[160];
+
     const char *resolve = getenv("AKENO_SIM_CAPTURE_RESOLVE");
     int loads = resolve && resolve[0] == '1' && sim_capture_listed("AKENO_SIM_CAPTURE_FILES", library);
-    for (size_t i = 0; i < count; i++) found[i] = loads;
+
+    snprintf(line, sizeof(line), "begin dlopen %s (simulated host build)", library ? library : "");
+    if (log_fn) log_fn(log_ctx, "capture.resolve.dlopen", line);
     if (!loads) {
         snprintf(err, err_len, "dlopen failed: %s not available (simulated host build)", library ? library : "");
+        snprintf(line, sizeof(line), "end dlopen %s FAILED", library ? library : "");
+        if (log_fn) log_fn(log_ctx, "capture.resolve.dlopen", line);
         return -1;
     }
+    snprintf(line, sizeof(line), "end dlopen %s ok", library ? library : "");
+    if (log_fn) log_fn(log_ctx, "capture.resolve.dlopen", line);
+
+    for (size_t i = 0; i < count; i++) {
+        snprintf(line, sizeof(line), "begin dlsym %s %s", library ? library : "", names[i] ? names[i] : "");
+        if (log_fn) log_fn(log_ctx, "capture.resolve.dlsym", line);
+        found[i] = 1;
+        snprintf(line, sizeof(line), "end dlsym %s %s resolved", library ? library : "", names[i] ? names[i] : "");
+        if (log_fn) log_fn(log_ctx, "capture.resolve.dlsym", line);
+    }
+
+    snprintf(line, sizeof(line), "%s left loaded (module unload not verified safe; no dlclose)", library ? library : "");
+    if (log_fn) log_fn(log_ctx, "capture.resolve.noclose", line);
     return 0;
 }
 

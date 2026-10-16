@@ -1737,10 +1737,29 @@ if (captureDiagBinary) {
     await diag.exited;
   });
 
-  await step('capture diagnostic: resolve tier loads libraries, records symbols, calls nothing', async () => {
-    const diag = await startApp(join(work, 'app-capturediag-resolve'), ['--port', '0'], capEnv, captureDiagBinary);
+  await step('capture diagnostic: resolve needs an explicit per-library confirmation', async () => {
+    const diag = await startApp(join(work, 'app-capturediag-confirm'), ['--port', '0'], capEnv, captureDiagBinary);
     try {
-      const d = (await appApi(diag, 'POST', '/api/diagnostics/capture/resolve')).body.data;
+      assert.equal((await appApi(diag, 'POST', '/api/diagnostics/capture/resolve')).status, 400);
+      assert.equal((await appApi(diag, 'POST', '/api/diagnostics/capture/resolve', { confirm: 'resolve' })).status, 400);
+      assert.equal(
+        (await appApi(diag, 'POST', '/api/diagnostics/capture/resolve', { library: 'libNope.sprx', confirm: 'resolve' })).status,
+        404,
+      );
+      // Nothing was probed, so the report is still static-only.
+      assert.equal((await appApi(diag, 'GET', '/api/diagnostics/capture')).body.data.system.resolveRan, false);
+    } finally {
+      diag.child.kill('SIGTERM');
+      await diag.exited;
+    }
+  });
+
+  await step('capture diagnostic: resolve probes one library, records symbols, never unloads, calls nothing', async () => {
+    const dataDir = join(work, 'app-capturediag-resolve');
+    const diag = await startApp(dataDir, ['--port', '0'], capEnv, captureDiagBinary);
+    try {
+      // Probe only libSceVideoOut.sprx — one library, by name, with confirmation.
+      const d = (await appApi(diag, 'POST', '/api/diagnostics/capture/resolve', { library: 'libSceVideoOut.sprx', confirm: 'resolve' })).body.data;
       assert.equal(d.system.resolveRan, true);
       assert.equal(d.system.processInfoAvailable, true);
       const videoOut = d.libraries.find((lib) => lib.library === 'libSceVideoOut.sprx');
@@ -1749,16 +1768,35 @@ if (captureDiagBinary) {
       assert.equal(videoOut.loadOk, true);
       assert.equal(videoOut.level, 'signature-verified');
       assert.ok(videoOut.symbols.every((sym) => sym.found === true));
-      // A library the host does not simulate as present does not load and reports an error.
-      const absent = d.libraries.find((lib) => lib.library === 'libSceGameLiveStreaming.sprx');
+      // Libraries not yet probed stay unprobed (one at a time): loadOk null, symbols null.
+      const notYet = d.libraries.find((lib) => lib.library === 'libSceGameLiveStreaming.sprx');
+      assert.equal(notYet.loadOk, null);
+      assert.ok(notYet.symbols.every((sym) => sym.found === null));
+      // Now probe an absent library on its own: it does not load and reports an error.
+      const d2 = (await appApi(diag, 'POST', '/api/diagnostics/capture/resolve', { library: 'libSceGameLiveStreaming.sprx', confirm: 'resolve' })).body.data;
+      const absent = d2.libraries.find((lib) => lib.library === 'libSceGameLiveStreaming.sprx');
       assert.equal(absent.filePresent, false);
       assert.equal(absent.loadOk, false);
       assert.match(absent.error, /not available/);
       assert.ok(absent.symbols.every((sym) => sym.found === null)); // not loaded → not looked up
+      // Earlier probe is still recorded (results accumulate).
+      assert.equal(d2.libraries.find((lib) => lib.library === 'libSceVideoOut.sprx').loadOk, true);
       // Even a resolved symbol is never promoted to a working-capture claim.
-      assert.equal(d.capabilities.liveFramebufferCapture.supported, false);
-      assert.equal(d.network.dnsReadable, true);
-      assert.ok(!d.network.dnsSummary.includes('.'), 'DNS summary carries no address');
+      assert.equal(d2.capabilities.liveFramebufferCapture.supported, false);
+      assert.equal(d2.network.dnsReadable, true);
+      assert.ok(!d2.network.dnsSummary.includes('.'), 'DNS summary carries no address');
+
+      // The persistent log records the handler entry and every dlopen/dlsym step, so a crash
+      // mid-probe would still name the last operation. (No dlclose: the module is left loaded.)
+      const logText = readFileSync(join(dataDir, 'akeno.log'), 'utf8');
+      assert.match(logText, /capture\.resolve\.request libSceVideoOut\.sprx/);
+      assert.match(logText, /capture\.resolve\.dlopen begin dlopen libSceVideoOut\.sprx/);
+      assert.match(logText, /capture\.resolve\.dlopen end dlopen libSceVideoOut\.sprx ok/);
+      assert.match(logText, /capture\.resolve\.dlsym begin dlsym libSceVideoOut\.sprx sceVideoOutOpen/);
+      assert.match(logText, /capture\.resolve\.dlsym end dlsym libSceVideoOut\.sprx sceVideoOutOpen resolved/);
+      assert.match(logText, /capture\.resolve\.noclose libSceVideoOut\.sprx left loaded/);
+      assert.match(logText, /capture\.resolve\.done libSceVideoOut\.sprx loaded/);
+      assert.ok(!/capture\.resolve\.dlclose/.test(logText), 'the resolve tier never calls dlclose');
     } finally {
       diag.child.kill('SIGTERM');
       await diag.exited;

@@ -154,7 +154,24 @@ transport, and Player 2 grants/revocation ([SHAREPLAY_ARCHITECTURE.md](SHAREPLAY
    remaining unknowns (do the capture libraries exist on 12.20? do the PS4-era symbols resolve?
    is the broadcast status queryable?) into hardware evidence — without calling anything.
 
-Sources: pinned ps5-payload-sdk `sce_stubs/*` and `include/ps5/*` (read locally);
+## Hardware run 1 and the diagnostic v2 (2026-10-16)
+
+The first diagnostic build was run on a real PS5 (firmware 12.20, build `35189361f6c1-ps5-capturediag`).
+**STATIC worked** and confirmed all six candidate library files exist (incl. `libSceScreenShot.sprx`,
+`libSceVideoRecording.sprx`, `libSceGameLiveStreaming.sprx`). Pressing the single all-libraries
+**RESOLVE** button made the app exit ("AKENO NETWORK is not running"), with no RESOLVE line in
+`akeno.log` — the build logged only after the whole batch, so the failing operation was not captured.
+
+Likely cause (**hypothesis, not confirmed** — awaiting a v2 log from the console): on the pinned
+SDK, `dlopen` of an unmapped module calls `sceKernelLoadStartModule` (loads *and starts* it), and
+the old `dlclose` called `sceKernelStopUnloadModule` (stops *and unloads* it). Starting, or more
+likely unloading, an unverified system capture/broadcast module can terminate the process. Diagnostic
+v2 removes the risk while keeping the measurement: one library per explicit action, a flushed
+`akeno.log` line before/after every `dlopen` and `dlsym`, and **no `dlclose`** (the module is left
+loaded for the diagnostic's short life). The next hardware run's `akeno.log` should name the exact
+operation and library; only then is the cause confirmed.
+
+Sources: pinned ps5-payload-sdk `sce_stubs/*`, `include/ps5/*` and `crt/rtld_*.c` (read locally);
 [EnixCoda/PS5-Streamer](https://github.com/EnixCoda/PS5-Streamer);
 [ImLunaHey/playstation-rtmp](https://github.com/ImLunaHey/playstation-rtmp);
 Adafruit "Hijacking the PS5's RTMP stream" (2026-09-29) and the HN discussion;

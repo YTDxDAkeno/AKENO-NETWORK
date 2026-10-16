@@ -7,6 +7,33 @@ queryable?) **without calling any capture, encoder or broadcast function.**
 
 Nothing here has been run on a PS5. Do not read a green CI run as hardware success.
 
+## v2: what changed after the first hardware run (and why)
+
+On firmware 12.20 the first build's **STATIC** tier worked and confirmed the candidate library
+files exist, but pressing a single **"Resolve symbols"** button that probed all six libraries at
+once made the app disappear ("AKENO NETWORK is not running"), with no RESOLVE line in `akeno.log`.
+That earlier build only logged *after* the whole batch finished, so the log could not say which
+library, or which operation, was in progress when the app exited.
+
+**Likely cause, not yet confirmed.** On the pinned SDK, `dlopen` of a module that is not already
+mapped calls `sceKernelLoadStartModule`, which *loads and starts* the module, and the old
+`dlclose` afterwards called `sceKernelStopUnloadModule`, which *stops and unloads* it. Either
+starting, or (more likely) unloading, an unverified system capture/broadcast module can terminate
+the process. **This stays a hypothesis until a v2 log from the real console identifies the exact
+operation.** Do not treat it as confirmed.
+
+v2 changes, to make the next run safe and diagnostic:
+
+- **One library at a time.** There is no "resolve all" button. You probe each library on its own,
+  with a separate confirmation, so a crash is isolated to one named library.
+- **Flushed, per-operation log.** `akeno.log` gets a line *before and after* every `dlopen` and
+  every `dlsym`, each flushed to storage immediately. If the app exits mid-probe, the last line
+  names the exact operation and library that were in progress.
+- **No unloading.** v2 never calls `dlclose`/`sceKernelStopUnloadModule`. A probed module is left
+  loaded for the short life of the diagnostic; the process exits normally and the OS reclaims it.
+- **Visible probing/err state.** The page shows a "probing…" indicator and, if the app stops
+  answering, a message telling you to reload the stable app and send `akeno.log`.
+
 ## What this ELF is and is not
 
 - It is a **separate experimental build**: `akeno-network-ps5-capture-diagnostic.elf`. It is
@@ -40,9 +67,10 @@ no memory dumps; no account identifiers in the output.
 
 Two tiers:
 - **STATIC** (on open / "Refresh"): no library is loaded at all.
-- **RESOLVE** ("Resolve symbols"): `dlopen` each candidate library and record which names
-  resolve. `dlopen` can have side effects (it runs a module's init), so it is behind this
-  explicit button and is the only loading the diagnostic ever does. Still nothing is *called*.
+- **RESOLVE** (per-library "Probe this library" + confirm): `dlopen` **one** candidate library and
+  record which of its names resolve. `dlopen` can have side effects (it loads and starts the
+  module), so it is behind an explicit per-library confirmation and is the only loading the
+  diagnostic ever does. The module is **not** unloaded afterwards. Still nothing is *called*.
 
 ## Steps
 
@@ -56,14 +84,21 @@ Run from the **home screen**, not inside a game, for the first pass.
 5. **STATIC pass.** Screenshot the whole section. It shows firmware, build id, pinned SDK, the
    library folder, which candidate libraries are **present**, the capability verdict, and the
    candidate list with each symbol (no ✓/✗ yet — nothing loaded).
-6. Press **"Resolve symbols (loads libraries, calls nothing)"**. Screenshot again. Now each
-   candidate shows whether it loaded and which symbols resolved (✓/✗), plus any load error.
-7. Press **"Copy/export"** if offered, or screenshot the JSON, and send me:
-   - the STATIC screenshot, the RESOLVE screenshot, and the exported JSON;
-   - the `firmware`, `buildId`, `generatedAt` values (so I can tie it to the exact ELF);
-   - the browser console if anything looked wrong (optional).
-8. **Optional second pass, during a game** (only if you are comfortable): repeat steps 4–7 while a
-   game is running, to see whether library/symbol availability differs. This remains read-only.
+6. **RESOLVE, one library at a time.** For the **first** candidate, press **"Probe this
+   library"**, then **"Probe"** on the confirmation. Wait for the row to update (loaded? which
+   symbols resolved ✓/✗, or a load error). Screenshot the row.
+   - If the app is still running, move to the **next** library and repeat. Do them one by one.
+   - **If the app disappears** ("AKENO NETWORK is not running") on a particular library, stop.
+     That library is the one to report. Do not probe it again. Reload your stable AKENO app
+     (step 9) and collect `akeno.log` (step 7) — its last lines name the exact operation.
+7. Collect the evidence and send me:
+   - the STATIC screenshot and each per-library RESOLVE screenshot (or the exported JSON);
+   - **`akeno.log`** from the app's data folder — this is the key new artifact; its
+     `capture.resolve.*` lines show the last `dlopen`/`dlsym` before any crash;
+   - the `firmware`, `buildId`, `generatedAt` values (so I can tie it to the exact ELF).
+8. **Optional second pass, during a game** (only if you are comfortable): repeat the per-library
+   probes while a game is running, to see whether library/symbol availability differs. Still
+   read-only, still one library at a time.
 9. Exit the diagnostic and reload your stable AKENO app.
 
 ## What I will learn from the results
@@ -87,5 +122,13 @@ that must first establish the signature from a verified source
 ## If something goes wrong
 
 The diagnostic is read-only; the worst expected case is that `dlopen` of a candidate fails
-(reported as a load error) or the payload exits. Reload your stable AKENO ELF. Report what you
-saw. Do not retry with any build that is not the exact checksummed artifact above.
+(reported as a load error) or the payload exits when a particular library is loaded. If the app
+exits:
+
+1. Reload your stable AKENO ELF (it is untouched — this is a separate payload).
+2. Grab `akeno.log` from the app's data folder before anything overwrites it. The `capture.resolve.*`
+   lines are flushed as they happen, so the **last** line names the library and the exact
+   operation (`dlopen` / `dlsym`) that was in progress. That is what pins down the cause.
+3. Send me `akeno.log` and say which library you had just pressed "Probe" on.
+4. Do not probe that same library again, and do not retry with any build that is not the exact
+   checksummed artifact above.

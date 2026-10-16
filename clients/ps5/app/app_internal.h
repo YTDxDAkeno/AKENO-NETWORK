@@ -22,6 +22,9 @@
 #include "game_detect.h"
 #include "platform.h"
 #include "shareplay_rx.h"
+#ifdef AKENO_CAPTURE_DIAG
+#include "capture_diag.h"
+#endif
 
 #define AKENO_APP_VERSION "0.2.0-alpha"
 #ifndef AKENO_BUILD_ID
@@ -168,6 +171,16 @@ struct akeno_app {
     /* SharePlay Player 2 diagnostic receiver (lock). Display only; never injects input. */
     akeno_sp_rx shareplay;
 
+#ifdef AKENO_CAPTURE_DIAG
+    /*
+     * Capture diagnostic RESOLVE state (lock), capture-diagnostic build only. Each library is
+     * probed on its own explicit request; results accumulate here so the page shows what has
+     * been probed so far. File presence is refreshed read-only on every request.
+     */
+    akeno_capture_probe capture_probes[AKENO_CAPTURE_MAX_LIBRARIES];
+    int capture_resolved_any;
+#endif
+
     /* Events for the UI (lock). */
     app_event events[APP_EVENT_RING];
     unsigned long long next_seq;
@@ -193,6 +206,8 @@ void app_log(akeno_app *app, akeno_log_level level, const char *event, const cha
     __attribute__((format(printf, 4, 5)))
 #endif
     ;
+/* Forces the diagnostics log to stable storage, so the last line survives a process crash. */
+void app_log_sync(akeno_app *app);
 akeno_status app_make_client(akeno_app *app, akeno_client **out);
 void app_tick(akeno_app *app);
 akeno_status app_save_settings(akeno_app *app);
