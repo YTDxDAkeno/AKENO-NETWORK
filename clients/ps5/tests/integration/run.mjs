@@ -9,7 +9,7 @@
 // Hostile-server cases (garbage, oversized and stalled responses) use small local fake servers.
 //
 // Usage: node clients/ps5/tests/integration/run.mjs <path-to-akeno-cli> [--app <path-to-akeno-app>]
-//        [--audiolab <path-to-akeno-app-audiolab>]
+//        [--audiolab <path-to-akeno-app-audiolab>] [--capturediag <path-to-akeno-app-capture-diagnostic>]
 // With --app, the console app (host build) is also tested against the same server; with
 // --audiolab, the experimental audio lab build (PS5 voice research, simulated audio).
 // Requires: `pnpm build`, PostgreSQL (TEST_DATABASE_ADMIN_URL), openssl on PATH.
@@ -34,6 +34,8 @@ const appIndex = process.argv.indexOf('--app');
 const appBinary = appIndex > 0 ? resolve(process.argv[appIndex + 1]) : null;
 const audioLabIndex = process.argv.indexOf('--audiolab');
 const audioLabBinary = audioLabIndex > 0 ? resolve(process.argv[audioLabIndex + 1]) : null;
+const captureDiagIndex = process.argv.indexOf('--capturediag');
+const captureDiagBinary = captureDiagIndex > 0 ? resolve(process.argv[captureDiagIndex + 1]) : null;
 const adminUrl = process.env.TEST_DATABASE_ADMIN_URL ?? 'postgres://akeno:akeno_dev_password@127.0.0.1:5432/postgres';
 const databaseName = 'akeno_client_it';
 const ADMIN_PASSWORD = 'client-it-admin-password-1';
@@ -1680,6 +1682,86 @@ if (audioLabBinary) {
       await browser.close();
       lab.child.kill('SIGTERM');
       await lab.exited;
+    }
+  });
+}
+
+if (captureDiagBinary) {
+  if (!existsSync(captureDiagBinary)) throw new Error(`Missing capture diagnostic binary ${captureDiagBinary}`);
+  log(`AKENO console app capture diagnostic (host build) tests (${captureDiagBinary})`);
+  // SIMULATED probe inputs: only libSceVideoOut.sprx is "present" and resolvable (host build).
+  const capEnv = {
+    AKENO_SIM_CAPTURE_FILES: 'libSceVideoOut.sprx',
+    AKENO_SIM_CAPTURE_RESOLVE: '1',
+    AKENO_SIM_CAPTURE_PROCINFO: '1',
+    AKENO_SIM_CAPTURE_DNS: '2 nameserver entries configured (addresses redacted)',
+  };
+
+  await step('capture diagnostic: the release build has no capture routes and no capture section', async () => {
+    if (!appBinary) {
+      log('       (skipped: --app not given)');
+      return;
+    }
+    const release = await startApp(join(work, 'app-release-capture'), ['--port', '0'], capEnv);
+    try {
+      assert.equal((await appApi(release, 'GET', '/api/diagnostics/capture')).status, 404);
+      assert.equal((await appApi(release, 'POST', '/api/diagnostics/capture/resolve')).status, 404);
+      assert.equal((await appApi(release, 'GET', '/api/diagnostics')).body.captureDiagnostic, undefined);
+    } finally {
+      release.child.kill('SIGTERM');
+      await release.exited;
+    }
+  });
+
+  await step('capture diagnostic: static report is read-only, honest and needs the session token', async () => {
+    const diag = await startApp(join(work, 'app-capturediag'), ['--port', '0'], capEnv, captureDiagBinary);
+    assert.equal(diag.exit, null, diag.stderr);
+    assert.equal((await appApi(diag, 'GET', '/api/diagnostics')).body.captureDiagnostic, true);
+    assert.equal((await appApi(diag, 'GET', '/api/diagnostics/capture', undefined, { 'X-Akeno-Token': 'wrong' })).status, 403);
+
+    const r = await appApi(diag, 'GET', '/api/diagnostics/capture');
+    assert.equal(r.status, 200);
+    const d = r.body.data;
+    assert.equal(d.experimental, true);
+    assert.equal(d.kind, 'ps5-capture-diagnostic');
+    assert.equal(d.system.resolveRan, false);
+    // Honest verdict: nothing is reported as a working capture path.
+    for (const key of Object.keys(d.capabilities)) assert.equal(d.capabilities[key].supported, false, key);
+    // Static tier does not load libraries: every symbol's "found" is null.
+    for (const lib of d.libraries) {
+      for (const sym of lib.symbols) assert.equal(sym.found, null);
+      assert.ok(lib.givesLiveGameFrames === false);
+    }
+    assert.ok(d.notes.join(' ').includes('no capture, encoder or broadcast function is called'));
+    diag.child.kill('SIGTERM');
+    await diag.exited;
+  });
+
+  await step('capture diagnostic: resolve tier loads libraries, records symbols, calls nothing', async () => {
+    const diag = await startApp(join(work, 'app-capturediag-resolve'), ['--port', '0'], capEnv, captureDiagBinary);
+    try {
+      const d = (await appApi(diag, 'POST', '/api/diagnostics/capture/resolve')).body.data;
+      assert.equal(d.system.resolveRan, true);
+      assert.equal(d.system.processInfoAvailable, true);
+      const videoOut = d.libraries.find((lib) => lib.library === 'libSceVideoOut.sprx');
+      assert.ok(videoOut, 'VideoOut candidate present');
+      assert.equal(videoOut.filePresent, true);
+      assert.equal(videoOut.loadOk, true);
+      assert.equal(videoOut.level, 'signature-verified');
+      assert.ok(videoOut.symbols.every((sym) => sym.found === true));
+      // A library the host does not simulate as present does not load and reports an error.
+      const absent = d.libraries.find((lib) => lib.library === 'libSceGameLiveStreaming.sprx');
+      assert.equal(absent.filePresent, false);
+      assert.equal(absent.loadOk, false);
+      assert.match(absent.error, /not available/);
+      assert.ok(absent.symbols.every((sym) => sym.found === null)); // not loaded → not looked up
+      // Even a resolved symbol is never promoted to a working-capture claim.
+      assert.equal(d.capabilities.liveFramebufferCapture.supported, false);
+      assert.equal(d.network.dnsReadable, true);
+      assert.ok(!d.network.dnsSummary.includes('.'), 'DNS summary carries no address');
+    } finally {
+      diag.child.kill('SIGTERM');
+      await diag.exited;
     }
   });
 }

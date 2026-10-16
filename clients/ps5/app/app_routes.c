@@ -16,6 +16,14 @@
 #ifdef AKENO_EXPERIMENTAL_AUDIO
 #include "audio_lab.h"
 #endif
+#ifdef AKENO_CAPTURE_DIAG
+#include <time.h>
+
+#include "capture_diag.h"
+#ifndef AKENO_PS5_SDK_COMMIT
+#define AKENO_PS5_SDK_COMMIT "unknown"
+#endif
+#endif
 #include "crypto_util.h"
 #include "json_write.h"
 #include "transport.h"
@@ -518,6 +526,9 @@ static void route_diagnostics(akeno_app *app, ui_response *r) {
 #ifdef AKENO_EXPERIMENTAL_AUDIO
     json_kv_bool(b, "experimentalAudio", 1, 1); /* audio lab build: the page shows its section */
 #endif
+#ifdef AKENO_CAPTURE_DIAG
+    json_kv_bool(b, "captureDiagnostic", 1, 1); /* capture-diagnostic build: the page shows its section */
+#endif
 
     akeno_buf_append_str(b, ",\"capabilities\":[");
     for (int f = 0; f < AKENO_FEATURE_COUNT; f++) {
@@ -598,6 +609,68 @@ static void route_audio_tone(akeno_app *app, const akeno_json *root, ui_response
     app_log(app, rc == 0 ? AKENO_LOG_INFO : AKENO_LOG_WARN, "audio.tone", rc == 0 ? "Experimental test tone started by the user."
                                                                                   : "The experimental test tone could not start.");
     respond_audio_status(r);
+}
+#endif
+
+#ifdef AKENO_CAPTURE_DIAG
+/*
+ * GET  /api/diagnostics/capture          STATIC tier: firmware/build info, candidate file
+ *                                        existence (stat) and the compiled-in catalogue. No dlopen.
+ * POST /api/diagnostics/capture/resolve  RESOLVE tier (explicit user action): additionally dlopen
+ *                                        each candidate and record whether its symbols resolve.
+ * Both are read-only; nothing found is ever called. See capture_diag.h.
+ */
+static void route_capture_diag(akeno_app *app, int resolve, ui_response *r) {
+    size_t count = 0;
+    const akeno_capture_candidate *cat = akeno_capture_catalogue(&count);
+    akeno_capture_probe probes[AKENO_CAPTURE_MAX_LIBRARIES];
+    memset(probes, 0, sizeof(probes));
+    for (size_t i = 0; i < count && i < AKENO_CAPTURE_MAX_LIBRARIES; i++) {
+        probes[i].file_present = akeno_platform_capture_file_exists(cat[i].library);
+        if (resolve) {
+            probes[i].resolved = 1;
+            char err[120] = "";
+            int rc = akeno_platform_capture_lookup(cat[i].library, cat[i].symbols, probes[i].symbol_found, cat[i].symbol_count, err, sizeof(err));
+            probes[i].load_ok = rc == 0;
+            app_copy_str(probes[i].error, sizeof(probes[i].error), err);
+        }
+    }
+
+    akeno_capture_sysinfo sys = { 0 };
+    pthread_mutex_lock(&app->lock);
+    sys.platform = app->platform.name;
+    sys.firmware = app->platform.firmware;
+    sys.firmware_raw = app->platform.firmware_raw;
+    sys.app_version = AKENO_APP_VERSION;
+    sys.build_id = AKENO_BUILD_ID;
+    sys.sdk_commit = AKENO_PS5_SDK_COMMIT;
+    sys.library_dir = akeno_platform_capture_library_dir();
+    sys.library_dir_readable = sys.library_dir != NULL;
+    sys.process_info_available = akeno_platform_capture_process_info_available();
+    sys.resolve_ran = resolve;
+
+    akeno_capture_network net = { 0 };
+    net.have = 1;
+    net.server_configured = app->server[0] != '\0';
+    net.server_reachable = 0;
+    app_copy_str(net.server_detail, sizeof(net.server_detail),
+                   "not probed in this read-only view; use Diagnostics \xe2\x86\x92 Test connection (never contacts PSN or Twitch)");
+    char dns[160] = "";
+    net.dns_readable = akeno_platform_capture_dns_summary(dns, sizeof(dns));
+    app_copy_str(net.dns_summary, sizeof(net.dns_summary), dns);
+    pthread_mutex_unlock(&app->lock);
+
+    time_t now = time(NULL);
+    struct tm tm;
+    char stamp[32] = "";
+    if (gmtime_r(&now, &tm)) strftime(stamp, sizeof(stamp), "%Y-%m-%dT%H:%M:%SZ", &tm);
+
+    respond_json(r, 200);
+    akeno_buf_append_str(&r->body, "{\"ok\":true,\"data\":");
+    akeno_capture_report_json(&r->body, &sys, &net, probes, count, stamp);
+    akeno_buf_append_str(&r->body, "}");
+    app_log(app, AKENO_LOG_INFO, "capture.diag", resolve ? "Capture diagnostic RESOLVE tier run by the user (read-only; nothing called)."
+                                                         : "Capture diagnostic static report requested by the user.");
 }
 #endif
 
@@ -757,6 +830,12 @@ void app_route(akeno_app *app, const ui_request *req, const char *body, size_t b
     } else if (is(req, "POST", "/api/diagnostics/audio/tone")) {
         doc = akeno_json_parse(body ? body : "", body_len, NULL, 0);
         route_audio_tone(app, akeno_json_root(doc), r);
+#endif
+#ifdef AKENO_CAPTURE_DIAG
+    } else if (is(req, "GET", "/api/diagnostics/capture")) {
+        route_capture_diag(app, 0, r);
+    } else if (is(req, "POST", "/api/diagnostics/capture/resolve")) {
+        route_capture_diag(app, 1, r);
 #endif
     } else if (is(req, "POST", "/api/exit")) {
         app_log(app, AKENO_LOG_INFO, "app.exit_requested", "Exit requested from the console page.");

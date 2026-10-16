@@ -104,16 +104,27 @@ if(AKENO_HAVE_MBEDTLS)
     "AKENO_UI_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/app/web\""
     "AKENO_BUILD_ID=\"${AKENO_GIT_COMMIT}-linux-audiolab\"")
   target_link_libraries(akeno-app-audiolab PRIVATE akeno_client_mbedtls)
+
+  # Capture diagnostic: the same app with the experimental PS5 capture capability diagnostic
+  # (simulated on Linux via AKENO_SIM_CAPTURE_* env vars). docs/PS5_DIRECT_CAPTURE_RESEARCH.md.
+  add_executable(akeno-app-capturediag app/main.c app/platform_host.c app/capture_diag.c ${AKENO_APP_SOURCES})
+  target_include_directories(akeno-app-capturediag PRIVATE src app)
+  target_compile_options(akeno-app-capturediag PRIVATE ${AKENO_WARNINGS} ${AKENO_HARDENING})
+  target_compile_definitions(akeno-app-capturediag PRIVATE AKENO_CAPTURE_DIAG
+    "AKENO_UI_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/app/web\""
+    "AKENO_PS5_SDK_COMMIT=\"host-simulation\""
+    "AKENO_BUILD_ID=\"${AKENO_GIT_COMMIT}-linux-capturediag\"")
+  target_link_libraries(akeno-app-capturediag PRIVATE akeno_client_mbedtls)
 endif()
 
 enable_testing()
-add_executable(akeno_unit_tests tests/unit/test_main.c tests/unit/test_core.c tests/unit/test_app.c tests/unit/test_game.c tests/unit/test_shareplay.c app/ui_http.c app/game_detect.c app/shareplay_rx.c)
+add_executable(akeno_unit_tests tests/unit/test_main.c tests/unit/test_core.c tests/unit/test_app.c tests/unit/test_game.c tests/unit/test_shareplay.c tests/unit/test_capture_diag.c app/ui_http.c app/game_detect.c app/shareplay_rx.c app/capture_diag.c)
 target_include_directories(akeno_unit_tests PRIVATE src app)
 target_compile_options(akeno_unit_tests PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(akeno_unit_tests PRIVATE akeno_client)
 add_test(NAME unit COMMAND akeno_unit_tests)
 if(AKENO_HAVE_MBEDTLS)
-  add_executable(akeno_unit_tests_mbedtls tests/unit/test_main.c tests/unit/test_core.c tests/unit/test_app.c tests/unit/test_game.c tests/unit/test_shareplay.c app/ui_http.c app/game_detect.c app/shareplay_rx.c)
+  add_executable(akeno_unit_tests_mbedtls tests/unit/test_main.c tests/unit/test_core.c tests/unit/test_app.c tests/unit/test_game.c tests/unit/test_shareplay.c tests/unit/test_capture_diag.c app/ui_http.c app/game_detect.c app/shareplay_rx.c app/capture_diag.c)
   target_include_directories(akeno_unit_tests_mbedtls PRIVATE src app)
   target_compile_options(akeno_unit_tests_mbedtls PRIVATE -Wall -Wextra -Werror)
   target_link_libraries(akeno_unit_tests_mbedtls PRIVATE akeno_client_mbedtls)

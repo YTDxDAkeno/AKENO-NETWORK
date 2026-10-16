@@ -919,6 +919,7 @@
           } })), testResult));
     }
     if (d.experimentalAudio) wrap.appendChild(audioLabSection());
+    if (d.captureDiagnostic) wrap.appendChild(captureDiagSection());
     wrap.appendChild(h('section', { className: 'panel' }, h('h2', { text: 'Features' }),
       h('dl', { className: 'kv' }, d.capabilities.map(function (c) {
         return [h('dt', { text: c.feature }), h('dd', {}, h('span', { className: 'state-' + c.state, text: c.state }), ' — ' + c.reason)];
@@ -969,6 +970,57 @@
         } }),
         h('button', { className: 'btn secondary', type: 'button', id: 'audio-tone', text: 'Play a test tone', onclick: function () { confirmRow.hidden = false; } })),
       confirmRow, out);
+  }
+  // Capture-diagnostic builds only (docs/PS5_DIRECT_CAPTURE_RESEARCH.md): a read-only report of
+  // which capture/record/broadcast libraries the console has and which candidate symbols resolve.
+  // Nothing is captured, encoded or broadcast; PSN and Twitch are never contacted.
+  function captureDiagSection() {
+    var out = h('div', { id: 'capture-diag-result' });
+    function render(res) {
+      clear(out);
+      if (!res || !res.ok) {
+        out.appendChild(h('p', { className: 'error', text: (res && res.error && res.error.message) || 'The console app did not answer.' }));
+        return;
+      }
+      var d = res.data, s = d.system, caps = d.capabilities;
+      out.appendChild(kv([['Firmware', s.firmware || 'unknown'], ['Build', s.buildId], ['Pinned SDK', s.sdkCommit],
+        ['Library folder', s.libraryDir + (s.libraryDirReadable ? '' : ' (not readable)')],
+        ['Process info', s.processInfoAvailable ? 'available (read-only)' : 'unavailable'],
+        ['Symbol resolve tier', s.resolveRan ? 'ran' : 'not run (static only)'], ['Generated', d.generatedAt]]));
+      var capRows = Object.keys(caps).map(function (k) {
+        return [k, (caps[k].supported ? 'supported' : 'not available') + ' — ' + caps[k].reason];
+      });
+      out.appendChild(h('h3', { className: 'small', text: 'Capability verdict' }));
+      out.appendChild(kv(capRows));
+      out.appendChild(h('h3', { className: 'small', text: 'Candidate libraries' }));
+      out.appendChild(kv(d.libraries.map(function (lib) {
+        var syms = lib.symbols.map(function (sym) {
+          return sym.name + (sym.found === null ? '' : sym.found ? ' ✓' : ' ✗');
+        }).join(', ');
+        var state = lib.library + ' [' + lib.level + ', ' + lib.role + (lib.inPinnedSdk ? ', in SDK' : '') + ']';
+        var detail = (lib.filePresent === null ? 'file: not probed' : lib.filePresent ? 'file present' : 'file absent') +
+          (lib.resolved ? (lib.loadOk ? ' · loads' : ' · does not load: ' + (lib.error || '')) : '') +
+          ' · ' + syms + ' · ' + lib.note;
+        return [state, detail];
+      })));
+      if (d.network) {
+        out.appendChild(h('h3', { className: 'small', text: 'Network (read-only)' }));
+        out.appendChild(kv([['AKENO server', d.network.serverConfigured ? 'configured' : 'not configured'],
+          ['Reachability', d.network.serverDetail], ['DNS', d.network.dnsReadable ? d.network.dnsSummary : 'not readable']]));
+      }
+      out.appendChild(h('p', { className: 'muted small', text: (d.notes || []).join(' ') }));
+    }
+    api('GET', '/api/diagnostics/capture').then(render);
+    return h('section', { className: 'panel', id: 'capture-diag' }, h('h2', { text: 'PS5 capture capability diagnostic (experimental build)' }),
+      h('p', { className: 'muted small', text: 'Read-only research aid. It reports which capture libraries exist and which symbols resolve. It never captures, encodes or broadcasts, never changes a console setting, and never contacts PSN or Twitch. Run from the home screen.' }),
+      h('div', { className: 'row' },
+        h('button', { className: 'btn secondary', type: 'button', id: 'capture-refresh', text: 'Refresh (static, no library loading)', onclick: function () {
+          api('GET', '/api/diagnostics/capture').then(render);
+        } }),
+        h('button', { className: 'btn secondary', type: 'button', id: 'capture-resolve', text: 'Resolve symbols (loads libraries, calls nothing)', onclick: function () {
+          api('POST', '/api/diagnostics/capture/resolve').then(render);
+        } })),
+      out);
   }
   function loadDiagnostics() {
     api('GET', '/api/diagnostics').then(function (d) {

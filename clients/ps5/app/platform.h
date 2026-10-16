@@ -78,4 +78,35 @@ int akeno_platform_audio_lookup(const char *library, const char *const *names, i
 int akeno_platform_audio_tone(unsigned frequency_hz, unsigned duration_ms, double amplitude, char *err, size_t err_len);
 #endif
 
+#ifdef AKENO_CAPTURE_DIAG
+/*
+ * Experimental PS5 capture capability diagnostic (docs/PS5_DIRECT_CAPTURE_RESEARCH.md). Built
+ * only into the separate capture-diagnostic executable. Everything here is read-only: it never
+ * calls a capture, encoder or broadcast function and never changes a console setting.
+ */
+
+/* Directory the candidate capture libraries are looked for in, or NULL if unknown. */
+const char *akeno_platform_capture_library_dir(void);
+
+/* 1 if library exists in the capture library dir (stat only), 0 otherwise. */
+int akeno_platform_capture_file_exists(const char *library);
+
+/* 1 if the firmware exposes read-only per-process application info (sceKernelGetAppInfo). */
+int akeno_platform_capture_process_info_available(void);
+
+/*
+ * RESOLVE tier (runs only after an explicit user action): loads library at run time and records
+ * in found[i] whether it exports names[i]. Only looks the names up; nothing is called. Returns 0
+ * when the library loaded, -1 otherwise (err says why).
+ */
+int akeno_platform_capture_lookup(const char *library, const char *const *names, int *found, size_t count, char *err, size_t err_len);
+
+/*
+ * Read-only, redacted summary of the local DNS resolver configuration (e.g. "2 nameserver
+ * entries; custom resolver configured"). Never returns the actual addresses. Returns 1 when a
+ * summary was produced, 0 when nothing could be read safely.
+ */
+int akeno_platform_capture_dns_summary(char *out, size_t out_len);
+#endif
+
 #endif
