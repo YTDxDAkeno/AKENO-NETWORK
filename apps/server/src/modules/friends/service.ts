@@ -301,6 +301,7 @@ export class FriendsService {
     this.ctx.hub.sendToUsers([userId, targetId], { type: 'invitations.changed', data: {} });
     // Users with a block never share a voice room: the blocked user is disconnected.
     this.ctx.voice.onBlock(userId, targetId);
+    this.ctx.shareplay.onBlock(userId, targetId);
   }
 
   async unblock(userId: string, targetId: string): Promise<void> {

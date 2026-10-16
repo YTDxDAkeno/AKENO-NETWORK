@@ -61,6 +61,9 @@ const env = {
   LIVEKIT_API_URL: process.env.E2E_LIVEKIT_API_URL ?? '',
   LIVEKIT_API_KEY: process.env.E2E_LIVEKIT_API_KEY ?? '',
   LIVEKIT_API_SECRET: process.env.E2E_LIVEKIT_API_SECRET ?? '',
+  // SharePlay (experimental) rides on the same LiveKit server: on exactly when voice is.
+  SHAREPLAY_ENABLED: process.env.E2E_LIVEKIT_URL ? 'true' : 'false',
+  SHAREPLAY_REMOTE_INPUT_ENABLED: process.env.E2E_LIVEKIT_URL ? 'true' : 'false',
   LOG_LEVEL: process.env.E2E_LOG_LEVEL ?? 'warn',
   LOG_PRETTY: 'false',
 };

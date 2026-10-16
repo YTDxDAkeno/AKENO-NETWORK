@@ -624,6 +624,16 @@ static int is(const ui_request *req, const char *method, const char *path) {
     return strcmp(req->method, method) == 0 && strcmp(req->path, path) == 0;
 }
 
+/* SharePlay Player 2 diagnostic receiver state (display only). */
+static void route_shareplay(akeno_app *app, ui_response *r) {
+    respond_json(r, 200);
+    akeno_buf_append_str(&r->body, "{\"ok\":true,\"data\":");
+    pthread_mutex_lock(&app->lock);
+    akeno_sp_rx_write_json(&app->shareplay, akeno_now_ms(), &r->body);
+    pthread_mutex_unlock(&app->lock);
+    akeno_buf_append_str(&r->body, "}");
+}
+
 void app_route(akeno_app *app, const ui_request *req, const char *body, size_t body_len, ui_response *r) {
     app_tick(app);
     /* Static page: no secret needed, contains no data. */
@@ -646,6 +656,13 @@ void app_route(akeno_app *app, const ui_request *req, const char *body, size_t b
         r->content_type = "text/css; charset=utf-8";
         r->static_body = akeno_ui_css;
         r->static_len = (size_t)(akeno_ui_css_end - akeno_ui_css) - 1;
+        return;
+    }
+    if (is(req, "GET", "/shareplay.js")) {
+        r->status = 200;
+        r->content_type = "text/javascript; charset=utf-8";
+        r->static_body = akeno_ui_shareplay_js;
+        r->static_len = (size_t)(akeno_ui_shareplay_js_end - akeno_ui_shareplay_js) - 1;
         return;
     }
     if (is(req, "GET", "/favicon.ico")) {
@@ -693,6 +710,8 @@ void app_route(akeno_app *app, const ui_request *req, const char *body, size_t b
         route_media(app, req, r);
     } else if (is(req, "GET", "/api/local-art")) {
         route_local_art(app, req, r);
+    } else if (is(req, "GET", "/api/shareplay")) {
+        route_shareplay(app, r);
     } else if (is(req, "GET", "/api/state")) {
         route_state(app, r);
     } else if (is(req, "GET", "/api/events")) {

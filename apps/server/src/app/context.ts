@@ -16,6 +16,7 @@ import { MediaService } from '../modules/media/service.js';
 import { MessagesService } from '../modules/messages/service.js';
 import { NotificationsService } from '../modules/notifications/service.js';
 import { PartiesService } from '../modules/parties/service.js';
+import { SharePlayService } from '../modules/shareplay/service.js';
 import { RelationsService } from '../modules/users/relations.js';
 import { UsersService } from '../modules/users/service.js';
 import { VoiceService } from '../modules/voice/service.js';
@@ -54,6 +55,7 @@ export interface AppContext {
   games: GameCatalogService;
   badges: BadgesService;
   voice: VoiceService;
+  shareplay: SharePlayService;
 }
 
 export function createContext(config: AppConfig, db: Database, log: FastifyBaseLogger): AppContext {
@@ -80,5 +82,6 @@ export function createContext(config: AppConfig, db: Database, log: FastifyBaseL
   ctx.games = new GameCatalogService(ctx);
   ctx.badges = new BadgesService(ctx);
   ctx.voice = new VoiceService(ctx);
+  ctx.shareplay = new SharePlayService(ctx);
   return ctx;
 }

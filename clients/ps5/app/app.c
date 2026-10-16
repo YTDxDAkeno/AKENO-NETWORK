@@ -549,6 +549,13 @@ static void rt_on_state(void *user, const char *state, const char *detail) {
 static void rt_on_event(void *user, const char *type, const akeno_json *data) {
     akeno_app *app = user;
     if (strcmp(type, "typing") == 0) return; /* Not shown in this version. */
+    if (strcmp(type, "shareplay.input") == 0) {
+        /* Up to ~120 per second: recorded for the SharePlay page, never queued as UI events. */
+        pthread_mutex_lock(&app->lock);
+        akeno_sp_rx_apply(&app->shareplay, data, akeno_now_ms());
+        pthread_mutex_unlock(&app->lock);
+        return;
+    }
     akeno_buf json;
     akeno_buf_init(&json, APP_EVENT_MAX_BYTES);
     int fits = akeno_json_write(data, &json) == 0;

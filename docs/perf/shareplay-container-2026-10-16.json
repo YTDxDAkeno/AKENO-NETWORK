@@ -1,0 +1,9 @@
+{
+  "tool": "infrastructure/scripts/shareplay-measure.mjs",
+  "environment": "Development container, 4 vCPU, LiveKit 1.12.0 binary on 127.0.0.1, headless Chromium (software H.264/VP8 encoding), all browsers and the SFU on one machine",
+  "caveat": "TEST-GENERATED high-entropy canvas video, not PS5 gameplay. The broadcaster's encoder was starved (qualityLimitationReason=bandwidth at 0.3-0.5 Mbit/s, very low frame rate), so client bitrates are NOT representative of a real PC; only the SFU's CPU/memory and the forwarding pattern are meaningful.",
+  "runs": [
+    { "quality": "720p30", "viewers": 1, "seconds": 15, "hostUploadKbps": 478, "hostEncoder": { "width": 640, "fps": 1, "qualityLimitationReason": "bandwidth" }, "viewerDownloadKbps": [235], "livekitCpuPercentOfOneCore": 4.9, "livekitRssMb": 107 },
+    { "quality": "720p30", "viewers": 3, "seconds": 15, "hostUploadKbps": 369, "hostEncoder": { "width": 640, "fps": 0, "qualityLimitationReason": "bandwidth" }, "viewerDownloadKbps": [231, 231, 231], "livekitCpuPercentOfOneCore": 5.7, "livekitRssMb": 107 }
+  ]
+}

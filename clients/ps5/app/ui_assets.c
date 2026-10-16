@@ -8,3 +8,4 @@
 AKENO_EMBED_FILE(akeno_ui_index, AKENO_UI_DIR "/index.html");
 AKENO_EMBED_FILE(akeno_ui_js, AKENO_UI_DIR "/app.js");
 AKENO_EMBED_FILE(akeno_ui_css, AKENO_UI_DIR "/app.css");
+AKENO_EMBED_FILE(akeno_ui_shareplay_js, AKENO_UI_DIR "/shareplay.js");

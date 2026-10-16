@@ -5,6 +5,7 @@ import { LIMITS, type PartyDto, type PartyMemberDto, type PartyPrivacy } from '@
 import { Link } from 'react-router';
 import { Avatar } from '../../components/Avatar';
 import { GameActivityLine } from '../../components/GameActivity';
+import { SharePlayPanel } from '../shareplay/SharePlayPanel';
 import { MemberVolumeControl, PartyVoicePanel, VoiceStateLine, useMemberVoice } from '../voice/PartyVoice';
 import { Badge } from '../../components/Badge';
 import { Button } from '../../components/Button';
@@ -199,6 +200,7 @@ function CurrentParty({ party }: { party: PartyDto }) {
           </div>
         </header>
         <PartyVoicePanel party={party} />
+        <SharePlayPanel party={party} />
         <ul className="grid gap-3 p-4 sm:grid-cols-2" data-testid="party-members">
           {party.members.map((member) => (
             <MemberTile key={member.user.id} member={member} party={party} isLeader={isLeader} meId={me.id} onAction={(run) => action.mutate(run)} />

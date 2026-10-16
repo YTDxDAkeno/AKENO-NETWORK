@@ -12,6 +12,7 @@ import {
 } from '@akeno/shared';
 import { useToast } from '../../components/Toast';
 import { useAuth } from '../../features/auth/AuthProvider';
+import { SHAREPLAY_EVENT, sharePlayKeys } from '../../features/shareplay/queries';
 import { useIdleDetection } from '../../hooks/useIdleDetection';
 import { applyRealtimeMessage, catchUpMessages } from '../../lib/message-sync';
 import { describeNotification } from '../../lib/notifications';
@@ -151,6 +152,13 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
           invalidateSoon(queryKeys.currentParty);
           invalidateSoon(queryKeys.joinableParties);
           invalidateSoon(queryKeys.party(event.data.partyId));
+          break;
+        case 'shareplay.changed':
+          invalidateSoon(sharePlayKeys.party(event.data.partyId));
+          window.dispatchEvent(new CustomEvent(SHAREPLAY_EVENT, { detail: event.data }));
+          break;
+        case 'shareplay.input':
+          // Only paired console apps receive Player 2 input; browsers use the monitor link.
           break;
         case 'game-session.changed':
           invalidate(queryKeys.allGameSessions);

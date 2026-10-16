@@ -401,6 +401,12 @@
     return Promise.all([loadMe().then(loadActivity), loadFriends(), loadConversations(), loadInvitations(), loadParty(), loadSessions()]);
   }
 
+  // SharePlay (experimental) lives in shareplay.js; see docs/SHAREPLAY_INTEGRATION.md.
+  function viewSharePlay() {
+    if (!window.AkenoSharePlay) return h('section', { className: 'panel' }, h('p', { text: 'SharePlay is not available in this build.' }));
+    return window.AkenoSharePlay.view({ h: h, api: api, server: server, S: S });
+  }
+
   // ---- Rendering ----------------------------------------------------------------------------
   function render() {
     var main = $('main');
@@ -417,7 +423,7 @@
         t.classList.toggle('active', t.getAttribute('data-view') === S.view);
       });
       var views = { friends: viewFriends, messages: viewMessages, games: viewGames, invitations: viewInvitations, party: viewParty,
-        sessions: viewSessions, diagnostics: viewDiagnostics, settings: viewSettings };
+        sessions: viewSessions, diagnostics: viewDiagnostics, settings: viewSettings, shareplay: viewSharePlay };
       main.appendChild((views[S.view] || viewFriends)());
     }
     var again = focusedId && $(focusedId);

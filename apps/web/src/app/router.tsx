@@ -15,6 +15,7 @@ import { ProfilePage } from '../features/profile/ProfilePage';
 import { SessionDetailPage } from '../features/sessions/SessionDetailPage';
 import { SessionsPage } from '../features/sessions/SessionsPage';
 import { SettingsPage } from '../features/settings/SettingsPage';
+import { SharePlayProvider } from '../features/shareplay/SharePlayProvider';
 import { VoiceProvider } from '../features/voice/VoiceProvider';
 import { RouteErrorBoundary } from './ErrorBoundary';
 import { AppLayout } from './layouts/AppLayout';
@@ -26,9 +27,11 @@ function AuthenticatedShell() {
     <RequireAuth>
       <RealtimeProvider>
         <VoiceProvider>
-          <AppLayout>
-            <Outlet />
-          </AppLayout>
+          <SharePlayProvider>
+            <AppLayout>
+              <Outlet />
+            </AppLayout>
+          </SharePlayProvider>
         </VoiceProvider>
       </RealtimeProvider>
     </RequireAuth>

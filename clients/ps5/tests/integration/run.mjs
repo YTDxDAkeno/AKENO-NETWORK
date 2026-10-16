@@ -17,6 +17,8 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, existsSync, copyFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
+import http from 'node:http';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -25,7 +27,8 @@ import { deflateSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
-const pg = createRequire(resolve(root, 'apps/server/package.json'))('pg');
+const serverRequire = createRequire(resolve(root, 'apps/server/package.json'));
+const pg = serverRequire('pg');
 const cli = resolve(process.argv[2] ?? 'clients/ps5/build/akeno-cli');
 const appIndex = process.argv.indexOf('--app');
 const appBinary = appIndex > 0 ? resolve(process.argv[appIndex + 1]) : null;
@@ -74,6 +77,22 @@ function freePort() {
 
 const backendPort = await freePort();
 const origin = `http://localhost:${backendPort}`;
+
+// A minimal stand-in for LiveKit's room API so the server can run with SharePlay enabled. Joins
+// and published tracks are reported with signed webhooks, as LiveKit would (SharePlay step).
+const LIVEKIT_KEY = 'akeno-it';
+const LIVEKIT_SECRET = 'akeno-it-secret-that-is-long-enough-0123456789';
+const fakeLiveKit = http.createServer((request, response) => {
+  request.resume();
+  request.on('end', () => {
+    const method = (request.url ?? '').split('/').pop();
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify(method === 'ListRooms' ? { rooms: [] } : method === 'ListParticipants' ? { participants: [] } : {}));
+  });
+});
+await new Promise((done) => fakeLiveKit.listen(0, '127.0.0.1', done));
+const fakeLiveKitUrl = `ws://127.0.0.1:${fakeLiveKit.address().port}`;
+servers.push(fakeLiveKit);
 const databaseUrl = new URL(adminUrl);
 databaseUrl.pathname = `/${databaseName}`;
 const serverEnv = {
@@ -88,6 +107,11 @@ const serverEnv = {
   MIGRATE_ON_START: 'true',
   LOG_LEVEL: 'warn',
   LOG_PRETTY: 'false',
+  LIVEKIT_URL: fakeLiveKitUrl,
+  LIVEKIT_API_KEY: LIVEKIT_KEY,
+  LIVEKIT_API_SECRET: LIVEKIT_SECRET,
+  SHAREPLAY_ENABLED: 'true',
+  SHAREPLAY_REMOTE_INPUT_ENABLED: 'true',
 };
 
 let backend = null;
@@ -262,7 +286,7 @@ function startCli(args, env = {}) {
 async function waitFor(predicate, what, timeoutMs = 20_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (predicate()) return;
+    if (await predicate()) return;
     await sleep(50);
   }
   throw new Error(`Timed out waiting for ${what}`);
@@ -803,6 +827,98 @@ if (appBinary) {
     assert.equal(presence.body.ok, true);
     assert.equal((await alice.request('GET', '/users/me')).body.presencePreference, 'away');
     await appApi(app, 'PUT', '/api/v1/presence', { status: 'online' });
+  });
+
+  await step('console app: receives SharePlay Player 2 input as a diagnostic receiver (no injection)', async () => {
+    const { AccessToken } = serverRequire('livekit-server-sdk');
+    const WebSocket = serverRequire('ws');
+    const current = await appApi(app, 'GET', '/api/v1/parties/current');
+    const partyId = current.body.data.party.id;
+    const room = `akeno-shareplay-${partyId}`;
+    const webhook = async (event) => {
+      const body = JSON.stringify({ id: `EV_${Math.random()}`, createdAt: String(Math.floor(Date.now() / 1000)), ...event });
+      const token = new AccessToken(LIVEKIT_KEY, LIVEKIT_SECRET);
+      token.sha256 = createHash('sha256').update(body).digest('base64');
+      const response = await fetch(`http://127.0.0.1:${backendPort}/api/v1/voice/webhook`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/webhook+json', authorization: await token.toJwt() },
+        body,
+      });
+      assert.equal(response.status, 204);
+    };
+    // Before anything arrives: the receiver is empty and both adapters say "unsupported".
+    let local = await appApi(app, 'GET', '/api/shareplay');
+    assert.equal(local.body.ok, true, local.text);
+    assert.equal(local.body.data.receiver.grantId, null);
+    assert.equal(local.body.data.capabilities.virtualController.supported, false);
+    assert.equal(local.body.data.capabilities.nativeCapture.supported, false);
+    const page = await appApi(app, 'GET', '/shareplay.js');
+    assert.equal(page.status, 200);
+    assert.match(page.text, /AkenoSharePlay/);
+
+    // alice (this console's account) hosts from the website; bob watches and asks for Player 2.
+    assert.equal((await alice.request('POST', `/parties/${partyId}/shareplay/start`, { source: 'capture-device' })).status, 201);
+    await webhook({ event: 'participant_joined', room: { name: room }, participant: { identity: alice.user.id } });
+    await webhook({ event: 'track_published', room: { name: room }, participant: { identity: alice.user.id }, track: { sid: 'TR_1', type: 'VIDEO', source: 'SCREEN_SHARE' } });
+    assert.equal((await bob.request('POST', `/parties/${partyId}/shareplay/token`)).status, 200);
+    await webhook({ event: 'participant_joined', room: { name: room }, participant: { identity: bob.user.id } });
+    const viaConsole = await appApi(app, 'GET', `/api/v1/parties/${partyId}/shareplay`);
+    assert.equal(viaConsole.body.data.session.state, 'live', viaConsole.text);
+    assert.equal((await bob.request('POST', `/parties/${partyId}/shareplay/controller/request`)).status, 204);
+    const grant = (await alice.request('POST', `/parties/${partyId}/shareplay/controller/approve`, { userId: bob.user.id })).body;
+    assert.ok(grant.epoch > 0, JSON.stringify(grant));
+
+    // The console app opts in (its SharePlay tab does this while open); older apps never do.
+    const registered = await appApi(app, 'POST', `/api/v1/parties/${partyId}/shareplay/receiver`, {});
+    assert.equal(registered.body.ok, true, registered.text);
+    const socket = new WebSocket(`ws://127.0.0.1:${backendPort}/api/v1/shareplay/input?party=${partyId}&role=sender&epoch=${grant.epoch}`, {
+      headers: { Origin: origin, Cookie: bob.cookie },
+    });
+    const ready = new Promise((done, fail) => {
+      socket.once('message', (data) => done(JSON.parse(data.toString())));
+      socket.once('error', fail);
+    });
+    assert.equal((await ready).type, 'ready');
+    const packet = (seq, buttons, lx) => {
+      const bytes = Buffer.alloc(32);
+      bytes.writeUInt8(0xa7, 0);
+      bytes.writeUInt8(1, 1);
+      bytes.writeUInt8(1, 2);
+      bytes.writeUInt8(2, 3);
+      bytes.writeUInt32LE(grant.epoch, 4);
+      bytes.writeUInt32LE(seq, 8);
+      bytes.writeUInt32LE(seq * 16, 12);
+      bytes.writeUInt32LE(buttons, 16);
+      bytes.writeInt16LE(lx, 20);
+      bytes.writeUInt8(200, 29);
+      return bytes;
+    };
+    socket.send(packet(1, 0b1001, 32767)); // Cross + Triangle, left stick right
+    await waitFor(async () => (await appApi(app, 'GET', '/api/shareplay')).body.data.receiver.buttons === 0b1001, 'the relayed state on the console');
+    local = await appApi(app, 'GET', '/api/shareplay');
+    assert.equal(local.body.data.receiver.grantId, grant.grantId);
+    assert.deepEqual(local.body.data.receiver.axes, [32767, 0, 0, 0]);
+    assert.deepEqual(local.body.data.receiver.triggers, [0, 200]);
+    assert.equal(local.body.data.receiver.neutralByWatchdog, false);
+    // Not queued as page events (up to 120 per second).
+    const events = await appApi(app, 'GET', '/api/events?after=0');
+    assert.ok(!events.body.events.some((event) => event.type === 'shareplay.input'));
+
+    // Without fresh input the receiver releases everything after its watchdog (500 ms).
+    await sleep(700);
+    local = await appApi(app, 'GET', '/api/shareplay');
+    assert.equal(local.body.data.receiver.neutralByWatchdog, true);
+    assert.equal(local.body.data.receiver.buttons, 0);
+    // Revocation is relayed as a release with its reason.
+    socket.send(packet(2, 0b10, 0));
+    await waitFor(async () => (await appApi(app, 'GET', '/api/shareplay')).body.data.receiver.buttons === 0b10, 'the second state');
+    assert.equal((await alice.request('POST', `/parties/${partyId}/shareplay/controller/revoke`)).status, 204);
+    await waitFor(async () => (await appApi(app, 'GET', '/api/shareplay')).body.data.receiver.lastReason === 'The host revoked Player 2.', 'the release');
+    local = await appApi(app, 'GET', '/api/shareplay');
+    assert.equal(local.body.data.receiver.buttons, 0);
+    assert.equal(local.body.data.receiver.releases, 1);
+    socket.close();
+    assert.equal((await alice.request('POST', `/parties/${partyId}/shareplay/stop`)).status, 204);
   });
 
 
