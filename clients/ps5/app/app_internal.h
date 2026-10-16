@@ -21,6 +21,7 @@
 #include "buf.h"
 #include "game_detect.h"
 #include "platform.h"
+#include "shareplay_rx.h"
 
 #define AKENO_APP_VERSION "0.2.0-alpha"
 #ifndef AKENO_BUILD_ID
@@ -164,6 +165,9 @@ struct akeno_app {
     int actionable_failed;      /* The system refused a button notification (plain one sent instead). */
     int actionable_unavailable; /* The function could not be loaded (plain one sent instead). */
 
+    /* SharePlay Player 2 diagnostic receiver (lock). Display only; never injects input. */
+    akeno_sp_rx shareplay;
+
     /* Events for the UI (lock). */
     app_event events[APP_EVENT_RING];
     unsigned long long next_seq;
@@ -249,5 +253,6 @@ int ui_server_signal_existing(int port, const char *instance_key);
 extern const char akeno_ui_index[], akeno_ui_index_end[];
 extern const char akeno_ui_js[], akeno_ui_js_end[];
 extern const char akeno_ui_css[], akeno_ui_css_end[];
+extern const char akeno_ui_shareplay_js[], akeno_ui_shareplay_js_end[];
 
 #endif

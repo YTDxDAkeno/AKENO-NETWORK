@@ -47,7 +47,7 @@ endif
 MBEDTLS_SRC := $(wildcard $(THIRD_PARTY)/mbedtls/library/*.c)
 CLIENT_SRC  := $(addprefix $(ROOT)/src/,buf.c json.c json_write.c crypto_util.c url.c backoff.c caps.c http.c ws.c \
                client.c realtime.c net_posix.c transport_mbedtls.c)
-APP_SRC     := $(addprefix $(ROOT)/app/,app.c app_routes.c activity.c game_detect.c ui_server.c ui_http.c ui_assets.c platform_ps5.c main.c $(LAB_SRC))
+APP_SRC     := $(addprefix $(ROOT)/app/,app.c app_routes.c activity.c game_detect.c ui_server.c ui_http.c ui_assets.c platform_ps5.c main.c shareplay_rx.c $(LAB_SRC))
 
 MBEDTLS_OBJ := $(patsubst $(THIRD_PARTY)/mbedtls/library/%.c,$(OBJ)/mbedtls/%.o,$(MBEDTLS_SRC))
 CLIENT_OBJ  := $(patsubst $(ROOT)/src/%.c,$(OBJ)/client/%.o,$(CLIENT_SRC))
