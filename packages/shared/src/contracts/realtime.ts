@@ -3,6 +3,7 @@ import type { CurrentGameActivity } from './activity.js';
 import type { ConversationKind, MessageDto } from './messages.js';
 import type { NotificationDto } from './notifications.js';
 import type { PresenceView } from './users.js';
+import type { SharePlayInputRelay } from '../shareplay/contracts.js';
 
 /**
  * Server-to-client realtime events (protocol version 1).
@@ -49,7 +50,11 @@ export type ServerEvent =
   | { type: 'profile.changed'; data: { userId: string } }
   | { type: 'session.revoked'; data: { reason: string } }
   /** Sent to the user's own connections when their detected game changes. */
-  | { type: 'activity.self'; data: { game: CurrentGameActivity | null } };
+  | { type: 'activity.self'; data: { game: CurrentGameActivity | null } }
+  /** SharePlay state of the party changed (refetch GET /parties/:id/shareplay). */
+  | { type: 'shareplay.changed'; data: { partyId: string; ended: boolean } }
+  /** Player 2 controller state for the SharePlay host's paired console app (diagnostic receiver). */
+  | { type: 'shareplay.input'; data: SharePlayInputRelay };
 
 export type ServerEventType = ServerEvent['type'];
 

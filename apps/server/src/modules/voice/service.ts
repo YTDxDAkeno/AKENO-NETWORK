@@ -235,7 +235,8 @@ export class VoiceService {
       throw new AppError(401, 'UNAUTHENTICATED', 'Invalid webhook signature.');
     }
     const partyId = this.partyIdOf(event.room?.name);
-    if (!partyId) return;
+    // LiveKit has one webhook URL: events of SharePlay rooms are handed over (already verified).
+    if (!partyId) return this.ctx.shareplay.handleWebhookEvent(event);
     const identity = event.participant?.identity ?? '';
     switch (event.event) {
       case 'participant_joined': {

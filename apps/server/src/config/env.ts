@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { SHAREPLAY_QUALITIES, type SharePlayQuality } from '@akeno/shared';
 
 /**
  * Server configuration, read once from environment variables and validated at startup.
@@ -78,6 +79,18 @@ const envSchema = z
     /** Lifetime of a voice join token. Connected participants are kept connected by LiveKit. */
     VOICE_TOKEN_TTL_SECONDS: z.coerce.number().int().min(30).max(600).default(120),
 
+    /**
+     * SharePlay (Alpha 0.5, experimental): party gameplay streaming over the same LiveKit server
+     * (needs the LIVEKIT_* settings). Off unless explicitly enabled. Remote controller input is a
+     * second, separate switch. See docs/SHAREPLAY_ARCHITECTURE.md.
+     */
+    SHAREPLAY_ENABLED: booleanString.default(false),
+    SHAREPLAY_MAX_VIEWERS: z.coerce.number().int().min(1).max(15).default(4),
+    SHAREPLAY_MAX_QUALITY: z.enum(SHAREPLAY_QUALITIES).default('720p60'),
+    SHAREPLAY_REMOTE_INPUT_ENABLED: booleanString.default(false),
+    /** Longest a Player 2 grant lasts before the host has to approve again. */
+    SHAREPLAY_GRANT_MAX_MINUTES: z.coerce.number().int().min(5).max(720).default(120),
+
     /** Directory containing the built web client (apps/web/dist). Empty disables static hosting. */
     WEB_DIST_DIR: z.string().default(''),
     MIGRATE_ON_START: booleanString.default(false),
@@ -99,6 +112,12 @@ const envSchema = z
         path: ['LIVEKIT_URL'],
         message: 'Voice needs LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET together (or none of them to disable voice).',
       });
+    }
+    if (env.SHAREPLAY_ENABLED && voice.length < 3) {
+      ctx.addIssue({ code: 'custom', path: ['SHAREPLAY_ENABLED'], message: 'SharePlay needs the voice server: set LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET.' });
+    }
+    if (env.SHAREPLAY_REMOTE_INPUT_ENABLED && !env.SHAREPLAY_ENABLED) {
+      ctx.addIssue({ code: 'custom', path: ['SHAREPLAY_REMOTE_INPUT_ENABLED'], message: 'SHAREPLAY_REMOTE_INPUT_ENABLED needs SHAREPLAY_ENABLED=true.' });
     }
     // Both end up in LiveKit's YAML configuration (compose voice profile): keep them plain.
     for (const key of ['LIVEKIT_API_KEY', 'LIVEKIT_API_SECRET'] as const) {
@@ -167,6 +186,13 @@ export interface AppConfig {
     apiKey: string;
     apiSecret: string;
     tokenTtlSeconds: number;
+  };
+  shareplay: {
+    enabled: boolean;
+    maxViewers: number;
+    maxQuality: SharePlayQuality;
+    remoteInputEnabled: boolean;
+    grantMaxMs: number;
   };
   media: {
     dir: string;
@@ -248,6 +274,13 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
       apiKey: env.LIVEKIT_API_KEY.trim(),
       apiSecret: env.LIVEKIT_API_SECRET.trim(),
       tokenTtlSeconds: env.VOICE_TOKEN_TTL_SECONDS,
+    },
+    shareplay: {
+      enabled: env.SHAREPLAY_ENABLED,
+      maxViewers: env.SHAREPLAY_MAX_VIEWERS,
+      maxQuality: env.SHAREPLAY_MAX_QUALITY,
+      remoteInputEnabled: env.SHAREPLAY_REMOTE_INPUT_ENABLED,
+      grantMaxMs: env.SHAREPLAY_GRANT_MAX_MINUTES * 60_000,
     },
     media: {
       dir: env.MEDIA_DIR.trim(),

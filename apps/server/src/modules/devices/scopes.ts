@@ -43,6 +43,9 @@ const API_ROUTES: Record<string, DeviceScope | null> = {
   'GET /parties': 'parties:read',
   'GET /parties/:id': 'parties:read',
   'GET /parties/:id/members': 'parties:read',
+  // SharePlay status, read-only (the console app shows it; starting, watching and Player 2 need the website).
+  'GET /parties/:id/shareplay': 'parties:read',
+  'GET /shareplay/status': 'parties:read',
   'POST /parties': 'parties:write',
   'POST /parties/:id/join': 'parties:write',
   'POST /parties/:id/leave': 'parties:write',
