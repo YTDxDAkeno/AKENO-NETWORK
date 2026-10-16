@@ -92,6 +92,59 @@ jobs:
             echo "The release ELF contains audio lab code" >&2; exit 1
           fi
 
+      # Experimental PS5 capture capability diagnostic (docs/PS5_DIRECT_CAPTURE_RESEARCH.md): a
+      # separate, read-only ELF, never the release one. Same import gate, same system imports.
+      - name: Build the capture diagnostic and check its imports
+        run: |
+          export PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk"
+          make -C clients/ps5/console -j"$(nproc)" CAPTURE_DIAG=1 GIT_COMMIT="$(git rev-parse --short=12 HEAD)" PS5_SDK_COMMIT="$PS5_SDK_COMMIT"
+          clients/ps5/console/check-imports.sh clients/ps5/build-ps5-capturediag | tee imports-capturediag.txt
+          nm="$PS5_PAYLOAD_SDK/bin/prospero-nm"
+          diff <("$nm" -D --undefined-only clients/ps5/build-ps5/akeno-network-ps5.elf | awk '{print $2}' | sort) \
+               <("$nm" -D --undefined-only clients/ps5/build-ps5-capturediag/akeno-network-ps5-capture-diagnostic.elf | awk '{print $2}' | sort)
+          if "$nm" clients/ps5/build-ps5/akeno-network-ps5.debug.elf | grep -qE 'capture_diag|akeno_platform_capture'; then
+            echo "The release ELF contains capture diagnostic code" >&2; exit 1
+          fi
+
+      - name: Package the capture diagnostic
+        shell: bash
+        run: |
+          export PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk"
+          out=dist/akeno-network-ps5-capture-diagnostic
+          mkdir -p "$out/fallback"
+          cp clients/ps5/build-ps5-capturediag/akeno-network-ps5-capture-diagnostic.elf "$out/"
+          cp clients/ps5/build-ps5/akeno-network-ps5.elf "$out/fallback/akeno-network-ps5.elf"
+          cp docs/PS5_CAPTURE_DIAGNOSTIC_TEST.md "$out/HARDWARE_TEST.md"
+          cp docs/PS5_DIRECT_CAPTURE_RESEARCH.md docs/PS5_CAPTURE_CAPABILITIES.md "$out/"
+          for elf in "$out"/*.elf "$out"/fallback/*.elf; do
+            readelf -h "$elf" | grep -q 'ELF64'
+            readelf -h "$elf" | grep -q 'Advanced Micro Devices X86-64'
+            readelf -h "$elf" | grep -q 'DYN (Position-Independent Executable file)'
+          done
+          (cd "$out" && sha256sum *.elf fallback/*.elf > SHA256SUMS)
+          {
+            echo "AKENO NETWORK PS5 capture capability diagnostic (EXPERIMENTAL, read-only)"
+            echo "Source commit:   $(git rev-parse HEAD)"
+            echo "Workflow run:    $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo "ps5-payload-sdk: $PS5_SDK_COMMIT"
+            echo
+            echo "SHA-256:"; sed 's/^/  /' "$out/SHA256SUMS"; echo
+            cat imports-capturediag.txt
+            echo
+            echo "This ELF is READ-ONLY. It reports which capture/record/broadcast libraries exist and"
+            echo "which candidate symbols resolve; it CALLS NOTHING, changes no console setting, touches"
+            echo "no DNS or account, and never contacts PSN or Twitch. It has NEVER run on a PS5. Follow"
+            echo "HARDWARE_TEST.md and keep fallback/akeno-network-ps5.elf as the stable app to return to."
+          } > "$out/BUILDINFO.txt"
+          cat "$out/BUILDINFO.txt"
+
+      - name: Upload the capture diagnostic
+        uses: actions/upload-artifact@v4
+        with:
+          name: akeno-network-ps5-capture-diagnostic
+          path: dist/akeno-network-ps5-capture-diagnostic
+          retention-days: 90
+
       - name: Inspect, checksum and describe the build
         shell: bash
         run: |

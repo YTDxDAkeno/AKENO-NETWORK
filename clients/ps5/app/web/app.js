@@ -919,6 +919,7 @@
           } })), testResult));
     }
     if (d.experimentalAudio) wrap.appendChild(audioLabSection());
+    if (d.captureDiagnostic) wrap.appendChild(captureDiagSection());
     wrap.appendChild(h('section', { className: 'panel' }, h('h2', { text: 'Features' }),
       h('dl', { className: 'kv' }, d.capabilities.map(function (c) {
         return [h('dt', { text: c.feature }), h('dd', {}, h('span', { className: 'state-' + c.state, text: c.state }), ' — ' + c.reason)];
@@ -969,6 +970,90 @@
         } }),
         h('button', { className: 'btn secondary', type: 'button', id: 'audio-tone', text: 'Play a test tone', onclick: function () { confirmRow.hidden = false; } })),
       confirmRow, out);
+  }
+  // Capture-diagnostic builds only (docs/PS5_DIRECT_CAPTURE_RESEARCH.md): a read-only report of
+  // which capture/record/broadcast libraries the console has and which candidate symbols resolve.
+  // Nothing is captured, encoded or broadcast; PSN and Twitch are never contacted.
+  function captureDiagSection() {
+    var out = h('div', { id: 'capture-diag-result' });
+    var busy = false; // one probe at a time: never load more than one library concurrently.
+    function render(res) {
+      clear(out);
+      if (!res || !res.ok) {
+        out.appendChild(h('p', { className: 'error', text: (res && res.error && res.error.message) || 'The console app did not answer.' }));
+        return;
+      }
+      var d = res.data, s = d.system, caps = d.capabilities;
+      out.appendChild(kv([['Firmware', s.firmware || 'unknown'], ['Build', s.buildId], ['Pinned SDK', s.sdkCommit],
+        ['Library folder', s.libraryDir + (s.libraryDirReadable ? '' : ' (not readable)')],
+        ['Process info', s.processInfoAvailable ? 'available (read-only)' : 'unavailable'],
+        ['Symbol resolve tier', s.resolveRan ? 'some libraries probed' : 'not run (static only)'], ['Generated', d.generatedAt]]));
+      var capRows = Object.keys(caps).map(function (k) {
+        return [k, (caps[k].supported ? 'supported' : 'not available') + ' — ' + caps[k].reason];
+      });
+      out.appendChild(h('h3', { className: 'small', text: 'Capability verdict' }));
+      out.appendChild(kv(capRows));
+      out.appendChild(h('h3', { className: 'small', text: 'Candidate libraries (probe one at a time)' }));
+      d.libraries.forEach(function (lib) {
+        var syms = lib.symbols.map(function (sym) {
+          return sym.name + (sym.found === null ? '' : sym.found ? ' ✓' : ' ✗');
+        }).join(', ');
+        var head = lib.library + ' [' + lib.level + ', ' + lib.role + (lib.inPinnedSdk ? ', in SDK' : '') + ']';
+        var state = lib.blocked ? ' · quarantined (not loaded)'
+          : lib.resolved ? (lib.loadOk ? ' · loaded, symbols: ' + syms : ' · did not load: ' + (lib.error || '')) : ' · not probed yet';
+        var detail = (lib.filePresent === null ? 'file: not probed' : lib.filePresent ? 'file present' : 'file absent') +
+          state + ' · ' + lib.note + (lib.hardwareNote ? ' · HW: ' + lib.hardwareNote : '');
+        var status = h('span', { className: 'muted small' });
+        var confirmRow = h('div', { className: 'row', hidden: true });
+        // Quarantined libraries are never loadable from the page: no probe button at all.
+        var probeBtn = lib.loadUnsafe
+          ? h('span', { className: 'error small', text: '⚠ Not loadable — ' + (lib.unsafeReason || 'quarantined as unsafe to load') })
+          : h('button', { className: 'btn secondary', type: 'button',
+              text: lib.resolved ? 'Probe again' : 'Probe this library', onclick: function () { confirmRow.hidden = false; } });
+        function runProbe() {
+          if (busy) return;
+          busy = true;
+          confirmRow.hidden = true;
+          status.className = 'small';
+          status.textContent = 'Probing ' + lib.library + '… if this page stops responding, the app may have exited — reload your stable app and check akeno.log.';
+          api('POST', '/api/diagnostics/capture/resolve', { library: lib.library, confirm: 'resolve' }).then(function (rr) {
+            busy = false;
+            if (rr && rr.offline) {
+              status.className = 'error small';
+              status.textContent = 'No response while probing ' + lib.library + '. The console app may have exited during this library’s load. Reload your stable AKENO app and send me akeno.log — its last line names the operation that was in progress.';
+              return;
+            }
+            if (!rr || !rr.ok) {
+              status.className = 'error small';
+              status.textContent = (rr && rr.error && rr.error.message) || 'The probe failed.';
+              return;
+            }
+            render(rr); // accumulated report, now including this library
+          });
+        }
+        confirmRow.appendChild(h('span', { className: 'muted small',
+          text: 'This loads ' + lib.library + ' and looks up its symbols. It never unloads it and calls nothing. Probe it?' }));
+        confirmRow.appendChild(h('button', { className: 'btn', type: 'button', text: 'Probe', onclick: runProbe }));
+        confirmRow.appendChild(h('button', { className: 'btn ghost', type: 'button', text: 'Cancel', onclick: function () { confirmRow.hidden = true; } }));
+        out.appendChild(h('div', { className: 'panel inner' },
+          h('div', { className: 'kv' }, h('dt', { text: head }), h('dd', { text: detail })),
+          h('div', { className: 'row' }, probeBtn), confirmRow, status));
+      });
+      if (d.network) {
+        out.appendChild(h('h3', { className: 'small', text: 'Network (read-only)' }));
+        out.appendChild(kv([['AKENO server', d.network.serverConfigured ? 'configured' : 'not configured'],
+          ['Reachability', d.network.serverDetail], ['DNS', d.network.dnsReadable ? d.network.dnsSummary : 'not readable']]));
+      }
+      out.appendChild(h('p', { className: 'muted small', text: (d.notes || []).join(' ') }));
+    }
+    api('GET', '/api/diagnostics/capture').then(render);
+    return h('section', { className: 'panel', id: 'capture-diag' }, h('h2', { text: 'PS5 capture capability diagnostic (experimental build)' }),
+      h('p', { className: 'muted small', text: 'Read-only research aid. It reports which capture libraries exist and, for one library at a time that you choose, which symbols resolve. It never captures, encodes or broadcasts, never unloads a system module, never changes a console setting, and never contacts PSN or Twitch. Run from the home screen.' }),
+      h('div', { className: 'row' },
+        h('button', { className: 'btn secondary', type: 'button', id: 'capture-refresh', text: 'Refresh (static, no library loading)', onclick: function () {
+          api('GET', '/api/diagnostics/capture').then(render);
+        } })),
+      out);
   }
   function loadDiagnostics() {
     api('GET', '/api/diagnostics').then(function (d) {

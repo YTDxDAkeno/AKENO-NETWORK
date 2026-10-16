@@ -118,6 +118,15 @@ static void utf8_truncate(char *s, size_t max) {
     s[cut] = '\0';
 }
 
+void app_log_sync(akeno_app *app) {
+    pthread_mutex_lock(&app->log_lock);
+    if (app->log) {
+        fflush(app->log);
+        fsync(fileno(app->log));
+    }
+    pthread_mutex_unlock(&app->log_lock);
+}
+
 static void sanitize_line(char *s) {
     for (unsigned char *p = (unsigned char *)s; *p; p++)
         if (*p < 0x20 || *p == 0x7F) *p = ' ';

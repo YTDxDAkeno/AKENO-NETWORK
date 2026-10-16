@@ -16,6 +16,14 @@
 #ifdef AKENO_EXPERIMENTAL_AUDIO
 #include "audio_lab.h"
 #endif
+#ifdef AKENO_CAPTURE_DIAG
+#include <time.h>
+
+#include "capture_diag.h"
+#ifndef AKENO_PS5_SDK_COMMIT
+#define AKENO_PS5_SDK_COMMIT "unknown"
+#endif
+#endif
 #include "crypto_util.h"
 #include "json_write.h"
 #include "transport.h"
@@ -518,6 +526,9 @@ static void route_diagnostics(akeno_app *app, ui_response *r) {
 #ifdef AKENO_EXPERIMENTAL_AUDIO
     json_kv_bool(b, "experimentalAudio", 1, 1); /* audio lab build: the page shows its section */
 #endif
+#ifdef AKENO_CAPTURE_DIAG
+    json_kv_bool(b, "captureDiagnostic", 1, 1); /* capture-diagnostic build: the page shows its section */
+#endif
 
     akeno_buf_append_str(b, ",\"capabilities\":[");
     for (int f = 0; f < AKENO_FEATURE_COUNT; f++) {
@@ -598,6 +609,134 @@ static void route_audio_tone(akeno_app *app, const akeno_json *root, ui_response
     app_log(app, rc == 0 ? AKENO_LOG_INFO : AKENO_LOG_WARN, "audio.tone", rc == 0 ? "Experimental test tone started by the user."
                                                                                   : "The experimental test tone could not start.");
     respond_audio_status(r);
+}
+#endif
+
+#ifdef AKENO_CAPTURE_DIAG
+/*
+ * GET  /api/diagnostics/capture          STATIC tier: firmware/build info, candidate file
+ *                                        existence (stat) and the compiled-in catalogue. No dlopen.
+ * POST /api/diagnostics/capture/resolve  RESOLVE tier for ONE named library, after an explicit
+ *   {"library":"<name>","confirm":"resolve"}  per-library confirmation. dlopen + dlsym only, never
+ *                                        unloads; every step is logged and flushed before the next.
+ * Both are read-only; nothing found is ever called. Results accumulate in app->capture_probes so
+ * the page shows what has been probed so far. See capture_diag.h.
+ */
+
+/* Flushed, per-operation log sink for the resolve tier (capture_diag.h: akeno_capture_log_fn). */
+static void capture_diag_log(void *ctx, const char *event, const char *detail) {
+    akeno_app *app = ctx;
+    app_log(app, AKENO_LOG_INFO, event, "%s", detail && detail[0] ? detail : "");
+    app_log_sync(app); /* each step hits stable storage before the next, possibly crashing, one */
+}
+
+/* Emits the accumulated capture report from app->capture_probes. Caller holds no lock. */
+static void capture_build_report(akeno_app *app, ui_response *r) {
+    size_t count = 0;
+    const akeno_capture_candidate *cat = akeno_capture_catalogue(&count);
+    akeno_capture_probe probes[AKENO_CAPTURE_MAX_LIBRARIES];
+    akeno_capture_sysinfo sys = { 0 };
+    akeno_capture_network net = { 0 };
+    char dns[160] = "";
+
+    pthread_mutex_lock(&app->lock);
+    /* Refresh read-only file presence for every candidate on each request (stat only). */
+    for (size_t i = 0; i < count && i < AKENO_CAPTURE_MAX_LIBRARIES; i++)
+        app->capture_probes[i].file_present = akeno_platform_capture_file_exists(cat[i].library);
+    memcpy(probes, app->capture_probes, sizeof(probes));
+    sys.platform = app->platform.name;
+    sys.firmware = app->platform.firmware;
+    sys.firmware_raw = app->platform.firmware_raw;
+    sys.app_version = AKENO_APP_VERSION;
+    sys.build_id = AKENO_BUILD_ID;
+    sys.sdk_commit = AKENO_PS5_SDK_COMMIT;
+    sys.library_dir = akeno_platform_capture_library_dir();
+    sys.library_dir_readable = sys.library_dir != NULL;
+    sys.process_info_available = akeno_platform_capture_process_info_available();
+    sys.resolve_ran = app->capture_resolved_any;
+    net.have = 1;
+    net.server_configured = app->server[0] != '\0';
+    net.server_reachable = 0;
+    app_copy_str(net.server_detail, sizeof(net.server_detail),
+                   "not probed in this read-only view; use Diagnostics \xe2\x86\x92 Test connection (never contacts PSN or Twitch)");
+    net.dns_readable = akeno_platform_capture_dns_summary(dns, sizeof(dns));
+    app_copy_str(net.dns_summary, sizeof(net.dns_summary), dns);
+    pthread_mutex_unlock(&app->lock);
+
+    time_t now = time(NULL);
+    struct tm tm;
+    char stamp[32] = "";
+    if (gmtime_r(&now, &tm)) strftime(stamp, sizeof(stamp), "%Y-%m-%dT%H:%M:%SZ", &tm);
+
+    respond_json(r, 200);
+    akeno_buf_append_str(&r->body, "{\"ok\":true,\"data\":");
+    akeno_capture_report_json(&r->body, &sys, &net, probes, count, stamp);
+    akeno_buf_append_str(&r->body, "}");
+}
+
+static void route_capture_diag(akeno_app *app, ui_response *r) {
+    capture_build_report(app, r);
+    app_log(app, AKENO_LOG_INFO, "capture.diag", "Capture diagnostic static report requested by the user.");
+}
+
+static void route_capture_resolve(akeno_app *app, const akeno_json *root, ui_response *r) {
+    const char *confirm = akeno_json_get_string(root, "confirm", NULL);
+    const char *library = akeno_json_get_string(root, "library", NULL);
+    if (!confirm || strcmp(confirm, "resolve") != 0) {
+        respond_error(r, 400, "CONFIRMATION_REQUIRED", "Confirm this single-library resolve first.");
+        return;
+    }
+    if (!library || !library[0]) {
+        respond_error(r, 400, "LIBRARY_REQUIRED", "Name the one library to probe.");
+        return;
+    }
+    size_t count = 0;
+    const akeno_capture_candidate *cat = akeno_capture_catalogue(&count);
+    size_t idx = count;
+    for (size_t i = 0; i < count; i++)
+        if (strcmp(cat[i].library, library) == 0) { idx = i; break; }
+    if (idx >= count) {
+        respond_error(r, 404, "UNKNOWN_LIBRARY", "That library is not in the diagnostic catalogue.");
+        return;
+    }
+
+    /* Record that the request reached the handler, flushed, before any library is loaded. */
+    app_log(app, AKENO_LOG_INFO, "capture.resolve.request", "%s", cat[idx].library);
+    app_log_sync(app);
+
+    akeno_capture_probe probe;
+    memset(&probe, 0, sizeof(probe));
+    probe.resolved = 1;
+
+    /*
+     * Quarantine: a library marked load_unsafe is NEVER dlopen'd. Loading it is known or strongly
+     * expected to hang or terminate the process (e.g. libSceVideoRecording on 12.20). The request
+     * is refused here, before any loading, and the reason is reported.
+     */
+    if (cat[idx].load_unsafe) {
+        probe.blocked = 1;
+        probe.load_ok = 0;
+        app_copy_str(probe.error, sizeof(probe.error),
+                     cat[idx].unsafe_reason ? cat[idx].unsafe_reason : "quarantined: unsafe to load");
+        app_log(app, AKENO_LOG_WARN, "capture.resolve.blocked", "%s refused (quarantined; not loaded)", cat[idx].library);
+        app_log_sync(app);
+    } else {
+        char err[120] = "";
+        /* Runs WITHOUT app->lock: on a console this may block or terminate the process. */
+        int rc = akeno_platform_capture_probe_one(cat[idx].library, cat[idx].symbols, probe.symbol_found,
+                                                  cat[idx].symbol_count, err, sizeof(err), capture_diag_log, app);
+        probe.load_ok = rc == 0;
+        app_copy_str(probe.error, sizeof(probe.error), err);
+        app_log(app, AKENO_LOG_INFO, "capture.resolve.done", "%s %s", cat[idx].library, rc == 0 ? "loaded" : "did not load");
+        app_log_sync(app);
+    }
+
+    pthread_mutex_lock(&app->lock);
+    app->capture_probes[idx] = probe; /* file_present is refreshed in capture_build_report */
+    app->capture_resolved_any = 1;
+    pthread_mutex_unlock(&app->lock);
+
+    capture_build_report(app, r);
 }
 #endif
 
@@ -757,6 +896,13 @@ void app_route(akeno_app *app, const ui_request *req, const char *body, size_t b
     } else if (is(req, "POST", "/api/diagnostics/audio/tone")) {
         doc = akeno_json_parse(body ? body : "", body_len, NULL, 0);
         route_audio_tone(app, akeno_json_root(doc), r);
+#endif
+#ifdef AKENO_CAPTURE_DIAG
+    } else if (is(req, "GET", "/api/diagnostics/capture")) {
+        route_capture_diag(app, r);
+    } else if (is(req, "POST", "/api/diagnostics/capture/resolve")) {
+        doc = akeno_json_parse(body ? body : "", body_len, NULL, 0);
+        route_capture_resolve(app, akeno_json_root(doc), r);
 #endif
     } else if (is(req, "POST", "/api/exit")) {
         app_log(app, AKENO_LOG_INFO, "app.exit_requested", "Exit requested from the console page.");

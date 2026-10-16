@@ -205,3 +205,74 @@ int akeno_platform_audio_tone(unsigned frequency_hz, unsigned duration_ms, doubl
     return 0;
 }
 #endif
+
+#ifdef AKENO_CAPTURE_DIAG
+/*
+ * Host simulation of the PS5 capture diagnostic probes. Results are SIMULATED and driven by
+ * environment variables so tests are deterministic; nothing here reflects a real console.
+ *   AKENO_SIM_CAPTURE_FILES    comma-separated library names to report as present
+ *   AKENO_SIM_CAPTURE_RESOLVE  "1" to make dlopen "succeed" and listed symbols resolve
+ *   AKENO_SIM_CAPTURE_DNS      a redacted summary string to return (optional)
+ */
+static int sim_capture_listed(const char *env, const char *library) {
+    const char *list = getenv(env);
+    if (!list || !list[0] || !library) return 0;
+    const char *p = strstr(list, library);
+    if (!p) return 0;
+    char before = p == list ? ',' : p[-1];
+    char after = p[strlen(library)];
+    return (before == ',' || before == ' ') && (after == '\0' || after == ',' || after == ' ');
+}
+
+const char *akeno_platform_capture_library_dir(void) {
+    const char *dir = getenv("AKENO_SIM_CAPTURE_LIBDIR");
+    return dir && dir[0] ? dir : "/system/common/lib (simulated host path)";
+}
+
+int akeno_platform_capture_file_exists(const char *library) { return sim_capture_listed("AKENO_SIM_CAPTURE_FILES", library); }
+
+int akeno_platform_capture_process_info_available(void) { return getenv("AKENO_SIM_CAPTURE_PROCINFO") != NULL; }
+
+int akeno_platform_capture_probe_one(const char *library, const char *const *names, int *found, size_t count,
+                                     char *err, size_t err_len, akeno_capture_log_fn log_fn, void *log_ctx) {
+    for (size_t i = 0; i < count; i++) found[i] = 0;
+    err[0] = '\0';
+    char line[160];
+
+    const char *resolve = getenv("AKENO_SIM_CAPTURE_RESOLVE");
+    int loads = resolve && resolve[0] == '1' && sim_capture_listed("AKENO_SIM_CAPTURE_FILES", library);
+
+    snprintf(line, sizeof(line), "begin dlopen %s (simulated host build)", library ? library : "");
+    if (log_fn) log_fn(log_ctx, "capture.resolve.dlopen", line);
+    if (!loads) {
+        snprintf(err, err_len, "dlopen failed: %s not available (simulated host build)", library ? library : "");
+        snprintf(line, sizeof(line), "end dlopen %s FAILED", library ? library : "");
+        if (log_fn) log_fn(log_ctx, "capture.resolve.dlopen", line);
+        return -1;
+    }
+    snprintf(line, sizeof(line), "end dlopen %s ok", library ? library : "");
+    if (log_fn) log_fn(log_ctx, "capture.resolve.dlopen", line);
+
+    for (size_t i = 0; i < count; i++) {
+        snprintf(line, sizeof(line), "begin dlsym %s %s", library ? library : "", names[i] ? names[i] : "");
+        if (log_fn) log_fn(log_ctx, "capture.resolve.dlsym", line);
+        found[i] = 1;
+        snprintf(line, sizeof(line), "end dlsym %s %s resolved", library ? library : "", names[i] ? names[i] : "");
+        if (log_fn) log_fn(log_ctx, "capture.resolve.dlsym", line);
+    }
+
+    snprintf(line, sizeof(line), "%s left loaded (module unload not verified safe; no dlclose)", library ? library : "");
+    if (log_fn) log_fn(log_ctx, "capture.resolve.noclose", line);
+    return 0;
+}
+
+int akeno_platform_capture_dns_summary(char *out, size_t out_len) {
+    const char *dns = getenv("AKENO_SIM_CAPTURE_DNS");
+    if (dns && dns[0]) {
+        snprintf(out, out_len, "%s", dns);
+        return 1;
+    }
+    snprintf(out, out_len, "resolver configuration not readable from this context (simulated host build)");
+    return 0;
+}
+#endif

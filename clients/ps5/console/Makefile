@@ -22,12 +22,22 @@ include $(PS5_PAYLOAD_SDK)/toolchain/prospero.mk
 
 THIRD_PARTY ?= $(ROOT)/third_party
 EXPERIMENTAL_AUDIO ?= 0
+CAPTURE_DIAG ?= 0
+PS5_SDK_COMMIT ?= unknown
 ifeq ($(EXPERIMENTAL_AUDIO),1)
 BUILD       := $(ROOT)/build-ps5-audiolab
 NAME        := akeno-network-ps5-audiolab
 LAB_SRC     := audio_lab.c
 LAB_FLAGS   := -DAKENO_EXPERIMENTAL_AUDIO
 BUILD_KIND  := ps5-audiolab
+else ifeq ($(CAPTURE_DIAG),1)
+# Experimental PS5 capture capability diagnostic (docs/PS5_DIRECT_CAPTURE_RESEARCH.md). A separate
+# ELF; the release ELF never contains it. Read-only; passes the same import safety gate.
+BUILD       := $(ROOT)/build-ps5-capturediag
+NAME        := akeno-network-ps5-capture-diagnostic
+LAB_SRC     := capture_diag.c
+LAB_FLAGS   := -DAKENO_CAPTURE_DIAG -DAKENO_PS5_SDK_COMMIT='"$(PS5_SDK_COMMIT)"'
+BUILD_KIND  := ps5-capturediag
 else
 BUILD       := $(ROOT)/build-ps5
 NAME        := akeno-network-ps5

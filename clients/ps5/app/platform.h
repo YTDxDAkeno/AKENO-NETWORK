@@ -78,4 +78,48 @@ int akeno_platform_audio_lookup(const char *library, const char *const *names, i
 int akeno_platform_audio_tone(unsigned frequency_hz, unsigned duration_ms, double amplitude, char *err, size_t err_len);
 #endif
 
+#ifdef AKENO_CAPTURE_DIAG
+/*
+ * Experimental PS5 capture capability diagnostic (docs/PS5_DIRECT_CAPTURE_RESEARCH.md). Built
+ * only into the separate capture-diagnostic executable. Everything here is read-only: it never
+ * calls a capture, encoder or broadcast function and never changes a console setting.
+ */
+
+/* Directory the candidate capture libraries are looked for in, or NULL if unknown. */
+const char *akeno_platform_capture_library_dir(void);
+
+/* 1 if library exists in the capture library dir (stat only), 0 otherwise. */
+int akeno_platform_capture_file_exists(const char *library);
+
+/* 1 if the firmware exposes read-only per-process application info (sceKernelGetAppInfo). */
+int akeno_platform_capture_process_info_available(void);
+
+/*
+ * Sink called by the RESOLVE tier immediately BEFORE and AFTER every individual dlopen and dlsym
+ * operation, so a persistent, flushed record of the last attempted operation exists even if the
+ * next one crashes or hangs the process. The implementation must flush the line to stable storage
+ * before it returns. detail is already redacted (never a path, address or credential).
+ */
+typedef void (*akeno_capture_log_fn)(void *ctx, const char *event, const char *detail);
+
+/*
+ * RESOLVE tier for ONE library (runs only after an explicit, per-library user action). Loads the
+ * library at run time (dlopen) and records in found[i] whether it exports names[i] (dlsym). It
+ * only looks the names up; nothing is ever called. It NEVER unloads the library: a freshly loaded
+ * system module is left in place because stopping/unloading an unverified system module is not
+ * known to be safe and is the most likely cause of the resolve crash. Every dlopen/dlsym step is
+ * reported through log_fn before and after it runs. Returns 0 when the library loaded, -1
+ * otherwise (err says why).
+ */
+int akeno_platform_capture_probe_one(const char *library, const char *const *names, int *found, size_t count,
+                                     char *err, size_t err_len, akeno_capture_log_fn log_fn, void *log_ctx);
+
+/*
+ * Read-only, redacted summary of the local DNS resolver configuration (e.g. "2 nameserver
+ * entries; custom resolver configured"). Never returns the actual addresses. Returns 1 when a
+ * summary was produced, 0 when nothing could be read safely.
+ */
+int akeno_platform_capture_dns_summary(char *out, size_t out_len);
+#endif
+
 #endif

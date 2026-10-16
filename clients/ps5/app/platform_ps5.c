@@ -393,3 +393,86 @@ int akeno_platform_audio_tone(unsigned frequency_hz, unsigned duration_ms, doubl
     return result;
 }
 #endif
+
+#ifdef AKENO_CAPTURE_DIAG
+/*
+ * PS5 capture capability diagnostic (docs/PS5_DIRECT_CAPTURE_RESEARCH.md). Read-only. The only
+ * run-time loading here is dlopen() in the RESOLVE tier, confined to this platform file and run
+ * only after an explicit user action; nothing resolved is ever called. No sce* function beyond
+ * the ones the release ELF already imports is referenced, so the import gate stays satisfied.
+ */
+#include <sys/stat.h>
+
+const char *akeno_platform_capture_library_dir(void) { return "/system/common/lib"; }
+
+int akeno_platform_capture_file_exists(const char *library) {
+    const char *dir = akeno_platform_capture_library_dir();
+    if (!dir || !library) return 0;
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s", dir, library);
+    struct stat st;
+    return stat(path, &st) == 0 && S_ISREG(st.st_mode) ? 1 : 0;
+}
+
+int akeno_platform_capture_process_info_available(void) { return sceKernelGetAppInfo ? 1 : 0; }
+
+static void capture_log(akeno_capture_log_fn log_fn, void *ctx, const char *event, const char *detail) {
+    if (log_fn) log_fn(ctx, event, detail ? detail : "");
+}
+
+int akeno_platform_capture_probe_one(const char *library, const char *const *names, int *found, size_t count,
+                                     char *err, size_t err_len, akeno_capture_log_fn log_fn, void *log_ctx) {
+    for (size_t i = 0; i < count; i++) found[i] = 0;
+    err[0] = '\0';
+    char line[160];
+
+    /*
+     * dlopen on this SDK runs the SDK loader (crt/rtld_sprx.c): for a module not already mapped in
+     * this process it calls sceKernelLoadStartModule, which loads AND STARTS the module. Starting
+     * a capture/record/broadcast system module can have side effects. We log before and after so
+     * that, if the console app dies here, akeno.log names the exact library whose load did it.
+     */
+    snprintf(line, sizeof(line), "begin dlopen %s (loads+starts the module if not already mapped)", library ? library : "");
+    capture_log(log_fn, log_ctx, "capture.resolve.dlopen", line);
+    void *lib = dlopen(library, RTLD_LAZY);
+    if (!lib) {
+        const char *why = dlerror();
+        snprintf(err, err_len, "dlopen failed: %s", why ? why : "unknown error");
+        snprintf(line, sizeof(line), "end dlopen %s FAILED", library ? library : "");
+        capture_log(log_fn, log_ctx, "capture.resolve.dlopen", line);
+        return -1;
+    }
+    snprintf(line, sizeof(line), "end dlopen %s ok", library ? library : "");
+    capture_log(log_fn, log_ctx, "capture.resolve.dlopen", line);
+
+    for (size_t i = 0; i < count; i++) {
+        snprintf(line, sizeof(line), "begin dlsym %s %s", library ? library : "", names[i] ? names[i] : "");
+        capture_log(log_fn, log_ctx, "capture.resolve.dlsym", line);
+        found[i] = dlsym(lib, names[i]) != NULL;
+        snprintf(line, sizeof(line), "end dlsym %s %s %s", library ? library : "", names[i] ? names[i] : "",
+                 found[i] ? "resolved" : "absent");
+        capture_log(log_fn, log_ctx, "capture.resolve.dlsym", line);
+    }
+
+    /*
+     * Intentionally NO dlclose: on this SDK dlclose of a freshly loaded module calls
+     * sceKernelStopUnloadModule, and stopping/unloading an unverified system module is not known
+     * to be safe. For a short-lived, read-only diagnostic, leaving the module mapped is the safe
+     * choice; the process exits normally afterwards and the OS reclaims everything.
+     */
+    snprintf(line, sizeof(line), "%s left loaded (module unload not verified safe; no dlclose)", library ? library : "");
+    capture_log(log_fn, log_ctx, "capture.resolve.noclose", line);
+    return 0;
+}
+
+int akeno_platform_capture_dns_summary(char *out, size_t out_len) {
+    /*
+     * Not read on the console. Reading a resolver file would add libc imports (fopen/fgets) that
+     * the release ELF does not have, and this diagnostic must keep the release's exact import set
+     * (the import safety gate). The resolver question (the track-B DNS conflict) is handled in
+     * docs/PS5_DIRECT_CAPTURE_RESEARCH.md rather than by touching the console's configuration.
+     */
+    snprintf(out, out_len, "not read on the console (read-only build keeps the release import set unchanged)");
+    return 0;
+}
+#endif

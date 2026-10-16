@@ -9,7 +9,7 @@
 // Hostile-server cases (garbage, oversized and stalled responses) use small local fake servers.
 //
 // Usage: node clients/ps5/tests/integration/run.mjs <path-to-akeno-cli> [--app <path-to-akeno-app>]
-//        [--audiolab <path-to-akeno-app-audiolab>]
+//        [--audiolab <path-to-akeno-app-audiolab>] [--capturediag <path-to-akeno-app-capture-diagnostic>]
 // With --app, the console app (host build) is also tested against the same server; with
 // --audiolab, the experimental audio lab build (PS5 voice research, simulated audio).
 // Requires: `pnpm build`, PostgreSQL (TEST_DATABASE_ADMIN_URL), openssl on PATH.
@@ -34,6 +34,8 @@ const appIndex = process.argv.indexOf('--app');
 const appBinary = appIndex > 0 ? resolve(process.argv[appIndex + 1]) : null;
 const audioLabIndex = process.argv.indexOf('--audiolab');
 const audioLabBinary = audioLabIndex > 0 ? resolve(process.argv[audioLabIndex + 1]) : null;
+const captureDiagIndex = process.argv.indexOf('--capturediag');
+const captureDiagBinary = captureDiagIndex > 0 ? resolve(process.argv[captureDiagIndex + 1]) : null;
 const adminUrl = process.env.TEST_DATABASE_ADMIN_URL ?? 'postgres://akeno:akeno_dev_password@127.0.0.1:5432/postgres';
 const databaseName = 'akeno_client_it';
 const ADMIN_PASSWORD = 'client-it-admin-password-1';
@@ -1680,6 +1682,151 @@ if (audioLabBinary) {
       await browser.close();
       lab.child.kill('SIGTERM');
       await lab.exited;
+    }
+  });
+}
+
+if (captureDiagBinary) {
+  if (!existsSync(captureDiagBinary)) throw new Error(`Missing capture diagnostic binary ${captureDiagBinary}`);
+  log(`AKENO console app capture diagnostic (host build) tests (${captureDiagBinary})`);
+  // SIMULATED probe inputs: only libSceVideoOut.sprx is "present" and resolvable (host build).
+  const capEnv = {
+    AKENO_SIM_CAPTURE_FILES: 'libSceVideoOut.sprx',
+    AKENO_SIM_CAPTURE_RESOLVE: '1',
+    AKENO_SIM_CAPTURE_PROCINFO: '1',
+    AKENO_SIM_CAPTURE_DNS: '2 nameserver entries configured (addresses redacted)',
+  };
+
+  await step('capture diagnostic: the release build has no capture routes and no capture section', async () => {
+    if (!appBinary) {
+      log('       (skipped: --app not given)');
+      return;
+    }
+    const release = await startApp(join(work, 'app-release-capture'), ['--port', '0'], capEnv);
+    try {
+      assert.equal((await appApi(release, 'GET', '/api/diagnostics/capture')).status, 404);
+      assert.equal((await appApi(release, 'POST', '/api/diagnostics/capture/resolve')).status, 404);
+      assert.equal((await appApi(release, 'GET', '/api/diagnostics')).body.captureDiagnostic, undefined);
+    } finally {
+      release.child.kill('SIGTERM');
+      await release.exited;
+    }
+  });
+
+  await step('capture diagnostic: static report is read-only, honest and needs the session token', async () => {
+    const diag = await startApp(join(work, 'app-capturediag'), ['--port', '0'], capEnv, captureDiagBinary);
+    assert.equal(diag.exit, null, diag.stderr);
+    assert.equal((await appApi(diag, 'GET', '/api/diagnostics')).body.captureDiagnostic, true);
+    assert.equal((await appApi(diag, 'GET', '/api/diagnostics/capture', undefined, { 'X-Akeno-Token': 'wrong' })).status, 403);
+
+    const r = await appApi(diag, 'GET', '/api/diagnostics/capture');
+    assert.equal(r.status, 200);
+    const d = r.body.data;
+    assert.equal(d.experimental, true);
+    assert.equal(d.kind, 'ps5-capture-diagnostic');
+    assert.equal(d.system.resolveRan, false);
+    // Honest verdict: nothing is reported as a working capture path.
+    for (const key of Object.keys(d.capabilities)) assert.equal(d.capabilities[key].supported, false, key);
+    // Static tier does not load libraries: every symbol's "found" is null.
+    for (const lib of d.libraries) {
+      for (const sym of lib.symbols) assert.equal(sym.found, null);
+      assert.ok(lib.givesLiveGameFrames === false);
+    }
+    assert.ok(d.notes.join(' ').includes('no capture, encoder or broadcast function is called'));
+    diag.child.kill('SIGTERM');
+    await diag.exited;
+  });
+
+  await step('capture diagnostic: resolve needs an explicit per-library confirmation', async () => {
+    const diag = await startApp(join(work, 'app-capturediag-confirm'), ['--port', '0'], capEnv, captureDiagBinary);
+    try {
+      assert.equal((await appApi(diag, 'POST', '/api/diagnostics/capture/resolve')).status, 400);
+      assert.equal((await appApi(diag, 'POST', '/api/diagnostics/capture/resolve', { confirm: 'resolve' })).status, 400);
+      assert.equal(
+        (await appApi(diag, 'POST', '/api/diagnostics/capture/resolve', { library: 'libNope.sprx', confirm: 'resolve' })).status,
+        404,
+      );
+      // Nothing was probed, so the report is still static-only.
+      assert.equal((await appApi(diag, 'GET', '/api/diagnostics/capture')).body.data.system.resolveRan, false);
+    } finally {
+      diag.child.kill('SIGTERM');
+      await diag.exited;
+    }
+  });
+
+  await step('capture diagnostic: resolve probes one library, records symbols, never unloads, calls nothing', async () => {
+    const dataDir = join(work, 'app-capturediag-resolve');
+    const diag = await startApp(dataDir, ['--port', '0'], capEnv, captureDiagBinary);
+    try {
+      // Probe only libSceVideoOut.sprx — one library, by name, with confirmation.
+      const d = (await appApi(diag, 'POST', '/api/diagnostics/capture/resolve', { library: 'libSceVideoOut.sprx', confirm: 'resolve' })).body.data;
+      assert.equal(d.system.resolveRan, true);
+      assert.equal(d.system.processInfoAvailable, true);
+      const videoOut = d.libraries.find((lib) => lib.library === 'libSceVideoOut.sprx');
+      assert.ok(videoOut, 'VideoOut candidate present');
+      assert.equal(videoOut.filePresent, true);
+      assert.equal(videoOut.loadOk, true);
+      assert.equal(videoOut.level, 'symbol-present'); // dlsym confirms NAME presence, not signatures
+      assert.ok(videoOut.symbols.every((sym) => sym.found === true));
+      // Libraries not yet probed stay unprobed (one at a time): loadOk null, symbols null.
+      const notYet = d.libraries.find((lib) => lib.library === 'libSceRemoteplay.sprx');
+      assert.equal(notYet.loadOk, null);
+      assert.ok(notYet.symbols.every((sym) => sym.found === null));
+      // Now probe an absent (but not quarantined) library on its own: it does not load, reports an error.
+      const d2 = (await appApi(diag, 'POST', '/api/diagnostics/capture/resolve', { library: 'libSceScreenShot.sprx', confirm: 'resolve' })).body.data;
+      const absent = d2.libraries.find((lib) => lib.library === 'libSceScreenShot.sprx');
+      assert.equal(absent.filePresent, false);
+      assert.equal(absent.loadOk, false);
+      assert.match(absent.error, /not available/);
+      assert.ok(absent.symbols.every((sym) => sym.found === null)); // not loaded → not looked up
+      // Earlier probe is still recorded (results accumulate).
+      assert.equal(d2.libraries.find((lib) => lib.library === 'libSceVideoOut.sprx').loadOk, true);
+      // Even a resolved symbol is never promoted to a working-capture claim.
+      assert.equal(d2.capabilities.liveFramebufferCapture.supported, false);
+      assert.equal(d2.network.dnsReadable, true);
+      assert.ok(!d2.network.dnsSummary.includes('.'), 'DNS summary carries no address');
+
+      // The persistent log records the handler entry and every dlopen/dlsym step, so a crash
+      // mid-probe would still name the last operation. (No dlclose: the module is left loaded.)
+      const logText = readFileSync(join(dataDir, 'akeno.log'), 'utf8');
+      assert.match(logText, /capture\.resolve\.request libSceVideoOut\.sprx/);
+      assert.match(logText, /capture\.resolve\.dlopen begin dlopen libSceVideoOut\.sprx/);
+      assert.match(logText, /capture\.resolve\.dlopen end dlopen libSceVideoOut\.sprx ok/);
+      assert.match(logText, /capture\.resolve\.dlsym begin dlsym libSceVideoOut\.sprx sceVideoOutOpen/);
+      assert.match(logText, /capture\.resolve\.dlsym end dlsym libSceVideoOut\.sprx sceVideoOutOpen resolved/);
+      assert.match(logText, /capture\.resolve\.noclose libSceVideoOut\.sprx left loaded/);
+      assert.match(logText, /capture\.resolve\.done libSceVideoOut\.sprx loaded/);
+      assert.ok(!/capture\.resolve\.dlclose/.test(logText), 'the resolve tier never calls dlclose');
+    } finally {
+      diag.child.kill('SIGTERM');
+      await diag.exited;
+    }
+  });
+
+  await step('capture diagnostic: quarantined libraries are refused and never dlopen’d', async () => {
+    const dataDir = join(work, 'app-capturediag-quarantine');
+    const diag = await startApp(dataDir, ['--port', '0'], capEnv, captureDiagBinary);
+    try {
+      // libSceVideoRecording hung on real hardware (run 2) and is marked load_unsafe.
+      const d = (await appApi(diag, 'POST', '/api/diagnostics/capture/resolve', { library: 'libSceVideoRecording.sprx', confirm: 'resolve' })).body.data;
+      const rec = d.libraries.find((lib) => lib.library === 'libSceVideoRecording.sprx');
+      assert.equal(rec.loadUnsafe, true);
+      assert.ok(rec.unsafeReason && rec.unsafeReason.length > 0);
+      assert.equal(rec.blocked, true);
+      assert.equal(rec.loadOk, false);
+      assert.ok(rec.symbols.every((sym) => sym.found === null)); // never looked up
+      // libSceGameLiveStreaming is also quarantined (same load-and-start risk class).
+      assert.equal(d.libraries.find((lib) => lib.library === 'libSceGameLiveStreaming.sprx').loadUnsafe, true);
+      // Preserved hardware findings are carried in the report.
+      assert.match(d.libraries.find((lib) => lib.library === 'libSceVideoOut.sprx').hardwareNote, /hardware run 2/);
+
+      const logText = readFileSync(join(dataDir, 'akeno.log'), 'utf8');
+      assert.match(logText, /capture\.resolve\.blocked libSceVideoRecording\.sprx/);
+      // The quarantined library is NEVER dlopen'd: no dlopen begin line for it.
+      assert.ok(!/dlopen begin dlopen libSceVideoRecording\.sprx/.test(logText), 'quarantined lib is never dlopen’d');
+    } finally {
+      diag.child.kill('SIGTERM');
+      await diag.exited;
     }
   });
 }
