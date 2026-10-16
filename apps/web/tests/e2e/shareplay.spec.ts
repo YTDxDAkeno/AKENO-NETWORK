@@ -319,8 +319,9 @@ test('SharePlay: stream, watch with game audio, Player 2 input, stop — real Li
     await guest.page.getByTestId('shareplay-watch').click();
     await expect(guest.page.getByTestId('shareplay-viewer')).toHaveAttribute('data-stream-status', 'live', WAIT);
     await expect.poll(async () => (await sampleVideo(guest.page)).width, WAIT).toBeGreaterThan(0);
-    const sample = await sampleVideo(guest.page);
-    expect(sample.framesSeen).toBeGreaterThan(15); // ~2.4 s of video
+    // Congestion control starts low and ramps up: wait for a steady stream (> 15 frames in 2.4 s).
+    let sample = await sampleVideo(guest.page);
+    await expect.poll(async () => (sample = await sampleVideo(guest.page)).framesSeen, WAIT).toBeGreaterThan(15);
     expect(sample.width).toBeGreaterThanOrEqual(320);
     // The test pattern's colours come through the encoder and decoder, and they change.
     expect(new Set(sample.dominant.filter((colour) => colour !== 'dark')).size).toBeGreaterThanOrEqual(2);
@@ -393,9 +394,11 @@ test('SharePlay: stream, watch with game audio, Player 2 input, stop — real Li
   await test.step('the stream continues while the guest browses other pages', async () => {
     await guest.page.getByRole('link', { name: 'Friends' }).first().click();
     await expect(guest.page.getByTestId('shareplay-bar').first()).toContainText('Watching SharePlay');
-    const before = (await inbound(guest.page, 'video')).bytes;
+    // Game audio keeps playing; the video subscription pauses while no player is visible
+    // (LiveKit adaptive stream saves the bandwidth) and resumes on the party page.
+    const before = (await inbound(guest.page, 'audio')).bytes;
     await guest.page.waitForTimeout(1500);
-    expect((await inbound(guest.page, 'video')).bytes).toBeGreaterThan(before);
+    expect((await inbound(guest.page, 'audio')).bytes).toBeGreaterThan(before);
     await guest.page.getByRole('link', { name: 'Parties' }).first().click();
     await expect.poll(async () => (await sampleVideo(guest.page)).framesSeen, WAIT).toBeGreaterThan(5);
   });
