@@ -67,9 +67,11 @@ with any verified, safe mechanism, so those adapters report "unsupported".
 | `POST /parties/:id/shareplay/controller/revoke` | host or Player 2 | immediate |
 | `GET /shareplay/input?party=&role=sender&epoch=` (WebSocket) | the granted guest | binary packets in |
 | `GET /shareplay/input?party=&role=monitor` (WebSocket) | the host | JSON relays out |
+| `POST /parties/:id/shareplay/receiver` | paired console app of a member (device token) | opt in to `shareplay.input` for 90 s (the SharePlay tab renews every 30 s) |
 
 Realtime events (all party members): `shareplay.changed {partyId, ended}`. To the host's paired
-console app connections only: `shareplay.input` (see protocol).
+console apps that opted in as receivers only: `shareplay.input` (see protocol) — older console
+apps never opt in, so they are never flooded with input events.
 
 ### Permissions (least privilege)
 

@@ -868,6 +868,9 @@ if (appBinary) {
     const grant = (await alice.request('POST', `/parties/${partyId}/shareplay/controller/approve`, { userId: bob.user.id })).body;
     assert.ok(grant.epoch > 0, JSON.stringify(grant));
 
+    // The console app opts in (its SharePlay tab does this while open); older apps never do.
+    const registered = await appApi(app, 'POST', `/api/v1/parties/${partyId}/shareplay/receiver`, {});
+    assert.equal(registered.body.ok, true, registered.text);
     const socket = new WebSocket(`ws://127.0.0.1:${backendPort}/api/v1/shareplay/input?party=${partyId}&role=sender&epoch=${grant.epoch}`, {
       headers: { Origin: origin, Cookie: bob.cookie },
     });

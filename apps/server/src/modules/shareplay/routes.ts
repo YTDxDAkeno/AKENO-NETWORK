@@ -9,7 +9,7 @@ import {
   startSharePlaySchema,
 } from '@akeno/shared';
 import type { AppContext } from '../../app/context.js';
-import { authOf, requireAuth, requireSession } from '../../middleware/auth.js';
+import { authOf, requireAuth, requireDevice, requireSession } from '../../middleware/auth.js';
 import { isAllowedOrigin } from '../../middleware/origin.js';
 import { AppError, Errors } from '../../utils/errors.js';
 import { parseInput } from '../../utils/validation.js';
@@ -26,6 +26,16 @@ export function sharePlayRoutes(ctx: AppContext): FastifyPluginAsync {
       read.get('/parties/:id/shareplay', async (request) => {
         const { id } = parseInput(idParamsSchema, request.params);
         return ctx.shareplay.partyView(authOf(request).userId, id);
+      });
+    });
+
+    // A paired console app opts in to receive Player 2 input for its diagnostic view.
+    await app.register(async (device) => {
+      device.addHook('preHandler', requireDevice());
+      device.post('/parties/:id/shareplay/receiver', { config: SHAREPLAY_ACTION_LIMIT }, async (request) => {
+        const { id } = parseInput(idParamsSchema, request.params);
+        const auth = authOf(request);
+        return ctx.shareplay.registerReceiver(auth.userId, auth.sessionId, id);
       });
     });
 

@@ -118,6 +118,8 @@ export class SharePlayService {
   private readonly sessions = new Map<string, SharePlaySession>();
   /** Browser session that requested each user's latest SharePlay token. */
   private readonly tokenSessions = new Map<string, string>();
+  /** Console apps that asked for Player 2 input (device ID → expiry); older apps never ask. */
+  private readonly receivers = new Map<string, number>();
   private readonly client: RoomServiceClient | null;
   /** Grant epochs start at a random point so a restart does not reuse recent numbers. */
   private nextEpoch = randomInt(1, 0x7fffffff);
@@ -423,6 +425,29 @@ export class SharePlayService {
       sessionId: session.id,
       expiresAt: new Date(Date.now() + ttl * 1000).toISOString(),
     };
+  }
+
+  // ---- Console diagnostic receivers -----------------------------------------------------------
+
+  static readonly RECEIVER_TTL_MS = 90_000;
+
+  /**
+   * A paired console app (the device of a member) asks to receive Player 2 input for display.
+   * Only registered devices get "shareplay.input" events, so console apps that do not know the
+   * event never receive it. Renewed by the app every 30 s while its SharePlay view is open.
+   */
+  async registerReceiver(userId: string, deviceId: string, partyId: string): Promise<{ expiresAt: string }> {
+    this.requireEnabled();
+    await this.requireMember(userId, partyId);
+    const expiresAt = Date.now() + SharePlayService.RECEIVER_TTL_MS;
+    this.receivers.set(deviceId, expiresAt);
+    for (const [id, until] of this.receivers) if (until <= Date.now()) this.receivers.delete(id);
+    return { expiresAt: new Date(expiresAt).toISOString() };
+  }
+
+  isReceiver(deviceId: string): boolean {
+    const until = this.receivers.get(deviceId);
+    return until !== undefined && until > Date.now();
   }
 
   // ---- Player 2 -------------------------------------------------------------------------------

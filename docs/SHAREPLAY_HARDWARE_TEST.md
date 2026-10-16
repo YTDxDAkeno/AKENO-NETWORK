@@ -79,7 +79,8 @@ authorization and revocation. **It does not control the game** (see stage D).
    - [ ] Host **Revoke Player 2** → guest's sending stops, host neutral, guest must ask again.
    - [ ] Guest leaves the party / host stops the stream → Player 2 ends.
 5. PS5 diagnostic receiver (needs stage C's ELF approval below): with the host's console app
-   running and paired, open its page → **SharePlay** tab:
+   running and paired, open its page → **SharePlay** tab (input is only sent to the console while
+   this tab is open — it registers the console as a receiver):
    - [ ] "Player 2 diagnostic receiver" shows the guest's buttons and sticks live.
    - [ ] Stop moving: after 0.5 s it shows "everything released (neutral)".
    - [ ] Revoke on the website → the tab shows "The host revoked Player 2."

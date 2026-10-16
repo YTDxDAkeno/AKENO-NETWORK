@@ -17,6 +17,7 @@
   var session = null;
   var sessionAt = 0;
   var receiver = null;
+  var registeredAt = 0;
 
   function text(tag, value, cls) {
     return ctx.h(tag, { text: value, className: cls || '' });
@@ -109,6 +110,13 @@
       paint();
     });
     var party = ctx.S.party;
+    // Opt in to Player 2 input while this view is open (the server forgets it after 90 s).
+    if (party && Date.now() - registeredAt > 30000) {
+      registeredAt = Date.now();
+      ctx.server('POST', '/parties/' + party.id + '/shareplay/receiver', {}, true).then(function (data) {
+        if (!data) registeredAt = Date.now() - 25000; // retry in about 5 s
+      });
+    }
     if (party && Date.now() - sessionAt > 3000) {
       sessionAt = Date.now();
       ctx.server('GET', '/parties/' + party.id + '/shareplay', undefined, true).then(function (data) {
@@ -123,6 +131,7 @@
       ctx = context;
       root = ctx.h('div', { className: 'stack', id: 'shareplay-view' });
       sessionAt = 0;
+      registeredAt = 0;
       paint();
       if (!timer) timer = setInterval(poll, 250);
       poll();

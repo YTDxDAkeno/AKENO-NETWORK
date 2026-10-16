@@ -236,7 +236,7 @@ export class InputRelay {
       if (always || monitor.socket.bufferedAmount < MAX_BUFFERED_BYTES) monitor.socket.send(text);
     }
     for (const connection of this.ctx.hub.connectionsOf(session.hostId)) {
-      if (connection.credential !== 'device') continue;
+      if (connection.credential !== 'device' || !this.service.isReceiver(connection.sessionId)) continue;
       if (always || connection.socket.bufferedAmount < MAX_BUFFERED_BYTES) connection.send({ type: 'shareplay.input', data: relay });
     }
   }

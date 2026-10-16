@@ -524,8 +524,16 @@ describe('controller link', () => {
     const grant = await grantPlayer2(party);
     const deviceToken = await pairDevice(host);
     const console = await connectDevice(deviceToken);
+    // A second console of the host that never opts in (for example an older console app).
+    const oldConsole = await connectDevice(await pairDevice(host));
     const guestDeviceToken = await pairDevice(guest);
     const guestConsole = await connectDevice(guestDeviceToken);
+    const register = (token: string) =>
+      server.app.inject({ method: 'POST', url: `/api/v1/parties/${party.id}/shareplay/receiver`, headers: { authorization: `Bearer ${token}` }, payload: {} });
+    expect((await register(deviceToken)).statusCode).toBe(200);
+    expect((await register(guestDeviceToken)).statusCode).toBe(200);
+    // Browser sessions cannot register as console receivers.
+    expect((await host.post(`/parties/${party.id}/shareplay/receiver`)).status).toBe(400);
     const hostBrowser = await connectRealtime(`${wsBase}/ws`, host);
     const monitor = await openInput(host, { party: party.id, role: 'monitor' });
     const sender = await openInput(guest, { party: party.id, role: 'sender', epoch: grant.epoch });
@@ -583,6 +591,7 @@ describe('controller link', () => {
     // Only the host's console receives Player 2 input: not the guest's console, not browsers' realtime.
     await sleep(100);
     expect(guestConsole.events.some((event) => event.type === 'shareplay.input')).toBe(false);
+    expect(oldConsole.events.some((event) => event.type === 'shareplay.input')).toBe(false);
     expect(hostBrowser.events.some((event) => event.type === 'shareplay.input')).toBe(false);
 
     // Revocation: everything released at once, the guest's link closes and cannot reopen.
@@ -594,7 +603,7 @@ describe('controller link', () => {
     await console.waitFor('shareplay.input', (event) => event.data.kind === 'release');
     await expectRejected(openInput(guest, { party: party.id, role: 'sender', epoch: grant.epoch }), 403);
 
-    for (const socket of [console, guestConsole, hostBrowser]) await socket.close();
+    for (const socket of [console, oldConsole, guestConsole, hostBrowser]) await socket.close();
     monitor.close();
     await host.post(`/parties/${party.id}/close`);
   });
