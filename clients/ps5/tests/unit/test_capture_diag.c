@@ -35,7 +35,7 @@ static void test_levels(void) {
     p.resolved = 1;
     p.load_ok = 1;
     p.symbol_found[0] = 1;
-    CHECK(akeno_capture_level(&cat[0], &p) == AKENO_CAPLV_SIGNATURE_VERIFIED);
+    CHECK(akeno_capture_level(&cat[0], &p) == AKENO_CAPLV_SYMBOL_PRESENT);
     /* Loaded but no symbol resolved falls back to the file-present level. */
     p.symbol_found[0] = 0;
     CHECK(akeno_capture_level(&cat[0], &p) == AKENO_CAPLV_RUNTIME_DETECTED);
@@ -108,7 +108,7 @@ static void test_report_static(void) {
     akeno_buf_free(&b);
 }
 
-/* With probes, a resolved SDK symbol reads back as signature-verified; errors are reported. */
+/* With probes, a resolved SDK symbol reads back as symbol-present; errors are reported. */
 static void test_report_resolved(void) {
     akeno_buf b;
     akeno_buf_init(&b, 16384);
@@ -119,7 +119,7 @@ static void test_report_resolved(void) {
         CHECK(akeno_json_get_bool(akeno_json_get(root, "system"), "resolveRan", 0) == 1);
         const akeno_json *libs = akeno_json_get(root, "libraries");
         const akeno_json *first = libs->child;
-        CHECK_STR(akeno_json_get_string(first, "level", ""), "signature-verified");
+        CHECK_STR(akeno_json_get_string(first, "level", ""), "symbol-present");
         CHECK(akeno_json_get_bool(first, "filePresent", 0) == 1);
         const akeno_json *second = first->next;
         CHECK_STR(akeno_json_get_string(second, "level", ""), "source-verified");

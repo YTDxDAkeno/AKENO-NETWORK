@@ -13,32 +13,40 @@ static const akeno_capture_candidate k_catalogue[] = {
     { "libSceVideoOut.sprx",
       { "sceVideoOutOpen", "sceVideoOutSysReadCrc64" }, 2, AKENO_CAPROLE_OWN_OUTPUT, 1,
       "pinned ps5-payload-sdk (sce_stubs/libSceVideoOut.c)",
-      "Drives the calling process's own display output; ReadCrc returns a frame checksum, not pixels. No interface to read another game's image." },
+      "Drives the calling process's own display output; ReadCrc returns a frame checksum, not pixels. No interface to read another game's image.",
+      0, NULL, "12.20 hardware run 2 (build 12a06a06610c): loaded, 2/2 symbol names present." },
 
     { "libSceSystemService.sprx",
       { "sceSystemServiceIsGameLiveStreamingOnAir" }, 1, AKENO_CAPROLE_STATUS, 1,
       "pinned ps5-payload-sdk (sce_stubs/libSceSystemService.c)",
-      "GameLiveStreaming/SharePlay status, pre-notify and CPU-budget hooks (sceShellCoreUtil*). Orchestration only; hands out no pixels." },
+      "GameLiveStreaming/SharePlay status, pre-notify and CPU-budget hooks (sceShellCoreUtil*). Orchestration only; hands out no pixels.",
+      0, NULL, "12.20 hardware run 2 (build 12a06a06610c): loaded, 1/1 symbol name present." },
 
     { "libSceRemoteplay.sprx",
       { "sceRemoteplayInitialize", "sceRemoteplayGetConnectionStatus", "sceRemoteplayProhibitStreaming" }, 3, AKENO_CAPROLE_STATUS, 1,
       "pinned ps5-payload-sdk (sce_stubs/libSceRemoteplay.c)",
-      "Controls/queries the system Remote Play server; it does not deliver the encoded video to our process." },
+      "Controls/queries the system Remote Play server; it does not deliver the encoded video to our process.",
+      0, NULL, "12.20 hardware run 2 (build 12a06a06610c): loaded, 3/3 symbol names present." },
 
     { "libSceScreenShot.sprx",
       { "sceScreenShotCapture", "sceScreenShotEnable", "sceScreenShotSetParam" }, 3, AKENO_CAPROLE_SCREENSHOT, 0,
-      "OpenOrbis PS4 SDK (PS4 origin; PS5 presence and signatures unverified)",
-      "At most a single still frame on request, and historically the caller's own surface. A still is not live SharePlay." },
+      "OpenOrbis PS4 SDK (PS4 origin; PS5 presence unverified, arguments unverified)",
+      "At most a single still frame on request, and historically the caller's own surface. A still is not live SharePlay.",
+      0, NULL, "12.20 hardware run 2 (build 12a06a06610c): loaded, 3/3 symbol names present (names only — not called)." },
 
     { "libSceVideoRecording.sprx",
       { "sceVideoRecordingOpen", "sceVideoRecordingStart", "sceVideoRecordingStop" }, 3, AKENO_CAPROLE_RECORDING, 0,
-      "OpenOrbis PS4 SDK (PS4 origin; PS5 presence and signatures unverified)",
-      "Writes a clip to storage; reading a saved clip is not a live interactive stream." },
+      "OpenOrbis PS4 SDK (PS4 origin; PS5 presence unverified, arguments unverified)",
+      "Writes a clip to storage; reading a saved clip is not a live interactive stream.",
+      1, "dlopen did not return on 12.20 hardware run 2 (build 12a06a06610c): loading it hung or terminated the app. Quarantined; not loaded until a safe method exists.",
+      "12.20 hardware run 2 (build 12a06a06610c): dlopen BEGAN and never returned (no end log line). Treated as unsafe to load." },
 
     { "libSceGameLiveStreaming.sprx",
       { "sceGameLiveStreamingEnable", "sceGameLiveStreamingStartBroadcast", "sceGameLiveStreamingStopBroadcast" }, 3, AKENO_CAPROLE_BROADCAST, 0,
-      "OpenOrbis PS4 SDK (PS4 origin; PS5 presence and signatures unverified)",
-      "The console's own broadcaster (Twitch/YouTube). It needs a linked account and network session; it is not a raw-frame API, and its destination is chosen by the system, not by a parameter." },
+      "OpenOrbis PS4 SDK (PS4 origin; PS5 presence unverified, arguments unverified)",
+      "The console's own broadcaster (Twitch/YouTube). It needs a linked account and network session; it is not a raw-frame API, and its destination is chosen by the system, not by a parameter.",
+      1, "Same load-and-start risk class as libSceVideoRecording (a broadcast system module). dlopen would LoadStartModule it; no no-load symbol-presence method exists within our import gate. Quarantined pending a safe method; see docs/PS5_DIRECT_CAPTURE_RESEARCH.md.",
+      NULL },
 };
 
 const akeno_capture_candidate *akeno_capture_catalogue(size_t *count) {
@@ -49,7 +57,7 @@ const akeno_capture_candidate *akeno_capture_catalogue(size_t *count) {
 akeno_cap_level akeno_capture_level(const akeno_capture_candidate *candidate, const akeno_capture_probe *probe) {
     if (probe && probe->resolved && probe->load_ok) {
         for (size_t i = 0; i < candidate->symbol_count; i++) {
-            if (probe->symbol_found[i]) return AKENO_CAPLV_SIGNATURE_VERIFIED;
+            if (probe->symbol_found[i]) return AKENO_CAPLV_SYMBOL_PRESENT;
         }
     }
     if (probe && probe->file_present) return AKENO_CAPLV_RUNTIME_DETECTED;
@@ -62,7 +70,7 @@ const char *akeno_cap_level_name(akeno_cap_level level) {
         case AKENO_CAPLV_UNSUPPORTED: return "unsupported";
         case AKENO_CAPLV_SOURCE_VERIFIED: return "source-verified";
         case AKENO_CAPLV_RUNTIME_DETECTED: return "runtime-detected";
-        case AKENO_CAPLV_SIGNATURE_VERIFIED: return "signature-verified";
+        case AKENO_CAPLV_SYMBOL_PRESENT: return "symbol-present";
         case AKENO_CAPLV_HARDWARE_TESTED: return "hardware-tested";
         case AKENO_CAPLV_UNKNOWN:
         default: return "unknown";
@@ -152,8 +160,14 @@ int akeno_capture_report_json(akeno_buf *b, const akeno_capture_sysinfo *sys, co
         rc |= akeno_buf_append_json_string(b, c->source);
         rc |= akeno_buf_append_str(b, ",\"note\":");
         rc |= akeno_buf_append_json_string(b, c->note);
+        rc |= akeno_buf_printf(b, ",\"loadUnsafe\":%s", c->load_unsafe ? "true" : "false");
+        rc |= akeno_buf_append_str(b, ",\"unsafeReason\":");
+        rc |= akeno_buf_append_json_string(b, c->unsafe_reason ? c->unsafe_reason : "");
+        rc |= akeno_buf_append_str(b, ",\"hardwareNote\":");
+        rc |= akeno_buf_append_json_string(b, c->hardware_note ? c->hardware_note : "");
         rc |= akeno_buf_printf(b, ",\"filePresent\":%s", p && p->file_present ? "true" : (p ? "false" : "null"));
         rc |= akeno_buf_printf(b, ",\"resolved\":%s", p && p->resolved ? "true" : "false");
+        rc |= akeno_buf_printf(b, ",\"blocked\":%s", p && p->blocked ? "true" : "false");
         if (p && p->resolved) rc |= akeno_buf_printf(b, ",\"loadOk\":%s", p->load_ok ? "true" : "false");
         else rc |= akeno_buf_append_str(b, ",\"loadOk\":null");
         rc |= akeno_buf_append_str(b, ",\"level\":");
@@ -191,7 +205,8 @@ int akeno_capture_report_json(akeno_buf *b, const akeno_capture_sysinfo *sys, co
                                ",\"notes\":["
                                "\"Read-only diagnostic: no capture, encoder or broadcast function is called.\","
                                "\"No console setting, DNS or account is changed; PSN and Twitch are never contacted.\","
-                               "\"A resolved symbol name is not proof the function is usable; signatures remain unverified until hardware-tested.\""
+                               "\"dlsym confirms a symbol NAME is present (the name resolves to an address). It does NOT verify the function's arguments, signature, or that calling it is safe or does anything useful.\","
+                               "\"Libraries marked loadUnsafe are quarantined and never loaded; only their file presence is reported.\""
                                "]}");
     return rc ? -1 : 0;
 }

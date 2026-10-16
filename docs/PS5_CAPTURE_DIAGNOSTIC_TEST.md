@@ -34,6 +34,24 @@ v2 changes, to make the next run safe and diagnostic:
 - **Visible probing/err state.** The page shows a "probing…" indicator and, if the app stops
   answering, a message telling you to reload the stable app and send `akeno.log`.
 
+## v3: after hardware run 2
+
+Run 2 (per-library) found that `libSceVideoOut`, `libSceSystemService`, `libSceRemoteplay` and
+`libSceScreenShot` all loaded and their symbol **names** resolved, but **`libSceVideoRecording`
+hung on `dlopen`** (the log ended at its `begin dlopen` with no `end`). v3:
+
+- **`libSceVideoRecording.sprx` is quarantined**: the page shows it as "⚠ Not loadable" with no
+  Probe button, the server refuses to load it, and `akeno.log` records `capture.resolve.blocked`.
+  It is never `dlopen`'d or retried.
+- **`libSceGameLiveStreaming.sprx` is also quarantined** (same load-and-start risk class; see the
+  research doc). STATIC presence only.
+- The four confirmed findings from run 2 are preserved in the report (shown as "HW: …").
+- Terminology: a resolved symbol now reads **"symbol-present"**, not "signature-verified" —
+  `dlsym` confirms the name exists, not the function's arguments or that it is callable.
+
+You do not need another hardware run for v3 unless you want to re-probe the four safe libraries;
+its purpose is to lock in the run-2 findings and make the dangerous libraries unloadable.
+
 ## What this ELF is and is not
 
 - It is a **separate experimental build**: `akeno-network-ps5-capture-diagnostic.elf`. It is

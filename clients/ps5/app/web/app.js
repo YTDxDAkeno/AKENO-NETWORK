@@ -999,13 +999,17 @@
           return sym.name + (sym.found === null ? '' : sym.found ? ' ✓' : ' ✗');
         }).join(', ');
         var head = lib.library + ' [' + lib.level + ', ' + lib.role + (lib.inPinnedSdk ? ', in SDK' : '') + ']';
+        var state = lib.blocked ? ' · quarantined (not loaded)'
+          : lib.resolved ? (lib.loadOk ? ' · loaded, symbols: ' + syms : ' · did not load: ' + (lib.error || '')) : ' · not probed yet';
         var detail = (lib.filePresent === null ? 'file: not probed' : lib.filePresent ? 'file present' : 'file absent') +
-          (lib.resolved ? (lib.loadOk ? ' · loaded, symbols: ' + syms : ' · did not load: ' + (lib.error || '')) : ' · not probed yet') +
-          ' · ' + lib.note;
+          state + ' · ' + lib.note + (lib.hardwareNote ? ' · HW: ' + lib.hardwareNote : '');
         var status = h('span', { className: 'muted small' });
         var confirmRow = h('div', { className: 'row', hidden: true });
-        var probeBtn = h('button', { className: 'btn secondary', type: 'button',
-          text: lib.resolved ? 'Probe again' : 'Probe this library', onclick: function () { confirmRow.hidden = false; } });
+        // Quarantined libraries are never loadable from the page: no probe button at all.
+        var probeBtn = lib.loadUnsafe
+          ? h('span', { className: 'error small', text: '⚠ Not loadable — ' + (lib.unsafeReason || 'quarantined as unsafe to load') })
+          : h('button', { className: 'btn secondary', type: 'button',
+              text: lib.resolved ? 'Probe again' : 'Probe this library', onclick: function () { confirmRow.hidden = false; } });
         function runProbe() {
           if (busy) return;
           busy = true;

@@ -171,6 +171,61 @@ v2 removes the risk while keeping the measurement: one library per explicit acti
 loaded for the diagnostic's short life). The next hardware run's `akeno.log` should name the exact
 operation and library; only then is the cause confirmed.
 
+## Hardware run 2 (2026-10-16, build `12a06a06610c-ps5-capturediag`)
+
+Probed one library at a time with v2. Results (dlsym confirms a symbol **name** is present — it
+does **not** verify arguments, signatures, or that the function is callable):
+
+| Library | dlopen | symbol names present |
+| --- | --- | --- |
+| `libSceVideoOut.sprx` | loaded | 2/2 |
+| `libSceSystemService.sprx` | loaded | 1/1 |
+| `libSceRemoteplay.sprx` | loaded | 3/3 |
+| `libSceScreenShot.sprx` | loaded | 3/3 |
+| `libSceVideoRecording.sprx` | **did not return** — `akeno.log` ends at `capture.resolve.dlopen begin dlopen libSceVideoRecording.sprx`, no `end`; the page stayed on "Probing…" and the app became unavailable | — |
+
+So the v2 per-op log did its job: it isolated the hang to **one** library's `dlopen`. This is
+consistent with the v1 hypothesis — `dlopen` runs `sceKernelLoadStartModule`, which *loads and
+starts* the module, and starting `libSceVideoRecording` on 12.20 hangs or terminates the process.
+The four libraries that loaded did so without incident, which also shows the crash was not the
+`dlopen` path in general but this specific module's start.
+
+Actions taken (v3):
+- **`libSceVideoRecording.sprx` is quarantined** (`load_unsafe`): the diagnostic refuses to
+  `dlopen` it, logs `capture.resolve.blocked`, and never auto-retries it. Only its STATIC file
+  presence is reported.
+- **`libSceGameLiveStreaming.sprx` is also quarantined by default.** Research question (can it be
+  probed safely without another hardware test?): **no, not within our constraints.** Resolving its
+  symbols requires `dlopen`, which `LoadStartModule`-starts it; it is a broadcast system module in
+  the same class as `libSceVideoRecording` (likely starts background threads / IPC on start), and
+  there is **no no-load symbol-presence method available to us** — `kernel_dynlib_handle` /
+  `kernel_dynlib_dlsym` would read an already-mapped module without starting it, but they require
+  the SDK kernel R/W helpers that the import safety gate forbids in AKENO code (only
+  `kernel_get_fw_version` is allowed). So the safe default is STATIC presence only; a resolve
+  would need the same risky start and is not done.
+- The four successful findings are preserved in the catalogue (`hardware_note`) so later builds
+  keep them without re-probing.
+
+### Screenshot path — separate, later research task (not started)
+
+`libSceScreenShot.sprx` loaded and its three candidate symbol **names** resolved on 12.20. That is
+presence only. Before anything *calls* a screenshot function, a separate read-only research task
+must establish, from a documented/verified source, the exact function signatures and whether a
+single still of **another running game** (not just the caller's own surface) is even obtainable —
+historically these APIs capture the caller's own surface, and a still is not live SharePlay
+regardless. No screenshot function is called by this diagnostic, and none will be until that
+research produces a verified signature and the user approves a separate prototype.
+
+### Next safest engineering step
+
+The honest state is unchanged: **no verified interface lets a payload capture the live video of
+another running game**, and the capability verdict stays "not supported". The safe next steps are
+all read-only and need no risky loads: (1) keep the four confirmed presence findings; (2) leave
+`libSceVideoRecording` and `libSceGameLiveStreaming` quarantined; (3) if the user wants to pursue
+the broadcast path (track B) at all, that remains a *separately-approved* prototype with its known
+DNS/account/latency constraints, not something this diagnostic advances. Nothing here changes the
+conclusion that direct on-console capture has no verified path today.
+
 Sources: pinned ps5-payload-sdk `sce_stubs/*`, `include/ps5/*` and `crt/rtld_*.c` (read locally);
 [EnixCoda/PS5-Streamer](https://github.com/EnixCoda/PS5-Streamer);
 [ImLunaHey/playstation-rtmp](https://github.com/ImLunaHey/playstation-rtmp);

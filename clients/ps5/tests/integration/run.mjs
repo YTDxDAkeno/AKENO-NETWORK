@@ -1766,15 +1766,15 @@ if (captureDiagBinary) {
       assert.ok(videoOut, 'VideoOut candidate present');
       assert.equal(videoOut.filePresent, true);
       assert.equal(videoOut.loadOk, true);
-      assert.equal(videoOut.level, 'signature-verified');
+      assert.equal(videoOut.level, 'symbol-present'); // dlsym confirms NAME presence, not signatures
       assert.ok(videoOut.symbols.every((sym) => sym.found === true));
       // Libraries not yet probed stay unprobed (one at a time): loadOk null, symbols null.
-      const notYet = d.libraries.find((lib) => lib.library === 'libSceGameLiveStreaming.sprx');
+      const notYet = d.libraries.find((lib) => lib.library === 'libSceRemoteplay.sprx');
       assert.equal(notYet.loadOk, null);
       assert.ok(notYet.symbols.every((sym) => sym.found === null));
-      // Now probe an absent library on its own: it does not load and reports an error.
-      const d2 = (await appApi(diag, 'POST', '/api/diagnostics/capture/resolve', { library: 'libSceGameLiveStreaming.sprx', confirm: 'resolve' })).body.data;
-      const absent = d2.libraries.find((lib) => lib.library === 'libSceGameLiveStreaming.sprx');
+      // Now probe an absent (but not quarantined) library on its own: it does not load, reports an error.
+      const d2 = (await appApi(diag, 'POST', '/api/diagnostics/capture/resolve', { library: 'libSceScreenShot.sprx', confirm: 'resolve' })).body.data;
+      const absent = d2.libraries.find((lib) => lib.library === 'libSceScreenShot.sprx');
       assert.equal(absent.filePresent, false);
       assert.equal(absent.loadOk, false);
       assert.match(absent.error, /not available/);
@@ -1797,6 +1797,33 @@ if (captureDiagBinary) {
       assert.match(logText, /capture\.resolve\.noclose libSceVideoOut\.sprx left loaded/);
       assert.match(logText, /capture\.resolve\.done libSceVideoOut\.sprx loaded/);
       assert.ok(!/capture\.resolve\.dlclose/.test(logText), 'the resolve tier never calls dlclose');
+    } finally {
+      diag.child.kill('SIGTERM');
+      await diag.exited;
+    }
+  });
+
+  await step('capture diagnostic: quarantined libraries are refused and never dlopen’d', async () => {
+    const dataDir = join(work, 'app-capturediag-quarantine');
+    const diag = await startApp(dataDir, ['--port', '0'], capEnv, captureDiagBinary);
+    try {
+      // libSceVideoRecording hung on real hardware (run 2) and is marked load_unsafe.
+      const d = (await appApi(diag, 'POST', '/api/diagnostics/capture/resolve', { library: 'libSceVideoRecording.sprx', confirm: 'resolve' })).body.data;
+      const rec = d.libraries.find((lib) => lib.library === 'libSceVideoRecording.sprx');
+      assert.equal(rec.loadUnsafe, true);
+      assert.ok(rec.unsafeReason && rec.unsafeReason.length > 0);
+      assert.equal(rec.blocked, true);
+      assert.equal(rec.loadOk, false);
+      assert.ok(rec.symbols.every((sym) => sym.found === null)); // never looked up
+      // libSceGameLiveStreaming is also quarantined (same load-and-start risk class).
+      assert.equal(d.libraries.find((lib) => lib.library === 'libSceGameLiveStreaming.sprx').loadUnsafe, true);
+      // Preserved hardware findings are carried in the report.
+      assert.match(d.libraries.find((lib) => lib.library === 'libSceVideoOut.sprx').hardwareNote, /hardware run 2/);
+
+      const logText = readFileSync(join(dataDir, 'akeno.log'), 'utf8');
+      assert.match(logText, /capture\.resolve\.blocked libSceVideoRecording\.sprx/);
+      // The quarantined library is NEVER dlopen'd: no dlopen begin line for it.
+      assert.ok(!/dlopen begin dlopen libSceVideoRecording\.sprx/.test(logText), 'quarantined lib is never dlopen’d');
     } finally {
       diag.child.kill('SIGTERM');
       await diag.exited;

@@ -707,15 +707,29 @@ static void route_capture_resolve(akeno_app *app, const akeno_json *root, ui_res
     akeno_capture_probe probe;
     memset(&probe, 0, sizeof(probe));
     probe.resolved = 1;
-    char err[120] = "";
-    /* Runs WITHOUT app->lock: on a console this may block or terminate the process. */
-    int rc = akeno_platform_capture_probe_one(cat[idx].library, cat[idx].symbols, probe.symbol_found,
-                                              cat[idx].symbol_count, err, sizeof(err), capture_diag_log, app);
-    probe.load_ok = rc == 0;
-    app_copy_str(probe.error, sizeof(probe.error), err);
 
-    app_log(app, AKENO_LOG_INFO, "capture.resolve.done", "%s %s", cat[idx].library, rc == 0 ? "loaded" : "did not load");
-    app_log_sync(app);
+    /*
+     * Quarantine: a library marked load_unsafe is NEVER dlopen'd. Loading it is known or strongly
+     * expected to hang or terminate the process (e.g. libSceVideoRecording on 12.20). The request
+     * is refused here, before any loading, and the reason is reported.
+     */
+    if (cat[idx].load_unsafe) {
+        probe.blocked = 1;
+        probe.load_ok = 0;
+        app_copy_str(probe.error, sizeof(probe.error),
+                     cat[idx].unsafe_reason ? cat[idx].unsafe_reason : "quarantined: unsafe to load");
+        app_log(app, AKENO_LOG_WARN, "capture.resolve.blocked", "%s refused (quarantined; not loaded)", cat[idx].library);
+        app_log_sync(app);
+    } else {
+        char err[120] = "";
+        /* Runs WITHOUT app->lock: on a console this may block or terminate the process. */
+        int rc = akeno_platform_capture_probe_one(cat[idx].library, cat[idx].symbols, probe.symbol_found,
+                                                  cat[idx].symbol_count, err, sizeof(err), capture_diag_log, app);
+        probe.load_ok = rc == 0;
+        app_copy_str(probe.error, sizeof(probe.error), err);
+        app_log(app, AKENO_LOG_INFO, "capture.resolve.done", "%s %s", cat[idx].library, rc == 0 ? "loaded" : "did not load");
+        app_log_sync(app);
+    }
 
     pthread_mutex_lock(&app->lock);
     app->capture_probes[idx] = probe; /* file_present is refreshed in capture_build_report */

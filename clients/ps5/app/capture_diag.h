@@ -34,7 +34,9 @@ typedef enum {
     AKENO_CAPLV_UNSUPPORTED,     /* evidence that it is not usable from our context */
     AKENO_CAPLV_SOURCE_VERIFIED, /* the symbol/library name comes from a verified source (e.g. the pinned SDK stub) */
     AKENO_CAPLV_RUNTIME_DETECTED,/* the library file was found on the console (stat) */
-    AKENO_CAPLV_SIGNATURE_VERIFIED, /* a symbol resolved on the console (dlsym), signature still unverified */
+    AKENO_CAPLV_SYMBOL_PRESENT,  /* a symbol NAME resolved on the console (dlsym != NULL); this is
+                                    presence only — it does NOT verify the function's arguments,
+                                    signature, or that it is callable */
     AKENO_CAPLV_HARDWARE_TESTED  /* only ever set from a real, confirmed hardware result (never by a probe) */
 } akeno_cap_level;
 
@@ -59,6 +61,15 @@ typedef struct {
     int in_pinned_sdk;        /* 1: a stub for it exists in the pinned ps5-payload-sdk */
     const char *source;       /* where the names come from */
     const char *note;         /* honest one-line caveat */
+    /*
+     * 1 when this library must NOT be loaded (dlopen) by the RESOLVE tier: loading it is known or
+     * strongly expected to hang or terminate the process. The diagnostic refuses to probe it and
+     * reports unsafe_reason instead; only STATIC presence (stat) is shown. Never auto-probed.
+     */
+    int load_unsafe;
+    const char *unsafe_reason; /* why it is quarantined (NULL when load_unsafe is 0) */
+    /* A confirmed hardware observation to preserve across builds, or NULL. Never a probe result. */
+    const char *hardware_note;
 } akeno_capture_candidate;
 
 /* Per-library probe result, filled by the platform (or a test). */
@@ -66,8 +77,9 @@ typedef struct {
     int file_present;         /* the library file exists in the system library dir (stat) */
     int resolved;             /* RESOLVE tier ran for this library */
     int load_ok;              /* dlopen succeeded (RESOLVE tier) */
+    int blocked;              /* refused: quarantined as unsafe to load (never dlopen'd) */
     int symbol_found[AKENO_CAPTURE_MAX_SYMBOLS];
-    char error[120];          /* dlopen/dlsym error, if any (never a path with secrets) */
+    char error[120];          /* dlopen/dlsym error, or the quarantine reason */
 } akeno_capture_probe;
 
 /* System/runtime facts for the report (all read-only). */
