@@ -12,6 +12,7 @@
 //   LIVEKIT_PID=$(pgrep -f livekit-server) node infrastructure/scripts/shareplay-measure.mjs \
 //     [--viewers 3] [--quality 720p30] [--seconds 20]
 // The LiveKit webhook must point at http://127.0.0.1:3200/api/v1/voice/webhook (E2E_PORT).
+/* global window, document, MediaDevices, AudioContext */ // used inside page.evaluate / addInitScript (browser code)
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
