@@ -9,6 +9,8 @@ export default defineConfig(
     ignores: [
       '**/dist/**',
       'clients/ps5/build*/**',
+      'clients/ps5-native/build*/**',
+      'clients/ps5-native/third_party/**',
       '**/node_modules/**',
       '**/coverage/**',
       '**/playwright-report/**',
@@ -53,6 +55,12 @@ export default defineConfig(
         { selector: 'Literal[bigint]', message: 'BigInt is newer than ES2017.' },
       ],
     },
+  },
+  {
+    // Launcher manifest of AKENO Native, evaluated by websrv's launcher page (which calls main()).
+    files: ['clients/ps5-native/package/**/*.js'],
+    languageOptions: { sourceType: 'script', globals: { ...globals.browser } },
+    rules: { '@typescript-eslint/no-unused-vars': ['error', { varsIgnorePattern: '^main$' }] },
   },
   {
     files: ['apps/web/**/*.{ts,tsx}'],
