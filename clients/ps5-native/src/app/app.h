@@ -17,6 +17,7 @@
 #include "akn_platform.h"
 #include "script.h"
 #include "social.h"
+#include "images.h"
 #include "ui.h"
 
 #define AKN_NATIVE_VERSION "0.2.0-preview"
@@ -46,7 +47,8 @@ enum {
     AKN_WANT_FRIENDS = 1 << 1,
     AKN_WANT_PROFILE = 1 << 2,
     AKN_WANT_OWN_ACTIVITY = 1 << 3,
-    AKN_WANT_RECONNECT = 1 << 4
+    AKN_WANT_RECONNECT = 1 << 4,
+    AKN_WANT_ME = 1 << 5
 };
 
 typedef struct {
@@ -68,6 +70,8 @@ typedef struct {
     akn_load_state profile_activity_load;
     akn_activity own_activity;
     akn_load_state own_activity_load;
+    akn_profile me;                /* your own profile (Home: picture and name) */
+    akn_load_state me_load;
     unsigned want;
     int stop, busy, done;
     unsigned long long events_after;
@@ -133,6 +137,10 @@ typedef struct {
     akn_social social;     /* lock */
     char focus_friend_id[40]; /* main thread: keeps the focus on the same friend when the list reorders */
     unsigned long focus_friend_gen;
+    akn_images *images;          /* pictures (images.h); main thread */
+    int images_started;
+    akn_images_stats images_final; /* the counters when the loader stopped (for the last report) */
+    SDL_Texture *badge_tex[16][3]; /* medallions per badge and size; main thread */
 
     /* Frames */
     unsigned long frames;

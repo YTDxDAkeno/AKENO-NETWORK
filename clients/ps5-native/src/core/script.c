@@ -82,14 +82,15 @@ static int parse_line(char *line, akn_step *st, char *err, size_t err_len) {
         else FAIL("expect screen|dialog|focus <name>");
         snprintf(st->arg, sizeof(st->arg), "%s", words[2]);
     } else if (strcmp(cmd, "until") == 0) {
-        if (n != 3 || parse_int(words[2], 1, 600000, &st->ms)) FAIL("until audio|account|ipc|friends|profile|activity <ms>");
+        if (n != 3 || parse_int(words[2], 1, 600000, &st->ms)) FAIL("until audio|account|ipc|friends|profile|activity|pictures <ms>");
         if (strcmp(words[1], "audio") == 0) st->kind = AKN_STEP_UNTIL_AUDIO;
         else if (strcmp(words[1], "account") == 0) st->kind = AKN_STEP_UNTIL_ACCOUNT;
         else if (strcmp(words[1], "ipc") == 0) st->kind = AKN_STEP_UNTIL_IPC;
         else if (strcmp(words[1], "friends") == 0) st->kind = AKN_STEP_UNTIL_FRIENDS;
         else if (strcmp(words[1], "profile") == 0) st->kind = AKN_STEP_UNTIL_PROFILE;
         else if (strcmp(words[1], "activity") == 0) st->kind = AKN_STEP_UNTIL_ACTIVITY;
-        else FAIL("until audio|account|ipc|friends|profile|activity <ms>");
+        else if (strcmp(words[1], "pictures") == 0) st->kind = AKN_STEP_UNTIL_PICTURES;
+        else FAIL("until audio|account|ipc|friends|profile|activity|pictures <ms>");
     } else if (strcmp(cmd, "quit") == 0) {
         st->kind = AKN_STEP_QUIT;
         if (n != 1) FAIL("quit takes no argument");

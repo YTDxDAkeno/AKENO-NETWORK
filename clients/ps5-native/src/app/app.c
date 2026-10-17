@@ -299,6 +299,15 @@ static void poll_pad_status(akn_app *app, uint64_t now) {
 
 /* ---- Social screens ---------------------------------------------------------------------------- */
 
+/* For the image worker: pictures are fetched only while the native interface is connected. */
+static int images_ready(void *user) {
+    akn_app *app = user;
+    SDL_LockMutex(app->lock);
+    int ready = app->social.ipc == AKN_IPC_READY;
+    SDL_UnlockMutex(app->lock);
+    return ready;
+}
+
 #define FRIENDS_STALE_MS 30000
 
 /* Once per frame: row counts for the list screens, and the focus stays on the same friend when
@@ -588,7 +597,8 @@ static const char *run_script(akn_app *app, uint64_t now) {
         case AKN_STEP_UNTIL_IPC:
         case AKN_STEP_UNTIL_FRIENDS:
         case AKN_STEP_UNTIL_PROFILE:
-        case AKN_STEP_UNTIL_ACTIVITY: {
+        case AKN_STEP_UNTIL_ACTIVITY:
+        case AKN_STEP_UNTIL_PICTURES: {
             if (app->step_phase == 0) app->step_until = now + (uint64_t)st->ms, app->step_phase = 1;
             SDL_LockMutex(app->lock);
             const akn_social *s = &app->social;
@@ -606,6 +616,7 @@ static const char *run_script(akn_app *app, uint64_t now) {
             case AKN_STEP_UNTIL_PROFILE:
                 done = (s->profile_load == AKN_LOAD_OK || s->profile_load == AKN_LOAD_ERROR) && !(s->want & AKN_WANT_PROFILE), what = "profile";
                 break;
+            case AKN_STEP_UNTIL_PICTURES: done = akn_images_pending(app->images) == 0, what = "pictures"; break;
             default:
                 done = (s->own_activity_load == AKN_LOAD_OK || s->own_activity_load == AKN_LOAD_ERROR) &&
                        !(s->want & AKN_WANT_OWN_ACTIVITY),
@@ -799,6 +810,11 @@ int akn_app_run(const akn_options *options, int *opened_devices) {
 
     start_net_check(app);
     if (akn_social_start(app) != 0) akn_logf(&app->log, AKN_LOG_ERROR, "social.start", "the social screens are unavailable");
+    char key_path[320];
+    snprintf(key_path, sizeof(key_path), "%s/native.key", app->platform.akeno_dir);
+    app->images = akn_images_create(app->platform.daemon_port, key_path, &app->log, images_ready, app);
+    app->images_started = app->images != NULL;
+    if (!app->images) akn_logf(&app->log, AKN_LOG_WARN, "images.start", "pictures are unavailable; initials are shown instead");
     if (options->script) akn_gfx_capture_enable(app->gfx);
 
     app->last_frame_ms = akn_platform_now_ms();
@@ -824,6 +840,7 @@ int akn_app_run(const akn_options *options, int *opened_devices) {
 
         uint64_t t0 = akn_platform_now_us();
         akn_gfx_capture_begin_frame(app->gfx);
+        akn_images_pump(app->images, app->renderer);
         akn_screens_draw(app, now);
         double ms = (akn_platform_now_us() - t0) / 1000.0;
         app->frames++;
@@ -840,8 +857,14 @@ int akn_app_run(const akn_options *options, int *opened_devices) {
     app->audio_thread = NULL;
     collect_audio(app, akn_platform_now_ms());
     int social_done = akn_social_stop(app);
+    akn_images_get_stats(app->images, &app->images_final);
+    int images_done = akn_images_destroy(app->images);
+    app->images = NULL;
+    for (int i = 0; i < 16; i++)
+        for (int k = 0; k < 3; k++)
+            if (app->badge_tex[i][k]) SDL_DestroyTexture(app->badge_tex[i][k]);
     SDL_LockMutex(app->lock);
-    int net_busy = app->net_running || !social_done;
+    int net_busy = app->net_running || !social_done || !images_done;
     SDL_UnlockMutex(app->lock);
     akn_logf(&app->log, AKN_LOG_INFO, "app.stop", "%lu frames, average draw %.1f ms%s", app->frames, app->frame_ms_avg,
              app->script_failed ? "; test script FAILED" : "");

@@ -8,6 +8,7 @@
 
 #include "account.h"
 #include "akeno/json.h"
+#include "image.h"
 
 static void copy_str(char *dst, size_t len, const char *src) {
     if (!len) return;
@@ -37,13 +38,61 @@ static akn_presence presence_of(const char *s) {
     return AKN_PRES_OFFLINE;
 }
 
+/* A media ID is kept only when it has the server's exact shape (32 lowercase hex digits). */
+static void copy_media_id(char out[33], const char *s) {
+    out[0] = '\0';
+    if (akn_is_media_id(s)) copy_str(out, 33, s);
+}
+
+static void fill_art(const akeno_json *node, akn_art *a) {
+    memset(a, 0, sizeof(*a));
+    if (!node || node->type != AKENO_JSON_OBJECT) return;
+    copy_media_id(a->icon, str_or_empty(node, "icon"));
+    copy_media_id(a->cover, str_or_empty(node, "cover"));
+    copy_media_id(a->banner, str_or_empty(node, "banner"));
+}
+
 static void fill_game(const akeno_json *node, akn_game *g) {
     memset(g, 0, sizeof(*g));
     if (!node || node->type != AKENO_JSON_OBJECT) return;
     copy_str(g->title_id, sizeof(g->title_id), str_or_empty(node, "titleId"));
     copy_str(g->name, sizeof(g->name), str_or_empty(node, "name"));
     g->started_at = get_time(node, "startedAt");
+    fill_art(akeno_json_get(node, "art"), &g->art);
     g->present = g->title_id[0] != '\0';
+}
+
+static uint32_t parse_hex_color(const char *s, uint32_t fallback) {
+    if (!s || s[0] != '#' || strlen(s) != 7) return fallback;
+    uint32_t v = 0;
+    for (int i = 1; i < 7; i++) {
+        int c = tolower((unsigned char)s[i]);
+        if (!isxdigit(c)) return fallback;
+        v = v * 16 + (uint32_t)(isdigit(c) ? c - '0' : c - 'a' + 10);
+    }
+    return v;
+}
+
+uint32_t akn_theme_accent(const char *theme) {
+    static const struct {
+        const char *id;
+        uint32_t accent;
+    } T[] = { { "purple", 0x8B5CF6 }, { "blue", 0x2F7BFF }, { "crimson", 0xEF4452 }, { "midnight", 0xC3CBE0 }, { "sakura", 0xF472B6 },
+              { "emerald", 0x10B981 } };
+    for (size_t i = 0; theme && i < sizeof(T) / sizeof(T[0]); i++)
+        if (strcmp(T[i].id, theme) == 0) return T[i].accent;
+    return 0x4F7CFF;
+}
+
+void akn_theme_gradient(const char *theme, uint32_t *from, uint32_t *to) {
+    static const struct {
+        const char *id;
+        uint32_t from, to;
+    } T[] = { { "purple", 0x2B1854, 0x140D2B }, { "blue", 0x0B2F6B, 0x081A3A }, { "crimson", 0x4F1220, 0x1F0A10 },
+              { "midnight", 0x161A24, 0x05070B }, { "sakura", 0x4A1838, 0x1F0C1A }, { "emerald", 0x0B3B33, 0x07191A } };
+    *from = 0x1B2A55, *to = 0x2A1F4D;
+    for (size_t i = 0; theme && i < sizeof(T) / sizeof(T[0]); i++)
+        if (strcmp(T[i].id, theme) == 0) *from = T[i].from, *to = T[i].to;
 }
 
 /* ---- Proxy envelope -------------------------------------------------------------------------- */
@@ -109,6 +158,7 @@ int akn_fill_friends(const akeno_json *data, akn_friend_list *out) {
         memset(d, 0, sizeof(*d));
         if (fill_user(f, d->id, d->online_id, d->display_name) != 0) continue;
         copy_str(d->status_message, sizeof(d->status_message), str_or_empty(f, "statusMessage"));
+        copy_media_id(d->avatar_image, str_or_empty(f, "avatarImage"));
         d->deleted = akeno_json_get_bool(f, "deleted", 0);
         akn_fill_presence(akeno_json_get(f, "presence"), &d->presence);
         out->count++;
@@ -136,10 +186,36 @@ int akn_fill_profile(const akeno_json *data, akn_profile *out) {
     const akeno_json *fav = akeno_json_get(data, "favoriteGames");
     for (const akeno_json *g = fav && fav->type == AKENO_JSON_ARRAY ? fav->child : NULL; g && out->favorite_count < AKN_FAVORITES; g = g->next)
         if (g->type == AKENO_JSON_STRING && g->string[0]) copy_str(out->favorites[out->favorite_count++], sizeof(out->favorites[0]), g->string);
+    /* Artwork of favourites whose name matches a verified game (favoriteGameDetails, by name). */
+    const akeno_json *details = akeno_json_get(data, "favoriteGameDetails");
+    for (const akeno_json *g = details && details->type == AKENO_JSON_ARRAY ? details->child : NULL; g; g = g->next) {
+        const char *name = str_or_empty(g, "name");
+        for (int i = 0; i < out->favorite_count; i++)
+            if (strcmp(out->favorites[i], name) == 0) fill_art(akeno_json_get(g, "art"), &out->favorite_art[i]);
+    }
+    copy_media_id(out->avatar_image, akeno_json_get_string(akeno_json_get(data, "user"), "avatarImage", ""));
+    const akeno_json *app = akeno_json_get(data, "appearance");
+    copy_str(out->theme, sizeof(out->theme), akeno_json_get_string(app, "theme", "default"));
+    out->accent = strcmp(out->theme, "custom") == 0 ? parse_hex_color(akeno_json_get_string(app, "accentColor", ""), 0x4F7CFF)
+                                                    : akn_theme_accent(out->theme);
+    copy_media_id(out->banner_image, akeno_json_get_string(app, "bannerImage", ""));
+    out->banner_overlay = akeno_json_get_bool(app, "bannerOverlay", 0);
+    /* Badges in the website's order: featured first, then every other earned badge. */
+    const akeno_json *featured = akeno_json_get(data, "featuredBadges");
+    for (const akeno_json *b = featured && featured->type == AKENO_JSON_ARRAY ? featured->child : NULL; b && out->badge_count < AKN_PROFILE_BADGES;
+         b = b->next)
+        if (b->type == AKENO_JSON_STRING && b->string[0] && strlen(b->string) < 24) copy_str(out->badge_ids[out->badge_count++], 24, b->string);
+    out->featured_badges = out->badge_count;
     copy_str(out->relationship, sizeof(out->relationship), akeno_json_get_string(akeno_json_get(data, "relationship"), "state", ""));
     out->mutual_friends = (int)get_int(data, "mutualFriendCount", 0);
     const akeno_json *badges = akeno_json_get(data, "badges");
     out->badges = badges && badges->type == AKENO_JSON_ARRAY ? (int)badges->count : 0;
+    for (const akeno_json *b = badges && badges->type == AKENO_JSON_ARRAY ? badges->child : NULL; b && out->badge_count < AKN_PROFILE_BADGES; b = b->next) {
+        const char *id = str_or_empty(b, "id");
+        int dup = !id[0] || strlen(id) >= 24;
+        for (int i = 0; i < out->badge_count && !dup; i++) dup = strcmp(out->badge_ids[i], id) == 0;
+        if (!dup) copy_str(out->badge_ids[out->badge_count++], 24, id);
+    }
     const akeno_json *party = akeno_json_get(data, "party");
     if (party && party->type == AKENO_JSON_OBJECT) {
         out->has_party = 1;
@@ -167,12 +243,14 @@ int akn_fill_activity(const akeno_json *data, akn_activity *out) {
         r->total_seconds = get_int(g, "totalSeconds", -1);
         r->sessions = (int)get_int(g, "sessionCount", 0);
         r->playing_now = akeno_json_get_bool(g, "playingNow", 0);
+        fill_art(akeno_json_get(g, "art"), &r->art);
         out->recent_count++;
     }
     const akeno_json *totals = akeno_json_get(data, "totals");
     out->total_seconds = get_int(totals, "seconds", -1);
     out->total_games = (int)get_int(totals, "games", 0);
     out->total_sessions = (int)get_int(totals, "sessions", 0);
+    out->tracked_since = get_time(data, "trackedSince");
     return 0;
 }
 

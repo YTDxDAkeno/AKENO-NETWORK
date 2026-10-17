@@ -44,8 +44,8 @@ CLIENT_SRC  := $(addprefix $(PS5_ROOT)/src/,buf.c json.c json_write.c crypto_uti
                client.c realtime.c net_posix.c transport_mbedtls.c)
 SHARED_SRC  := $(addprefix $(PS5_ROOT)/app/,audio_lab_pcm.c game_detect.c)
 CORE_SRC    := $(addprefix $(ROOT)/src/core/,nav.c input.c audio_test.c redact.c log.c context.c logo.c png.c text.c ui.c \
-               script.c account.c social.c)
-APP_SRC     := $(addprefix $(ROOT)/src/app/,main.c app.c screens.c gfx.c net.c report.c ipc.c social.c)
+               script.c account.c social.c image.c vector.c badges.c)
+APP_SRC     := $(addprefix $(ROOT)/src/app/,main.c app.c screens.c gfx.c net.c report.c ipc.c social.c images.c)
 PLAT_SRC    := $(ROOT)/src/platform/platform_ps5.c
 STB_SRC     := $(ROOT)/src/app/font_stb.c
 
@@ -56,6 +56,7 @@ CORE_OBJ    := $(patsubst $(ROOT)/src/core/%.c,$(OBJ)/core/%.o,$(CORE_SRC))
 APP_OBJ     := $(patsubst $(ROOT)/src/app/%.c,$(OBJ)/app/%.o,$(APP_SRC))
 PLAT_OBJ    := $(OBJ)/platform/platform_ps5.o
 STB_OBJ     := $(OBJ)/third_party/font_stb.o
+STBI_OBJ    := $(OBJ)/third_party/stb_image_impl.o
 
 # Paths are mapped so the ELF (and the debug ELF) do not depend on where the repository is checked out.
 COMMON_FLAGS := -O2 -g -std=c11 -DMBEDTLS_CONFIG_FILE='"akeno_mbedtls_config.h"' -I$(PS5_ROOT)/config \
@@ -113,7 +114,12 @@ $(STB_OBJ): $(STB_SRC) $(THIRD_PARTY)/stb_truetype.h
 	$(CC) -O2 -g -std=c11 -w -ffile-prefix-map=$(REPO_ROOT)=. -ffile-prefix-map=$(PS5_PAYLOAD_SDK)=ps5-payload-sdk \
 	      $(SDL_FLAGS) -I$(THIRD_PARTY) -c $< -o $@
 
-$(DEBUG_ELF): $(APP_OBJ) $(PLAT_OBJ) $(CORE_OBJ) $(SHARED_OBJ) $(STB_OBJ) $(CLIENT_OBJ) $(MBEDTLS_OBJ)
+$(STBI_OBJ): $(ROOT)/src/third/stb_image_impl.c $(ROOT)/src/core/stb_image_akn.h $(THIRD_PARTY)/stb_image.h
+	@mkdir -p $(dir $@)
+	$(CC) -O2 -g -std=c11 -w -ffile-prefix-map=$(REPO_ROOT)=. -ffile-prefix-map=$(PS5_PAYLOAD_SDK)=ps5-payload-sdk \
+	      -I$(THIRD_PARTY) -I$(ROOT)/src/core -c $< -o $@
+
+$(DEBUG_ELF): $(APP_OBJ) $(PLAT_OBJ) $(CORE_OBJ) $(SHARED_OBJ) $(STB_OBJ) $(STBI_OBJ) $(CLIENT_OBJ) $(MBEDTLS_OBJ)
 	$(CC) -o $@ $^ $(LIBS)
 
 $(ELF): $(DEBUG_ELF)

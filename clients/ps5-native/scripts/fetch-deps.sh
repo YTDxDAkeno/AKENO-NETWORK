@@ -4,6 +4,7 @@
 # downloads. mbedTLS and the CA bundle are shared with the daemon (clients/ps5/scripts/fetch-deps.sh).
 #
 #   stb_truetype.h v1.26     MIT or public domain  font rasteriser, nothings/stb 6e9f34d (2024-07-15)
+#   stb_image.h v2.29        MIT or public domain  JPEG/PNG decoder (profile pictures, artwork), same commit
 #   Inter 4.1                SIL OFL 1.1           the website's UI font (Regular, Bold); release zip
 #   mbedTLS 3.6.7, CA bundle (via clients/ps5)     TLS for the existing client library
 set -euo pipefail
@@ -15,6 +16,8 @@ mkdir -p "$dest"
 STB_COMMIT=6e9f34d5429cf16790ec43c9bac3f1ee4ad1f760
 STB_URL="https://raw.githubusercontent.com/nothings/stb/${STB_COMMIT}/stb_truetype.h"
 STB_SHA256=ecd30b05e0dd4fea3a13c26810dd9e1992dc379049482c393d5a19e6b5090aab
+STB_IMAGE_URL="https://raw.githubusercontent.com/nothings/stb/${STB_COMMIT}/stb_image.h"
+STB_IMAGE_SHA256=c54b15a689e6a1f32c75e2ec23afa442e3e0e37e894b73c1974d08679b20dd5c
 
 INTER_VERSION=4.1
 INTER_URL="https://github.com/rsms/inter/releases/download/v${INTER_VERSION}/Inter-${INTER_VERSION}.zip"
@@ -48,6 +51,7 @@ verify() { # sha256 file
 }
 
 fetch "$STB_URL" "$STB_SHA256" "$dest/stb_truetype.h"
+fetch "$STB_IMAGE_URL" "$STB_IMAGE_SHA256" "$dest/stb_image.h"
 
 fetch "$INTER_URL" "$INTER_SHA256" "$dest/Inter-${INTER_VERSION}.zip"
 mkdir -p "$dest/inter"

@@ -105,7 +105,13 @@ typedef struct {
     int list_top[AKN_SCREEN_COUNT]; /* first visible row */
     akn_screen profile_back;        /* where circle on the profile returns to */
     int open_row;                   /* the row AKN_CMD_OPEN_PROFILE refers to */
+    int profile_scroll;             /* pixels the profile is scrolled down */
+    int profile_content_h;          /* height of the profile's content (set by the screen) */
 } akn_ui;
+
+#define AKN_PROFILE_VIEW_Y 120      /* the profile scrolls between the top bar and the prompts */
+#define AKN_PROFILE_VIEW_H 870
+#define AKN_PROFILE_SCROLL_STEP 140
 
 #define AKN_FRIEND_ROWS_VISIBLE 7
 #define AKN_ACTIVITY_ROWS_VISIBLE 4
@@ -127,6 +133,8 @@ void akn_ui_set_list_count(akn_ui *ui, akn_screen screen, int count);
 int akn_ui_is_list(akn_screen screen);
 /* Row index -> rectangle on a list screen (rows outside the visible window are not drawn). */
 akn_rect akn_ui_row_rect(const akn_ui *ui, akn_screen screen, int row);
+/* The profile screen: content height in pixels (clamps the scroll position). */
+void akn_ui_set_profile_height(akn_ui *ui, int content_h);
 void akn_ui_open_heard(akn_ui *ui);
 void akn_ui_toast(akn_ui *ui, const char *text, uint64_t now_ms, unsigned duration_ms);
 

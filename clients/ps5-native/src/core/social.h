@@ -10,17 +10,24 @@
 #define AKN_SOCIAL_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 struct akeno_json;
 struct akeno_json_doc;
 
 typedef enum { AKN_PRES_OFFLINE = 0, AKN_PRES_ONLINE, AKN_PRES_AWAY, AKN_PRES_DND, AKN_PRES_INVISIBLE } akn_presence;
 
+/* Media IDs of a verified game's artwork (GameArtwork); "" when that shape does not exist. */
+typedef struct {
+    char icon[33], cover[33], banner[33];
+} akn_art;
+
 typedef struct {
     int present;
     char title_id[16];
     char name[96];        /* "" when the server does not know the title */
     long long started_at; /* unix seconds, 0 when unknown */
+    akn_art art;
 } akn_game;
 
 typedef struct {
@@ -35,6 +42,7 @@ typedef struct {
     char online_id[40];
     char display_name[80];
     char status_message[160];
+    char avatar_image[33]; /* uploaded picture (media ID) or "" for initials */
     int deleted;
     akn_presence_view presence;
 } akn_friend;
@@ -50,8 +58,9 @@ typedef struct {
     int incoming_requests, outgoing_requests;
 } akn_friend_list;
 
-#define AKN_RECENT_GAMES 8
-#define AKN_FAVORITES 6
+#define AKN_RECENT_GAMES 12
+#define AKN_FAVORITES 12
+#define AKN_PROFILE_BADGES 8
 
 typedef struct {
     char title_id[16];
@@ -60,6 +69,7 @@ typedef struct {
     long long total_seconds; /* -1 when the owner hides playtime */
     int sessions;
     int playing_now;
+    akn_art art;
 } akn_recent_game;
 
 typedef struct {
@@ -69,6 +79,7 @@ typedef struct {
     int recent_count;
     long long total_seconds; /* -1 when hidden */
     int total_games, total_sessions;
+    long long tracked_since; /* 0 when unknown */
 } akn_activity;
 
 typedef struct {
@@ -79,7 +90,16 @@ typedef struct {
     char bio[600];
     char status_message[160];
     char favorites[AKN_FAVORITES][80];
+    akn_art favorite_art[AKN_FAVORITES]; /* from favoriteGameDetails where the name matches a verified game */
     int favorite_count;
+    char avatar_image[33];  /* media ID or "" */
+    char banner_image[33];  /* media ID or "" (null when details are restricted) */
+    int banner_overlay;
+    char theme[16];         /* profile theme ID */
+    uint32_t accent;        /* 0xRRGGBB of a custom theme, else the theme's */
+    char badge_ids[AKN_PROFILE_BADGES][24]; /* featured first, then the rest, as on the website */
+    int badge_count;        /* entries in badge_ids */
+    int featured_badges;    /* the first featured_badges entries are featured */
     char relationship[24]; /* self, friend, none, request_sent, request_received, blocked */
     int mutual_friends;
     int badges;
@@ -156,6 +176,10 @@ int akn_apply_events(const char *json, size_t len, akn_friend_list *friends, akn
 void akn_friends_sort(akn_friend_list *list);
 void akn_friends_count(akn_friend_list *list); /* recomputes online and playing */
 int akn_friends_find(const akn_friend_list *list, const char *id);
+
+/* Profile themes of the website (accent and banner gradient, 0xRRGGBB). */
+uint32_t akn_theme_accent(const char *theme);
+void akn_theme_gradient(const char *theme, uint32_t *from, uint32_t *to);
 
 const char *akn_presence_label(akn_presence p);
 /* One line for a list row: "Playing Astro Bot", "Online · Ranked match", "Last seen 3 h ago", ... */

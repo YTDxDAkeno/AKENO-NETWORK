@@ -4,9 +4,11 @@
  */
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "app.h"
+#include "badges.h"
 
 #define C_INK 0xFFE9EDF8u
 #define C_MUTED 0xFF9AA5C4u
@@ -347,9 +349,19 @@ static uint32_t presence_color(akn_presence p) {
     }
 }
 
-/* Initials on a colour picked from the user ID, with a presence dot. Pictures arrive in Phase 2.4. */
+/* A picture at exactly r (drawn 1:1, prepared at this size by the image worker). Returns 1 when it
+ * was drawn; until it has loaded, or when it is missing or broken, the caller's placeholder stays. */
+static int picture(akn_app *app, akn_img_source source, const char *id, akn_rect r, akn_fit fit) {
+    SDL_Texture *t = id && id[0] ? akn_images_get(app->images, source, id, r.w, r.h, fit) : NULL;
+    if (!t) return 0;
+    SDL_Rect d = { r.x, r.y, r.w, r.h };
+    SDL_RenderCopy(app->renderer, t, NULL, &d);
+    return 1;
+}
+
+/* The profile picture (circle) over initials on a colour picked from the user ID, with a presence dot. */
 static void avatar(akn_app *app, int cx, int cy, int r, const char *id, const char *display_name, const char *online_id,
-                   int show_presence, akn_presence p) {
+                   const char *image, int show_presence, akn_presence p) {
     static const uint32_t palette[] = { 0xFF3B5BDBu, 0xFF7048E8u, 0xFF0C8599u, 0xFF2B8A3Eu, 0xFFC2255Cu, 0xFFE8590Cu, 0xFF5F3DC4u, 0xFF1971C2u };
     unsigned h = 2166136261u;
     for (const char *c = id && id[0] ? id : online_id; c && *c; c++) h = (h ^ (unsigned char)*c) * 16777619u;
@@ -358,6 +370,7 @@ static void avatar(akn_app *app, int cx, int cy, int r, const char *id, const ch
     akn_initials(display_name, online_id, ini);
     int px = r * 9 / 10;
     akn_gfx_text_center(app->gfx, cx - r, 2 * r, cy - px * 6 / 10, px, AKN_FONT_BOLD, 0xFFFFFFFFu, ini);
+    picture(app, AKN_IMG_MEDIA, image, (akn_rect){ cx - r, cy - r, 2 * r, 2 * r }, AKN_FIT_CIRCLE);
     if (show_presence) {
         int dr = r / 4 > 7 ? r / 4 : 7;
         int dx = cx + (int)(r * 0.72), dy = cy + (int)(r * 0.72);
@@ -419,12 +432,20 @@ static void centered_note(akn_app *app, akn_rect p, const char *title, const cha
     if (text) akn_gfx_text_center(app->gfx, p.x, p.w, p.y + p.h / 2 + 4, 24, AKN_FONT_REGULAR, C_MUTED, text);
 }
 
+typedef enum { ART_COVER = 0, ART_WIDE, ART_ICON } art_shape;
+static void game_art(akn_app *app, akn_rect r, const akn_art *art, const char *title_id, const char *name, art_shape shape);
+
 static void friend_row(akn_app *app, akn_rect r, const akn_friend *f, int focused, long long now) {
     akn_gfx *g = app->gfx;
     akn_gfx_rrect(g, r, 18, focused ? 0xF21A2542u : C_SURFACE2);
     akn_gfx_rrect_outline(g, r, 18, 1, focused ? C_LINE_STRONG : C_LINE);
-    avatar(app, r.x + 50, r.y + r.h / 2, 30, f->id, f->display_name, f->online_id, 1, f->presence.status);
+    avatar(app, r.x + 50, r.y + r.h / 2, 30, f->id, f->display_name, f->online_id, f->avatar_image, 1, f->presence.status);
     int x = r.x + 100, w = r.w - 130;
+    if (f->presence.game.present) { /* the game's icon at the right end of the row */
+        const akn_game *gm = &f->presence.game;
+        game_art(app, (akn_rect){ r.x + r.w - 76, r.y + (r.h - 60) / 2, 60, 60 }, &gm->art, gm->title_id, gm->name, ART_ICON);
+        w -= 76;
+    }
     int nw = akn_gfx_text_fit(g, x, r.y + 10, 27, AKN_FONT_BOLD, f->deleted ? C_SUBTLE : C_INK, f->display_name, w - 220);
     char id[48];
     snprintf(id, sizeof(id), "@%s", f->online_id);
@@ -485,7 +506,7 @@ static void draw_friends(akn_app *app, const akn_social *s, uint64_t now) {
     if (focus >= 0 && focus < list->count) {
         const akn_friend *f = &list->items[focus];
         int x = d.x + 40, w = d.w - 80, y = d.y + 40;
-        avatar(app, d.x + d.w / 2, y + 74, 74, f->id, f->display_name, f->online_id, 1, f->presence.status);
+        avatar(app, d.x + d.w / 2, y + 74, 74, f->id, f->display_name, f->online_id, f->avatar_image, 1, f->presence.status);
         y += 176;
         akn_gfx_text_center(g, d.x, d.w, y, 38, AKN_FONT_BOLD, C_INK, f->display_name);
         char id[48];
@@ -526,107 +547,299 @@ static void draw_friends(akn_app *app, const akn_social *s, uint64_t now) {
     if (focus_rect.w && !app->ui.dialog) focus_ring(app, focus_rect, 18, now);
 }
 
+/* ---- Pictures of the profiles: game artwork, badges ------------------------------------------------ */
+
+/* Game artwork as on the website: the server's artwork of the verified game (cover, wide banner
+ * or icon, falling back between them), else this console's own icon of the title, else initials. */
+static void game_art(akn_app *app, akn_rect r, const akn_art *art, const char *title_id, const char *name, art_shape shape) {
+    akn_gfx *g = app->gfx;
+    int radius = AKN_FIT_RADIUS(r.w, r.h);
+    akn_gfx_rrect(g, r, radius, 0xFF1E2A4Au);
+    char ini[8];
+    akn_initials(name && name[0] ? name : title_id, title_id, ini);
+    int px = (r.w < r.h ? r.w : r.h) / 3;
+    if (px > 12) akn_gfx_text_center(g, r.x, r.w, r.y + r.h / 2 - px * 6 / 10, px, AKN_FONT_BOLD, 0xFF9AA5C4u, ini);
+    const char *media = !art ? NULL
+                        : shape == ART_COVER ? (art->cover[0] ? art->cover : art->icon)
+                        : shape == ART_WIDE  ? (art->banner[0] ? art->banner : art->cover[0] ? art->cover : art->icon)
+                                             : (art->icon[0] ? art->icon : art->cover);
+    if (!(media && media[0] && picture(app, AKN_IMG_MEDIA, media, r, AKN_FIT_ROUNDED)) && title_id && title_id[0])
+        picture(app, AKN_IMG_LOCAL_ART, title_id, r, AKN_FIT_ROUNDED);
+    akn_gfx_rrect_outline(g, r, radius, 1, C_LINE_STRONG);
+}
+
+/* The badge medallion (badges.c, the website's geometry), cached per badge and size. */
+static void badge_medal(akn_app *app, const char *id, int x, int y, int size) {
+    int idx = -1;
+    for (int i = 0; i < akn_badge_count() && i < 16; i++)
+        if (strcmp(akn_badge_at(i)->id, id) == 0) idx = i;
+    if (idx < 0) return; /* unknown to this build: shown like the website, i.e. not at all */
+    int k = size <= 40 ? 0 : size <= 64 ? 1 : 2;
+    int px = k == 0 ? 40 : k == 1 ? 64 : 96;
+    SDL_Texture **t = &app->badge_tex[idx][k];
+    if (!*t) {
+        uint8_t *rgba = malloc((size_t)px * px * 4);
+        if (rgba && akn_badge_render(id, rgba, px) == 0) {
+            *t = SDL_CreateTexture(app->renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, px, px);
+            if (*t) {
+                SDL_UpdateTexture(*t, NULL, rgba, px * 4);
+                SDL_SetTextureBlendMode(*t, SDL_BLENDMODE_BLEND);
+            }
+        }
+        free(rgba);
+        if (!*t) return;
+    }
+    SDL_Rect d = { x, y, size, size };
+    SDL_RenderCopy(app->renderer, *t, NULL, &d);
+}
+
+/* A featured badge: medallion and name on a chip. Returns the chip's width. */
+static int badge_chip(akn_app *app, const char *id, int x, int y) {
+    const akn_badge_def *def = akn_badge_find(id);
+    if (!def) return 0;
+    int tw = akn_gfx_text_width(app->gfx, 22, AKN_FONT_BOLD, def->name, strlen(def->name));
+    akn_rect r = { x, y, tw + 82, 52 };
+    akn_gfx_rrect(app->gfx, r, 26, 0xCC0D1323u);
+    akn_gfx_rrect_outline(app->gfx, r, 26, 1, 0x80000000u | def->color);
+    badge_medal(app, id, x + 8, y + 6, 40);
+    akn_gfx_text(app->gfx, x + 60, y + 13, 22, AKN_FONT_BOLD, C_INK, def->name);
+    return r.w;
+}
+
+/* A game card: cover, name, up to two lines. */
+static void game_card(akn_app *app, int x, int y, int w, const akn_art *art, const char *title_id, const char *name, const char *l1,
+                      const char *l2) {
+    akn_gfx *g = app->gfx;
+    int h = w * 3 / 2;
+    game_art(app, (akn_rect){ x, y, w, h }, art, title_id, name, ART_COVER);
+    akn_gfx_text_fit(g, x, y + h + 10, 22, AKN_FONT_BOLD, C_INK, name && name[0] ? name : title_id, w);
+    if (l1 && l1[0]) akn_gfx_text_fit(g, x, y + h + 40, 19, AKN_FONT_REGULAR, C_MUTED, l1, w);
+    if (l2 && l2[0]) akn_gfx_text_fit(g, x, y + h + 66, 19, AKN_FONT_REGULAR, C_SUBTLE, l2, w);
+}
+
+static int section_title(akn_app *app, int x, int y, const char *title) {
+    akn_gfx_text(app->gfx, x, y, 20, AKN_FONT_BOLD, C_SUBTLE, title);
+    return y + 40;
+}
+
+/* The profile page, laid out like the website's: banner, overlapping picture, name and presence,
+ * badges, then games on the left and statistics and about on the right. It scrolls (up/down,
+ * L1/R1); content coordinates start at AKN_PROFILE_VIEW_Y. */
+#define CARD_W 160
+#define CARD_GAP 32
+#define CARDS_PER_ROW 6
+
 static void draw_profile(akn_app *app, const akn_social *s, uint64_t now) {
     akn_gfx *g = app->gfx;
     (void)now;
     long long unix_now = akn_platform_unix_time();
     akn_rect area = { AKN_MARGIN_X, 150, 1728, 800 };
     if (!s->profile.online_id[0]) {
+        akn_ui_set_profile_height(&app->ui, 0);
         if (s->ipc != AKN_IPC_READY) ipc_status_panel(app, s, area);
         else if (s->profile_load == AKN_LOAD_ERROR) centered_note(app, area, "The profile could not be loaded", s->profile_error);
         else centered_note(app, area, "Loading the profile...", NULL);
         return;
     }
     const akn_profile *p = &s->profile;
-    akn_rect head = { AKN_MARGIN_X, 136, 1728, 236 };
-    panel(app, head);
-    avatar(app, head.x + 132, head.y + head.h / 2, 84, p->id, p->display_name, p->online_id, 1, p->presence.status);
-    int x = head.x + 260, w = head.w - 300;
-    akn_gfx_text_fit(g, x, head.y + 30, 54, AKN_FONT_BOLD, C_INK, p->display_name, w);
-    char line[300];
-    const char *rel = strcmp(p->relationship, "self") == 0 ? "  \xC2\xB7  you" : strcmp(p->relationship, "friend") == 0 ? "  \xC2\xB7  friend" : "";
-    snprintf(line, sizeof(line), "@%s%s", p->online_id, rel);
-    akn_gfx_text_fit(g, x, head.y + 100, 26, AKN_FONT_REGULAR, C_MUTED, line, w);
-    akn_gfx_disc(g, x + 8, head.y + 158, 8, presence_color(p->presence.status));
-    akn_presence_line(&p->presence, unix_now, line, sizeof(line));
-    akn_gfx_text_fit(g, x + 26, head.y + 143, 26, AKN_FONT_BOLD, p->presence.game.present ? 0xFFB7C8FFu : C_INK, line, w - 26);
-    if (p->status_message[0]) akn_gfx_text_fit(g, x, head.y + 186, 23, AKN_FONT_REGULAR, C_MUTED, p->status_message, w);
-    if (s->profile_load == AKN_LOAD_ERROR) pill(app, head.x + head.w - 260, head.y + 24, 0x33F5A524u, C_WARNING, "NOT UPDATED");
-
-    /* About */
-    akn_rect about = { AKN_MARGIN_X, 396, 1000, 554 };
-    panel(app, about);
-    int ax = about.x + 40, aw = about.w - 80, ay = about.y + 30;
-    akn_gfx_text(g, ax, ay, 20, AKN_FONT_BOLD, C_SUBTLE, "ABOUT");
-    ay += 40;
-    if (p->restricted) {
-        akn_gfx_text_wrap(g, ax, ay, 24, AKN_FONT_REGULAR, C_MUTED, "Details are hidden by this person's privacy settings.", aw, 34, 2);
-        ay += 80;
-    } else if (p->bio[0]) {
-        int lines = akn_gfx_text_wrap(g, ax, ay, 24, AKN_FONT_REGULAR, C_INK, p->bio, aw, 34, 5);
-        ay += lines * 34 + 20;
-    } else {
-        akn_gfx_text(g, ax, ay, 24, AKN_FONT_REGULAR, C_SUBTLE, "No bio yet.");
-        ay += 54;
-    }
+    const akn_activity *a = &s->profile_activity;
+    int self = strcmp(p->relationship, "self") == 0;
+    SDL_Rect clip = { 0, AKN_PROFILE_VIEW_Y, AKN_SCREEN_W, AKN_PROFILE_VIEW_H };
+    SDL_RenderSetClipRect(app->renderer, &clip);
+    int oy = AKN_PROFILE_VIEW_Y + 8 - app->ui.profile_scroll;
     char text[400];
+
+    /* Banner: the user's picture (absent when their details are restricted), else the theme. */
+    akn_rect banner = { AKN_MARGIN_X, oy, 1728, 400 };
+    uint32_t from, to;
+    akn_theme_gradient(p->theme, &from, &to);
+    akn_gfx_gradient(g, banner, 0xFF000000u | from, 0xFF000000u | to, 0);
+    if (picture(app, AKN_IMG_MEDIA, p->banner_image, banner, AKN_FIT_COVER) && p->banner_overlay)
+        akn_gfx_gradient(g, banner, 0x10000000u, 0xA0000000u, 1);
+    akn_gfx_rect(g, (akn_rect){ banner.x, banner.y + banner.h - 4, banner.w, 4 }, 0xFF000000u | p->accent);
+
+    /* Picture overlapping the banner, ringed in the page colour */
+    int acx = AKN_MARGIN_X + 60 + 120, acy = oy + banner.h;
+    akn_gfx_disc(g, acx, acy, 132, 0xFF0A0F1Cu);
+    avatar(app, acx, acy, 120, p->id, p->display_name, p->online_id, p->avatar_image, 1, p->presence.status);
+
+    /* Identity */
+    int ix = AKN_MARGIN_X + 340, iy = oy + banner.h + 20, iw = 1728 - 340;
+    akn_gfx_text_fit(g, ix, iy, 56, AKN_FONT_BOLD, C_INK, p->display_name, iw);
+    iy += 74;
+    snprintf(text, sizeof(text), "@%s", p->online_id);
+    int hw = akn_gfx_text(g, ix, iy, 26, AKN_FONT_REGULAR, C_MUTED, text);
+    const char *rel = self ? "You" : strcmp(p->relationship, "friend") == 0 ? "Friends" : strcmp(p->relationship, "request_sent") == 0 ? "Friend request sent"
+                                    : strcmp(p->relationship, "request_received") == 0                                       ? "Wants to be your friend"
+                                                                                                                              : "";
+    if (rel[0]) pill(app, ix + hw + 18, iy + 1, 0x33000000u | (p->accent & 0xFFFFFF), 0xFF000000u | p->accent, rel);
+    iy += 50;
+    akn_gfx_disc(g, ix + 9, iy + 16, 9, presence_color(p->presence.status));
+    akn_presence_line(&p->presence, unix_now, text, sizeof(text));
+    akn_gfx_text_fit(g, ix + 30, iy, 26, AKN_FONT_BOLD, p->presence.game.present ? 0xFFB7C8FFu : C_INK, text, iw - 30);
+    iy += 48;
+    if (p->badge_count) { /* featured badges as chips, the others as medallions */
+        int bx = ix;
+        for (int i = 0; i < p->badge_count; i++) {
+            if (i < p->featured_badges) {
+                int w = badge_chip(app, p->badge_ids[i], bx, iy);
+                if (w) bx += w + 12;
+            } else if (akn_badge_find(p->badge_ids[i])) {
+                badge_medal(app, p->badge_ids[i], bx, iy - 2, 56);
+                bx += 66;
+            }
+        }
+        iy += 68;
+    }
+    if (p->status_message[0]) {
+        akn_gfx_text_fit(g, ix, iy, 24, AKN_FONT_REGULAR, C_INK, p->status_message, iw);
+        iy += 42;
+    }
+    size_t o = 0;
+    text[0] = '\0';
     if (p->joined_at > 0) {
         char ago[40];
         akn_format_ago(p->joined_at, unix_now, ago, sizeof(ago));
-        snprintf(text, sizeof(text), "joined %s", ago);
-        ay = row(app, ax, ay, aw, "Member", 0, text);
+        o += (size_t)snprintf(text + o, sizeof(text) - o, "Joined %s", ago);
     }
-    if (strcmp(p->relationship, "self") != 0) {
-        snprintf(text, sizeof(text), "%d", p->mutual_friends);
-        ay = row(app, ax, ay, aw, "Mutual friends", 0, text);
+    if (!self && p->mutual_friends > 0 && o < sizeof(text))
+        o += (size_t)snprintf(text + o, sizeof(text) - o, "%s%d mutual friend%s", o ? "  \xC2\xB7  " : "", p->mutual_friends, p->mutual_friends == 1 ? "" : "s");
+    if (p->badges && o < sizeof(text))
+        snprintf(text + o, sizeof(text) - o, "%s%d badge%s", o ? "  \xC2\xB7  " : "", p->badges, p->badges == 1 ? "" : "s");
+    if (text[0]) {
+        akn_gfx_text_fit(g, ix, iy, 22, AKN_FONT_REGULAR, C_SUBTLE, text, iw);
+        iy += 40;
     }
-    snprintf(text, sizeof(text), "%d", p->badges);
-    ay = row(app, ax, ay, aw, "Badges", 0, text);
-    if (p->favorite_count) {
-        size_t o = 0;
-        text[0] = '\0';
-        for (int i = 0; i < p->favorite_count && o + 4 < sizeof(text); i++)
-            o += (size_t)snprintf(text + o, sizeof(text) - o, "%s%s", i ? ", " : "", p->favorites[i]);
-        ay = row(app, ax, ay, aw, "Favourite games", 0, text);
+    if (s->profile_load == AKN_LOAD_ERROR) pill(app, AKN_SCREEN_W - AKN_MARGIN_X - 170, oy + 20, 0xCCF5A524u, 0xFF1A1205u, "NOT UPDATED");
+    int top = iy + 20;
+    if (top < oy + banner.h + 150) top = oy + banner.h + 150;
+
+    /* Left column: now playing, recently played, favourite games */
+    int lx = AKN_MARGIN_X, lw = CARDS_PER_ROW * CARD_W + (CARDS_PER_ROW - 1) * CARD_GAP, ly = top;
+    if (p->restricted) {
+        akn_rect n = { lx, ly, lw, 70 };
+        akn_gfx_rrect(g, n, 16, 0x33F5A524u);
+        akn_gfx_text_fit(g, n.x + 24, n.y + 20, 24, AKN_FONT_REGULAR, C_INK,
+                         strcmp(p->relationship, "blocked") == 0 ? "You blocked this player. Unblock them on the AKENO NETWORK website to see their profile."
+                                                                  : "This player only shares profile details with friends.",
+                         n.w - 48);
+        ly += 100;
     }
-    if (p->has_party) {
-        snprintf(text, sizeof(text), "%s (%d of %d)", p->party_name, p->party_members, p->party_max);
-        row(app, ax, ay, aw, "Party", C_VIOLET, text);
+    if (p->presence.game.present) {
+        const akn_game *gm = &p->presence.game;
+        ly = section_title(app, lx, ly, "NOW PLAYING");
+        akn_rect card = { lx, ly, lw, 210 };
+        panel(app, card);
+        game_art(app, (akn_rect){ card.x + 18, card.y + 18, 309, 174 }, &gm->art, gm->title_id, gm->name, ART_WIDE);
+        akn_gfx_text_fit(g, card.x + 360, card.y + 40, 34, AKN_FONT_BOLD, C_INK, akn_game_label(gm), card.w - 400);
+        char dur[40] = "";
+        if (gm->started_at > 0) akn_format_duration(unix_now - gm->started_at, dur, sizeof(dur));
+        snprintf(text, sizeof(text), "PS5%s%s  \xC2\xB7  %s", dur[0] ? "  \xC2\xB7  playing for " : "", dur, gm->title_id);
+        akn_gfx_text_fit(g, card.x + 360, card.y + 96, 22, AKN_FONT_REGULAR, C_MUTED, text, card.w - 400);
+        ly += card.h + 36;
+    }
+    ly = section_title(app, lx, ly, "RECENTLY PLAYED");
+    if (s->profile_activity_load == AKN_LOAD_OK && a->history_visible && a->recent_count) {
+        for (int i = 0; i < a->recent_count; i++) {
+            const akn_recent_game *r = &a->recent[i];
+            char l1[64], l2[64] = "", ago[40], dur[40];
+            if (r->playing_now) snprintf(l1, sizeof(l1), "Playing now");
+            else {
+                akn_format_ago(r->last_played, unix_now, ago, sizeof(ago));
+                snprintf(l1, sizeof(l1), "Last played %s", ago);
+            }
+            if (r->total_seconds >= 0) {
+                akn_format_duration(r->total_seconds, dur, sizeof(dur));
+                snprintf(l2, sizeof(l2), "%s tracked", dur);
+            }
+            int col = i % CARDS_PER_ROW, rowi = i / CARDS_PER_ROW;
+            game_card(app, lx + col * (CARD_W + CARD_GAP), ly + rowi * (CARD_W * 3 / 2 + 110), CARD_W, &r->art, r->title_id, r->name, l1, l2);
+        }
+        ly += ((a->recent_count + CARDS_PER_ROW - 1) / CARDS_PER_ROW) * (CARD_W * 3 / 2 + 110) + 10;
+    } else {
+        const char *msg = s->profile_activity_load == AKN_LOAD_ERROR ? "Game activity could not be loaded."
+                          : s->profile_activity_load != AKN_LOAD_OK  ? "Loading..."
+                          : !a->history_visible                      ? "This player does not share their game history with you."
+                          : self                                     ? "No games tracked yet. Games appear here when this console detects them."
+                                                                     : "No games played recently.";
+        akn_gfx_text_wrap(g, lx, ly, 24, AKN_FONT_REGULAR, C_MUTED, msg, lw, 34, 2);
+        ly += 80;
+    }
+    if (!p->restricted) {
+        ly = section_title(app, lx, ly, "FAVORITE GAMES");
+        if (p->favorite_count) {
+            for (int i = 0; i < p->favorite_count; i++) {
+                int col = i % CARDS_PER_ROW, rowi = i / CARDS_PER_ROW;
+                game_card(app, lx + col * (CARD_W + CARD_GAP), ly + rowi * (CARD_W * 3 / 2 + 60), CARD_W, &p->favorite_art[i], "", p->favorites[i],
+                          NULL, NULL);
+            }
+            ly += ((p->favorite_count + CARDS_PER_ROW - 1) / CARDS_PER_ROW) * (CARD_W * 3 / 2 + 60) + 10;
+        } else {
+            akn_gfx_text(g, lx, ly, 24, AKN_FONT_REGULAR, C_MUTED,
+                         self ? "Add favorite games in your profile settings on the AKENO NETWORK website." : "None listed.");
+            ly += 60;
+        }
     }
 
-    /* Games */
-    akn_rect games = { 1136, 396, 688, 554 };
-    panel(app, games);
-    int gx = games.x + 36, gw = games.w - 72, gy = games.y + 30;
-    akn_gfx_text(g, gx, gy, 20, AKN_FONT_BOLD, C_SUBTLE, "GAMES");
-    gy += 40;
-    const akn_activity *a = &s->profile_activity;
-    if (p->presence.game.present) {
-        snprintf(text, sizeof(text), "Now: %s", akn_game_label(&p->presence.game));
-        akn_gfx_text_fit(g, gx, gy, 26, AKN_FONT_BOLD, 0xFFB7C8FFu, text, gw);
-    } else {
-        akn_gfx_text(g, gx, gy, 24, AKN_FONT_REGULAR, C_MUTED, "Not playing right now");
-    }
-    gy += 54;
-    if (s->profile_activity_load == AKN_LOAD_OK && a->history_visible && a->recent_count) {
-        for (int i = 0; i < a->recent_count && i < 6; i++) {
-            const akn_recent_game *r = &a->recent[i];
-            akn_gfx_text_fit(g, gx, gy, 23, AKN_FONT_BOLD, C_INK, r->name[0] ? r->name : r->title_id, gw);
-            char ago[40], dur[40];
-            akn_format_ago(r->last_played, unix_now, ago, sizeof(ago));
-            if (r->playing_now) snprintf(text, sizeof(text), "playing now");
-            else if (r->total_seconds >= 0) {
-                akn_format_duration(r->total_seconds, dur, sizeof(dur));
-                snprintf(text, sizeof(text), "%s  \xC2\xB7  %s in total", ago, dur);
-            } else snprintf(text, sizeof(text), "%s", ago);
-            akn_gfx_text_fit(g, gx, gy + 30, 20, AKN_FONT_REGULAR, C_MUTED, text, gw);
-            gy += 70;
+    /* Right column: gaming statistics, about, party */
+    int rx = lx + lw + 40, rw = AKN_SCREEN_W - AKN_MARGIN_X - rx, ry = top;
+    if (s->profile_activity_load == AKN_LOAD_OK && a->history_visible && a->total_sessions) {
+        akn_rect st = { rx, ry, rw, 290 };
+        panel(app, st);
+        int sy = section_title(app, st.x + 28, st.y + 24, "GAMING ACTIVITY");
+        char dur[40];
+        if (a->total_seconds < 0) snprintf(dur, sizeof(dur), "Hidden");
+        else akn_format_duration(a->total_seconds, dur, sizeof(dur));
+        const char *labels[4] = { "Tracked playtime", "Games played", "Sessions", "Tracked since" };
+        char vals[4][48];
+        snprintf(vals[0], sizeof(vals[0]), "%s", dur);
+        snprintf(vals[1], sizeof(vals[1]), "%d", a->total_games);
+        snprintf(vals[2], sizeof(vals[2]), "%d", a->total_sessions);
+        if (a->tracked_since > 0) akn_format_ago(a->tracked_since, unix_now, vals[3], sizeof(vals[3]));
+        else snprintf(vals[3], sizeof(vals[3]), "-");
+        for (int i = 0; i < 4; i++) {
+            akn_gfx_text(g, st.x + 28, sy + i * 52, 22, AKN_FONT_REGULAR, C_MUTED, labels[i]);
+            akn_gfx_text_fit(g, st.x + 270, sy + i * 52, 24, AKN_FONT_BOLD, C_INK, vals[i], st.w - 300);
         }
-    } else if (s->profile_activity_load == AKN_LOAD_OK) {
-        akn_gfx_text_wrap(g, gx, gy, 22, AKN_FONT_REGULAR, C_SUBTLE,
-                          a->history_visible ? "No games tracked yet." : "The game history is private.", gw, 30, 2);
-    } else if (s->profile_activity_load == AKN_LOAD_ERROR) {
-        akn_gfx_text(g, gx, gy, 22, AKN_FONT_REGULAR, C_SUBTLE, "Game history not available.");
+        ry += st.h + 24;
+    }
+    if (!p->restricted) {
+        int lines_h = 0;
+        akn_rect ab = { rx, ry, rw, 0 };
+        /* measure by drawing into a clipped-away area is not possible: size the panel for up to 8 lines */
+        const char *bio = p->bio[0] ? p->bio : self ? "You have not written a bio yet. Add one on the AKENO NETWORK website." : "No bio yet.";
+        lines_h = 8 * 34;
+        ab.h = 90 + lines_h;
+        panel(app, ab);
+        int by = section_title(app, ab.x + 28, ab.y + 24, "ABOUT");
+        int n = akn_gfx_text_wrap(g, ab.x + 28, by, 24, AKN_FONT_REGULAR, p->bio[0] ? C_INK : C_MUTED, bio, ab.w - 56, 34, 8);
+        ab.h = 90 + n * 34;
+        ry += ab.h + 24;
+    }
+    if (p->has_party) {
+        akn_rect pa = { rx, ry, rw, 150 };
+        panel(app, pa);
+        int py = section_title(app, pa.x + 28, pa.y + 24, "PARTY");
+        akn_gfx_text_fit(g, pa.x + 28, py, 26, AKN_FONT_BOLD, C_INK, p->party_name[0] ? p->party_name : "Party", pa.w - 56);
+        snprintf(text, sizeof(text), "%d of %d members", p->party_members, p->party_max);
+        akn_gfx_text(g, pa.x + 28, py + 40, 22, AKN_FONT_REGULAR, C_MUTED, text);
+        ry += pa.h + 24;
+    }
+    if (self) {
+        akn_gfx_text_wrap(g, rx, ry, 20, AKN_FONT_REGULAR, C_SUBTLE,
+                          "Edit your picture, banner, theme, badges and bio on the AKENO NETWORK website.", rw, 28, 3);
+        ry += 90;
+    }
+    SDL_RenderSetClipRect(app->renderer, NULL);
+
+    int bottom = (ly > ry ? ly : ry) - oy + 40;
+    akn_ui_set_profile_height(&app->ui, bottom);
+    if (bottom > AKN_PROFILE_VIEW_H) { /* scroll position */
+        int track_h = AKN_PROFILE_VIEW_H - 40;
+        int knob_h = track_h * AKN_PROFILE_VIEW_H / bottom;
+        int knob_y = AKN_PROFILE_VIEW_Y + 20 + (track_h - knob_h) * app->ui.profile_scroll / (bottom - AKN_PROFILE_VIEW_H);
+        akn_gfx_rrect(g, (akn_rect){ AKN_SCREEN_W - 40, AKN_PROFILE_VIEW_Y + 20, 6, track_h }, 3, C_LINE);
+        akn_gfx_rrect(g, (akn_rect){ AKN_SCREEN_W - 40, knob_y, 6, knob_h }, 3, C_MUTED);
     }
 }
 
@@ -646,6 +859,9 @@ static void draw_activity(akn_app *app, const akn_social *s, uint64_t now) {
     akn_gfx_text(g, x, c.y + 28, 20, AKN_FONT_BOLD, C_SUBTLE, "THIS CONSOLE");
     const akn_daemon_info *d = &s->daemon;
     if (d->console_game.present) {
+        game_art(app, (akn_rect){ x, c.y + 66, 140, 140 }, &d->console_game.art, d->console_game.title_id, d->console_game.name, ART_ICON);
+        x += 166;
+        w -= 166;
         snprintf(text, sizeof(text), "Playing %s", akn_game_label(&d->console_game));
         akn_gfx_text_fit(g, x, c.y + 70, 34, AKN_FONT_BOLD, 0xFFB7C8FFu, text, w);
         char dur[40];
@@ -702,9 +918,11 @@ static void draw_activity(akn_app *app, const akn_social *s, uint64_t now) {
         akn_gfx_text_fit(g, gx, gy, 22, AKN_FONT_REGULAR, C_MUTED, text, gw);
         gy += 50;
         if (!a->recent_count) akn_gfx_text(g, gx, gy, 24, AKN_FONT_REGULAR, C_SUBTLE, "No games tracked yet.");
-        for (int i = 0; i < a->recent_count && i < 7; i++) {
+        for (int i = 0; i < a->recent_count && i < 6; i++) {
             const akn_recent_game *r = &a->recent[i];
-            akn_gfx_text_fit(g, gx, gy, 24, AKN_FONT_BOLD, C_INK, r->name[0] ? r->name : r->title_id, gw - 200);
+            game_art(app, (akn_rect){ gx, gy - 4, 56, 84 }, &r->art, r->title_id, r->name, ART_COVER);
+            int tx = gx + 76, tw = gw - 76;
+            akn_gfx_text_fit(g, tx, gy + 8, 24, AKN_FONT_BOLD, C_INK, r->name[0] ? r->name : r->title_id, tw);
             char ago[40];
             akn_format_ago(r->last_played, unix_now, ago, sizeof(ago));
             if (r->playing_now) snprintf(text, sizeof(text), "playing now");
@@ -712,8 +930,8 @@ static void draw_activity(akn_app *app, const akn_social *s, uint64_t now) {
                 akn_format_duration(r->total_seconds, dur, sizeof(dur));
                 snprintf(text, sizeof(text), "%s  \xC2\xB7  %s", ago, dur);
             } else snprintf(text, sizeof(text), "%s", ago);
-            akn_gfx_text_fit(g, gx, gy + 32, 20, AKN_FONT_REGULAR, C_MUTED, text, gw);
-            gy += 74;
+            akn_gfx_text_fit(g, tx, gy + 42, 20, AKN_FONT_REGULAR, C_MUTED, text, tw);
+            gy += 96;
         }
     } else if (s->own_activity_load == AKN_LOAD_ERROR) {
         akn_gfx_text(g, gx, gy, 24, AKN_FONT_REGULAR, C_MUTED, "Your game history could not be loaded.");
@@ -746,11 +964,21 @@ static const char *audio_summary(akn_app *app, uint32_t *color) {
 static void draw_home(akn_app *app, const akn_account_view *acc, uint64_t now) {
     akn_gfx *g = app->gfx;
     if (acc->state == AKN_ACC_SIGNED_IN) {
-        akn_gfx_text(g, AKN_MARGIN_X, 164, 28, AKN_FONT_REGULAR, C_MUTED, "Welcome back,");
-        akn_gfx_text_fit(g, AKN_MARGIN_X, 204, 72, AKN_FONT_BOLD, C_INK, acc->display_name[0] ? acc->display_name : acc->online_id, 1080);
+        /* your own picture, once your profile has loaded through the daemon */
+        char image[33] = "", user_id[40] = "";
+        SDL_LockMutex(app->lock);
+        if (app->social.me_load == AKN_LOAD_OK) {
+            snprintf(image, sizeof(image), "%s", app->social.me.avatar_image);
+            snprintf(user_id, sizeof(user_id), "%s", app->social.me.id);
+        }
+        SDL_UnlockMutex(app->lock);
+        avatar(app, AKN_MARGIN_X + 74, 248, 74, user_id, acc->display_name, acc->online_id, image, 0, AKN_PRES_ONLINE);
+        int tx = AKN_MARGIN_X + 180;
+        akn_gfx_text(g, tx, 164, 28, AKN_FONT_REGULAR, C_MUTED, "Welcome back,");
+        akn_gfx_text_fit(g, tx, 204, 72, AKN_FONT_BOLD, C_INK, acc->display_name[0] ? acc->display_name : acc->online_id, 900);
         char line[160];
         snprintf(line, sizeof(line), "@%s  \xC2\xB7  signed in through this console's AKENO pairing", acc->online_id);
-        akn_gfx_text_fit(g, AKN_MARGIN_X, 300, 26, AKN_FONT_REGULAR, C_MUTED, line, 1080);
+        akn_gfx_text_fit(g, tx, 300, 26, AKN_FONT_REGULAR, C_MUTED, line, 900);
     } else {
         akn_gfx_text(g, AKN_MARGIN_X, 164, 28, AKN_FONT_REGULAR, C_MUTED, "AKENO NETWORK for PS5");
         akn_gfx_text(g, AKN_MARGIN_X, 204, 72, AKN_FONT_BOLD, C_INK, "Native");

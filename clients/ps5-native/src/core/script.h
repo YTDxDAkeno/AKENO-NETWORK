@@ -16,6 +16,7 @@
  *   until audio|account <ms>  wait until the audio test / connection check is finished
  *   until ipc|friends|profile|activity <ms>
  *                             wait until the daemon interface was checked / that data has loaded
+ *   until pictures <ms>       wait until no picture asked for is still loading
  *   expect text <text...>     fail unless the last frame drew this text (PC capture of text runs)
  *   expect notext <text...>   fail if it did
  *   until text <ms> <text...> wait until a frame draws this text
@@ -50,6 +51,7 @@ typedef enum {
     AKN_STEP_UNTIL_FRIENDS,
     AKN_STEP_UNTIL_PROFILE,
     AKN_STEP_UNTIL_ACTIVITY,
+    AKN_STEP_UNTIL_PICTURES,
     AKN_STEP_EXPECT_TEXT,
     AKN_STEP_EXPECT_NOTEXT,
     AKN_STEP_UNTIL_TEXT,

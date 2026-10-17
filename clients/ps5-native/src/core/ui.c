@@ -156,6 +156,17 @@ static void scroll_to_focus(akn_ui *ui, akn_screen screen) {
     if (*top < 0) *top = 0;
 }
 
+static void clamp_profile_scroll(akn_ui *ui) {
+    int max = ui->profile_content_h - AKN_PROFILE_VIEW_H;
+    if (ui->profile_scroll > max) ui->profile_scroll = max;
+    if (ui->profile_scroll < 0) ui->profile_scroll = 0;
+}
+
+void akn_ui_set_profile_height(akn_ui *ui, int content_h) {
+    ui->profile_content_h = content_h;
+    clamp_profile_scroll(ui);
+}
+
 void akn_ui_set_list_count(akn_ui *ui, akn_screen screen, int count) {
     if (!akn_ui_is_list(screen)) return;
     ui->list_count[screen] = count < 0 ? 0 : count;
@@ -272,6 +283,7 @@ void akn_ui_toast(akn_ui *ui, const char *text, uint64_t now_ms, unsigned durati
 
 void akn_ui_open_screen(akn_ui *ui, akn_screen screen) {
     if (screen < 0 || screen >= AKN_SCREEN_COUNT) return;
+    if (screen == AKN_SCREEN_PROFILE && ui->screen != AKN_SCREEN_PROFILE) ui->profile_scroll = 0;
     ui->screen = screen;
     ui->dialog = AKN_DIALOG_NONE;
     ui->back_hold_since = 0;
@@ -392,6 +404,16 @@ akn_cmd akn_ui_handle(akn_ui *ui, const akn_input_event *ev, uint64_t now_ms) {
         akn_screen back = ui->profile_back;
         akn_ui_open_screen(ui, back == AKN_SCREEN_PROFILE ? AKN_SCREEN_HOME : back);
         return AKN_CMD_OPENED_SCREEN;
+    }
+    if (ui->screen == AKN_SCREEN_PROFILE) { /* a long page: up/down scroll it, L1/R1 by a page */
+        int before = ui->profile_scroll;
+        if (ev->button == AKN_BTN_DOWN) ui->profile_scroll += AKN_PROFILE_SCROLL_STEP;
+        else if (ev->button == AKN_BTN_UP) ui->profile_scroll -= AKN_PROFILE_SCROLL_STEP;
+        else if (ev->button == AKN_BTN_R1) ui->profile_scroll += AKN_PROFILE_VIEW_H - 120;
+        else if (ev->button == AKN_BTN_L1) ui->profile_scroll -= AKN_PROFILE_VIEW_H - 120;
+        clamp_profile_scroll(ui);
+        if (ui->profile_scroll != before) ui->focus_moves++;
+        return AKN_CMD_NONE;
     }
     if (akn_ui_is_list(ui->screen)) {
         int count = ui->list_count[ui->screen], before = *focus;

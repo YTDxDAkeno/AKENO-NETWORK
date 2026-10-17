@@ -132,15 +132,35 @@ function runWithSync(env, timeoutMs, actions, dir) {
   });
 }
 
+// Pictures the fake daemon serves through GET /api/media (the server's JPEG "fallback" variant) and
+// GET /api/local-art (a console icon, PNG), in solid colours that the screenshots are checked for.
+const PICTURES = {
+  AVATAR: '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAEAAQADASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD56ooor8iP9FQooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigD/2Q==',
+  BANNER: '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAFAA8ADASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwCvRRRX5IfxeFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQB/9k=',
+  COVER: '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wgARCAHCASwDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAf/xAAWAQEBAQAAAAAAAAAAAAAAAAAABgj/2gAMAwEAAhADEAAAAawM+WoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAH//EABQQAQAAAAAAAAAAAAAAAAAAALD/2gAIAQEAAQUCB2//xAAUEQEAAAAAAAAAAAAAAAAAAACQ/9oACAEDAQE/AQn/AP/EABQRAQAAAAAAAAAAAAAAAAAAAJD/2gAIAQIBAT8BCf8A/8QAFBABAAAAAAAAAAAAAAAAAAAAsP/aAAgBAQAGPwIHb//EABQQAQAAAAAAAAAAAAAAAAAAALD/2gAIAQEAAT8hB2//2gAMAwEAAgADAAAAEAwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww/wD/xAAUEQEAAAAAAAAAAAAAAAAAAACQ/9oACAEDAQE/EAn/AP/EABQRAQAAAAAAAAAAAAAAAAAAAJD/2gAIAQIBAT8QCf8A/8QAFBABAAAAAAAAAAAAAAAAAAAAsP/aAAgBAQABPxAHb//Z',
+  ICON: 'iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHLAAABT0lEQVR4nO3SQQEAEADAQKQWWwNieOwuwR6bZ487yFq/A/jLAHEGiDNAnAHiDBBngDgDxBkgzgBxBogzQJwB4gwQZ4A4A8QZIM4AcQaIM0CcAeIMEGeAOAPEGSDOAHEGiDNAnAHiDBBngDgDxBkgzgBxBogzQJwB4gwQZ4A4A8QZIM4AcQaIM0CcAeIMEGeAOAPEGSDOAHEGiDNAnAHiDBBngDgDxBkgzgBxBogzQJwB4gwQZ4A4A8QZIM4AcQaIM0CcAeIMEGeAOAPEGSDOAHEGiDNAnAHiDBBngDgDxBkgzgBxBogzQJwB4gwQZ4A4A8QZIM4AcQaIM0CcAeIMEGeAOAPEGSDOAHEGiDNAnAHiDBBngDgDxBkgzgBxBogzQJwB4gwQZ4A4A8QZIM4AcQaIM0CcAeIMEGeAOAPEGSDOAHEGiDNAnAHiDBBngLgHmcsDZ+KGMKkAAAAASUVORK5CYII=',
+  ME: '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAEAAQADASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDtaKKK/az+CgooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigD//2Q==',
+};
+const MEDIA = {
+  bobAvatar: 'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1', bobBanner: 'b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2', astroCover: 'c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3',
+  meAvatar: 'd4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4', carolAvatar: 'e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5', danAvatar: 'f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6',
+};
+const MEDIA_DATA = {
+  [MEDIA.bobAvatar]: PICTURES.AVATAR, [MEDIA.bobBanner]: PICTURES.BANNER, [MEDIA.astroCover]: PICTURES.COVER, [MEDIA.meAvatar]: PICTURES.ME,
+  [MEDIA.carolAvatar]: Buffer.from('this is not a picture at all').toString('base64'), // corrupt: initials stay
+  // danAvatar: not on the server (404): initials stay
+};
+const ASTRO_ART = { gameId: 'g-astro', icon: null, cover: MEDIA.astroCover, banner: null };
+
 function presence(status, game = null, lastSeenAt = null) {
   return {
     status, lastSeenAt, activity: null,
-    game: game ? { titleId: game.titleId, name: game.name, platform: 'PS5', startedAt: new Date(Date.now() - 1200000).toISOString(), art: null } : null,
+    game: game ? { titleId: game.titleId, name: game.name, platform: 'PS5', startedAt: new Date(Date.now() - 1200000).toISOString(), art: game.art || null } : null,
   };
 }
 
-function friend(id, onlineId, displayName, pres, statusMessage = '') {
-  return { id, onlineId, displayName, avatar: 'default', avatarImage: null, deleted: false, friendsSince: '2026-01-01T00:00:00.000Z', statusMessage, presence: pres };
+function friend(id, onlineId, displayName, pres, statusMessage = '', avatarImage = null) {
+  return { id, onlineId, displayName, avatar: 'default', avatarImage, deleted: false, friendsSince: '2026-01-01T00:00:00.000Z', statusMessage, presence: pres };
 }
 
 // A fake daemon with the native interface: its key file, the allow-listed routes the native app uses
@@ -148,28 +168,28 @@ function friend(id, onlineId, displayName, pres, statusMessage = '') {
 async function startIpcDaemon(akenoDir) {
   const keyPath = join(akenoDir, 'native.key');
   const newKey = () => createHash('sha256').update(String(Math.random())).digest('hex');
-  const state = { key: newKey(), firstKey: '', seq: 5, events: [], requests: [], rejected: 0 };
+  const state = { key: newKey(), firstKey: '', seq: 5, events: [], requests: [], rejected: 0, media: [], localArt: [] };
   state.firstKey = state.key;
   writeFileSync(keyPath, state.key);
   chmodSync(keyPath, 0o600);
   const friends = [
-    friend('u-carol', 'carol', 'Carol', presence('offline', null, new Date(Date.now() - 7200000).toISOString())),
-    friend('u-bob', 'bob', 'Bob', presence('online', { titleId: 'PPSA01234', name: 'Astro Bot' }), 'Ranked tonight'),
+    friend('u-carol', 'carol', 'Carol', presence('offline', null, new Date(Date.now() - 7200000).toISOString()), '', MEDIA.carolAvatar),
+    friend('u-bob', 'bob', 'Bob', presence('online', { titleId: 'PPSA01234', name: 'Astro Bot', art: ASTRO_ART }), 'Ranked tonight', MEDIA.bobAvatar),
     friend('u-ada', 'ada', 'Ada Lovelace', presence('online')),
-    friend('u-dan', 'dan', 'Dan', presence('away')),
+    friend('u-dan', 'dan', 'Dan', presence('away'), '', MEDIA.danAvatar),
   ];
   for (let i = 1; i <= 8; i++) friends.push(friend(`u-f${i}`, `friend_0${i}`, `Friend ${i}`, presence('offline')));
   const profile = (user, extra) => ({
-    user: { id: user.id, onlineId: user.onlineId, displayName: user.displayName, avatar: 'default', avatarImage: null, deleted: false },
+    user: { id: user.id, onlineId: user.onlineId, displayName: user.displayName, avatar: 'default', avatarImage: user.avatarImage || null, deleted: false },
     presence: user.presence, joinedAt: '2026-03-01T10:00:00.000Z', restricted: false, bio: '', statusMessage: user.statusMessage || null,
     favoriteGames: [], favoriteGameDetails: [], relationship: { state: 'friend', friendRequestId: null, canMessage: true, canSendFriendRequest: false },
     mutualFriendCount: 1, mutualFriends: [], appearance: { theme: 'default', accentColor: null, bannerImage: null, bannerOverlay: false },
     badges: [], featuredBadges: [], party: null, ...extra,
   });
-  const me = { id: 'u1', onlineId: 'akeno_tester', displayName: 'Akeno Tester', presence: presence('online'), statusMessage: '' };
+  const me = { id: 'u1', onlineId: 'akeno_tester', displayName: 'Akeno Tester', presence: presence('online'), statusMessage: '', avatarImage: MEDIA.meAvatar };
   const activity = (games) => ({
     current: null, historyVisible: true, playtimeVisible: true, recentSessions: [], trackedSince: '2026-01-01T00:00:00.000Z',
-    recentGames: games.map((g) => ({ titleId: g[0], name: g[1], platform: 'PS5', art: null, lastPlayedAt: new Date(Date.now() - 86400000).toISOString(),
+    recentGames: games.map((g) => ({ titleId: g[0], name: g[1], platform: 'PS5', art: g[3] || null, lastPlayedAt: new Date(Date.now() - 86400000).toISOString(),
       lastSessionSeconds: 3600, totalSeconds: g[2], sessionCount: 3, playingNow: false })),
     totals: { seconds: games.reduce((s, g) => s + g[2], 0), games: games.length, sessions: 3 * games.length },
   });
@@ -198,19 +218,39 @@ async function startIpcDaemon(akenoDir) {
       const after = Number(url.searchParams.get('after') || 0);
       return json(res, 200, { ok: true, next: state.seq, gap: false, events: state.events.filter((e) => e.seq > after) });
     }
+    if (url.pathname === '/api/media') {
+      const id = url.searchParams.get('id');
+      state.media.push({ id, variant: url.searchParams.get('v') });
+      if (!MEDIA_DATA[id]) return json(res, 404, { ok: false, error: { code: 'NOT_FOUND', message: 'The image could not be loaded.' } });
+      return json(res, 200, { ok: true, type: 'image/jpeg', data: MEDIA_DATA[id] });
+    }
+    if (url.pathname === '/api/local-art') {
+      const title = url.searchParams.get('title');
+      state.localArt.push(title);
+      if (title !== 'CUSA00001') return json(res, 404, { ok: false, error: { code: 'NOT_FOUND', message: 'No icon for this title on this console.' } });
+      return json(res, 200, { ok: true, type: 'image/png', source: '/system_data/priv/appmeta/CUSA00001/icon0.png', data: PICTURES.ICON });
+    }
     if (url.pathname === '/api/v1/friends') return proxy(res, { friends });
     if (url.pathname === '/api/v1/friends/requests') return proxy(res, { incoming: [{ id: 'r1' }], outgoing: [] });
     if (url.pathname === '/api/v1/users/akeno_tester') return proxy(res, profile(me, { relationship: { state: 'self' } }));
-    if (url.pathname === '/api/v1/users/akeno_tester/activity') return proxy(res, activity([['PPSA05555', 'Gran Turismo 7', 36000]]));
+    if (url.pathname === '/api/v1/users/akeno_tester/activity') return proxy(res, activity([['PPSA05555', 'Gran Turismo 7', 36000, ASTRO_ART]]));
     const m = /^\/api\/v1\/users\/(u-[a-z0-9]+)(\/activity)?$/.exec(url.pathname);
     const f = m && friends.find((x) => x.id === m[1]);
     if (f && m[2]) return proxy(res, activity([['PPSA01234', 'Astro Bot', 5400]]));
-    if (f) return proxy(res, profile(f, f.id === 'u-bob' ? { bio: 'Speedrunner.', favoriteGames: ['Astro Bot'], party: { id: 'p1', name: 'Friday crew', memberCount: 3, maxMembers: 8, isMember: false } } : {}));
+    if (f) return proxy(res, profile(f, f.id === 'u-bob' ? {
+      bio: 'Speedrunner.', favoriteGames: ['Astro Bot'], favoriteGameDetails: [{ name: 'Astro Bot', art: ASTRO_ART }],
+      party: { id: 'p1', name: 'Friday crew', memberCount: 3, maxMembers: 8, isMember: false },
+      appearance: { theme: 'emerald', accentColor: null, bannerImage: MEDIA.bobBanner, bannerOverlay: false },
+      badges: [{ id: 'founder', awardedAt: '2026-01-01T00:00:00.000Z' }, { id: 'ps5_alpha_tester', awardedAt: '2026-02-01T00:00:00.000Z' }],
+      featuredBadges: ['ps5_alpha_tester'],
+    } : {}));
     return json(res, 403, { ok: false, error: { code: 'NOT_ALLOWED_FOR_NATIVE', message: 'no' } });
   });
   return {
     port: server.address().port,
     requests: state.requests,
+    media: state.media,
+    localArt: state.localArt,
     get key() { return state.key; },
     get firstKey() { return state.firstKey; },
     get rejected() { return state.rejected; },
@@ -421,15 +461,16 @@ async function main() {
   const ipcEnv = { ...env, AKENO_NATIVE_DAEMON_PORT: String(ipc.port), AKENO_NATIVE_SYNC_DIR: root };
   const script4 = [
     'until ipc 10000', 'until friends 10000', 'wait 300', 'expect text Live from the AKENO daemon', 'expect text 3 ONLINE',
-    `shot ${shots}/home-ipc.png`,
+    'wait 600', 'until pictures 10000', `shot ${shots}/home-ipc.png`,
     // Friends: sorted (online and playing first), details of the focused friend, scrolling
     'pad cross', 'expect screen friends', 'until friends 10000', 'wait 300', 'expect focus row',
     'expect text Bob', 'expect text Playing Astro Bot', 'expect text Ranked tonight', 'expect text 1 friend request waiting',
-    'expect text 1–7 of 12', `shot ${shots}/friends.png`,
+    'expect text 1–7 of 12', 'until pictures 10000', `shot ${shots}/friends.png`,
     'padhold down 900', 'pad r1', 'expect text 6–12 of 12', 'pad l1', 'pad l1', 'expect text 1–7 of 12',
     // a friend's profile and back to the same row
-    'pad cross', 'expect screen profile', 'until profile 10000', 'wait 300', 'expect text Speedrunner.', 'expect text Friday crew (3 of 8)',
-    'expect text Astro Bot', 'expect text @bob', `shot ${shots}/profile.png`, 'pad triangle', 'until profile 10000',
+    'pad cross', 'expect screen profile', 'until profile 10000', 'wait 300', 'expect text Speedrunner.', 'expect text Friday crew', 'expect text 3 of 8 members',
+    'expect text Astro Bot', 'expect text @bob', 'expect text PS5 Alpha Tester', 'until pictures 10000',
+    `shot ${shots}/profile.png`, 'pad triangle', 'until profile 10000',
     'pad circle', 'expect screen friends', 'expect text Bob',
     // a realtime presence change arrives through the daemon's event ring
     'expect notext Playing Zeta Racer', 'sync carol-online', 'until text 8000 Playing Zeta Racer', 'pad circle', 'expect screen home',
@@ -440,7 +481,7 @@ async function main() {
     // Activity: this console's game (daemon detection), your games, friends playing now
     'pad right', 'expect focus activity', 'pad cross', 'expect screen activity', 'until activity 10000', 'wait 300',
     'expect text Playing Test Game', 'expect text YOUR RECENT GAMES', 'expect text Gran Turismo 7', 'expect text FRIENDS PLAYING NOW',
-    `shot ${shots}/activity.png`, 'pad down', 'pad cross', 'expect screen profile', 'until profile 10000', 'wait 300', 'expect text @carol',
+    'until pictures 10000', `shot ${shots}/activity.png`, 'pad down', 'pad cross', 'expect screen profile', 'until profile 10000', 'wait 300', 'expect text @carol',
     'pad circle', 'expect screen activity', 'pad circle', 'expect screen home',
     // the daemon restarts with a new key: AKENO Native reads it again and carries on
     // (Dan's new game is only served by the restarted daemon, so seeing it proves the reconnect.)
@@ -486,6 +527,32 @@ async function main() {
   check(near(friendsShot.pixel(96 - 5 + 1, 290 + 40), [0x4f, 0x7c, 0xff], 40), 'friends: focus ring on the first row');
   const av = friendsShot.pixel(96 + 50 - 24, 290 + 42);
   check(Math.max(...av.slice(0, 3)) - Math.min(...av.slice(0, 3)) > 60, `friends: a coloured avatar is drawn (${av})`);
+
+  // Pictures: real profile pictures, banner, game artwork and the console's icon, drawn from the
+  // daemon's answers; a corrupt and a missing picture leave the initials; nothing about them logged.
+  check(near(av, [224, 16, 16], 40), `friends: Bob's profile picture (red) on his row (${av})`);
+  check(near(friendsShot.pixel(96 + 1000 - 76 + 30, 290 + 42), [250, 200, 20], 40), 'friends: Astro Bot artwork on the row of a friend playing it');
+  const profileShot = readPng(join(shots, 'profile.png'));
+  check(near(profileShot.pixel(276, 450), [224, 16, 16], 40), `profile: Bob's picture in the large circle (${profileShot.pixel(276, 450)})`);
+  check(near(profileShot.pixel(1000, 250), [16, 192, 64], 40), `profile: Bob's banner (${profileShot.pixel(1000, 250)})`);
+  check(!near(profileShot.pixel(276 - 118, 528 - 118), [224, 16, 16], 60), 'profile: the picture is a circle (corner not filled)');
+  const homeIpc = readPng(join(shots, 'home-ipc.png'));
+  check(near(homeIpc.pixel(96 + 74, 248), [20, 200, 220], 40), `home: your own profile picture (${homeIpc.pixel(96 + 74, 248)})`);
+  const activityShot = readPng(join(shots, 'activity.png'));
+  check(near(activityShot.pixel(96 + 36 + 70, 290 + 66 + 70), [240, 120, 0], 40), `activity: this console's icon of the running game (${activityShot.pixel(96 + 36 + 70, 290 + 66 + 70)})`);
+  check(near(activityShot.pixel(976 + 36 + 28, 452), [250, 200, 20], 40), `activity: the cover of a recent game (${activityShot.pixel(976 + 36 + 28, 452)})`);
+  check(ipc.media.length > 0 && ipc.media.every((m) => m.variant === 'fallback'), 'pictures: only the JPEG variant is asked for');
+  check(ipc.media.every((m) => /^[0-9a-f]{32}$/.test(m.id) && Object.values(MEDIA).includes(m.id)), 'pictures: only media IDs from the server answers');
+  const fetches = (id) => ipc.media.filter((m) => m.id === id).length;
+  check(fetches(MEDIA.carolAvatar) >= 1 && fetches(MEDIA.carolAvatar) <= 3, `pictures: a corrupt picture is not asked for again and again (${fetches(MEDIA.carolAvatar)})`);
+  check(fetches(MEDIA.danAvatar) >= 1 && fetches(MEDIA.danAvatar) <= 3, `pictures: a missing picture is not asked for again and again (${fetches(MEDIA.danAvatar)})`);
+  check(ipc.localArt.every((t) => /^[A-Z]{4}\d{5}$/.test(t)), 'pictures: local art only for title IDs');
+  check(log4.includes('images.failed: picture: decode:'), 'log 4: the corrupt picture is reported');
+  check(/Pictures:\s+\d+ asked for, [1-9]\d* shown, [1-9]\d* missing or unreadable/.test(report4), `report 4: picture counters\n${report4}`);
+  for (const text of [report4, log4]) {
+    for (const id of Object.values(MEDIA)) check(!text.includes(id), 'no media ID in report or log');
+    check(!text.includes('appmeta'), 'no console icon path in report or log');
+  }
 
   // ---- Run 5: an unsafe key file is not used --------------------------------------------------------
   ipc.requests.length = 0;

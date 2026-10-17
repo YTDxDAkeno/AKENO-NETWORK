@@ -173,7 +173,7 @@ static void connect_daemon(worker_ctx *w) {
     s->events_after = info.events_next;
     s->reconnects++;
     /* (Re)load what is shown; events before this moment are not needed. */
-    s->want |= AKN_WANT_STATE | AKN_WANT_FRIENDS;
+    s->want |= AKN_WANT_STATE | AKN_WANT_FRIENDS | AKN_WANT_ME;
     if (s->profile_handle[0]) s->want |= AKN_WANT_PROFILE;
     if (s->own_activity_load != AKN_LOAD_NONE) s->want |= AKN_WANT_OWN_ACTIVITY;
     SDL_UnlockMutex(app->lock);
@@ -301,6 +301,28 @@ static void load_own_activity(worker_ctx *w) {
     free(a);
 }
 
+/* Your own profile summary: picture and display name for Home. */
+static void load_me(worker_ctx *w) {
+    akn_app *app = w->app;
+    char handle[48], path[160], seg[100], err[200];
+    SDL_LockMutex(app->lock);
+    snprintf(handle, sizeof(handle), "%s", app->social.daemon.online_id);
+    SDL_UnlockMutex(app->lock);
+    if (!handle[0]) return;
+    encode_segment(handle, seg, sizeof(seg));
+    snprintf(path, sizeof(path), "/api/v1/users/%s", seg);
+    akn_profile *p = calloc(1, sizeof(*p));
+    const akeno_json *data;
+    akeno_json_doc *doc = p ? get_proxy(w, path, &data, err, sizeof(err), NULL) : NULL;
+    int ok = doc && akn_fill_profile(data, p) == 0;
+    akeno_json_free(doc);
+    SDL_LockMutex(app->lock);
+    if (ok) app->social.me = *p;
+    app->social.me_load = ok ? AKN_LOAD_OK : AKN_LOAD_ERROR;
+    SDL_UnlockMutex(app->lock);
+    free(p);
+}
+
 static void poll_events(worker_ctx *w) {
     akn_app *app = w->app;
     char path[80];
@@ -324,6 +346,7 @@ static void poll_events(worker_ctx *w) {
         if (r.presence_applied) s->friends_gen++;
         if (r.flags & (AKN_EVF_FRIENDS | AKN_EVF_GAP)) s->want |= AKN_WANT_FRIENDS;
         if ((r.flags & (AKN_EVF_PROFILE | AKN_EVF_GAP)) && s->profile_handle[0]) s->want |= AKN_WANT_PROFILE;
+        if (r.flags & (AKN_EVF_GAP | AKN_EVF_STATE)) s->want |= AKN_WANT_ME;
         if (r.flags & (AKN_EVF_STATE | AKN_EVF_ACTIVITY | AKN_EVF_GAP | AKN_EVF_REVOKED)) s->want |= AKN_WANT_STATE;
         if ((r.flags & (AKN_EVF_ACTIVITY | AKN_EVF_GAP)) && s->own_activity_load != AKN_LOAD_NONE) s->want |= AKN_WANT_OWN_ACTIVITY;
     }
@@ -371,6 +394,9 @@ static int social_worker(void *arg) {
         } else if (s->want & AKN_WANT_OWN_ACTIVITY) {
             s->want &= ~(unsigned)AKN_WANT_OWN_ACTIVITY;
             job = load_own_activity;
+        } else if (s->want & AKN_WANT_ME) {
+            s->want &= ~(unsigned)AKN_WANT_ME;
+            job = load_me;
         } else if (now >= next_events) {
             job = poll_events;
             next_events = now + EVENTS_MS;

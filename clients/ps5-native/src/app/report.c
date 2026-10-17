@@ -124,6 +124,17 @@ void akn_report_build(akn_app *app, char *out, size_t out_len) {
         s->event_polls, s->events, s->reconnects);
     SDL_UnlockMutex(app->lock);
 
+    /* Counts only: never which pictures (media IDs or titles). */
+    akn_images_stats is = app->images_final;
+    if (app->images) akn_images_get_stats(app->images, &is);
+    add(&b, "\n[Pictures]\n");
+    add(&b, "Loader:           %s\n", !app->images_started ? "not started"
+                                      : app->images        ? "through the AKENO daemon (JPEG/PNG, memory only)"
+                                                           : "stopped");
+    add(&b, "Pictures:         %lu asked for, %lu shown, %lu missing or unreadable, %lu dropped, %lu evicted\n", is.requested, is.loaded,
+        is.failed, is.dropped, is.evicted);
+    add(&b, "Memory:           %d textures, %zu KiB (budget %zu KiB)\n", is.resident, is.bytes / 1024, AKN_IMAGES_BUDGET / 1024);
+
     add(&b, "\n[Recent log]\n");
     char lines[AKN_LOG_RING][AKN_LOG_LINE];
     int n = akn_log_recent(&app->log, lines, AKN_LOG_RING);

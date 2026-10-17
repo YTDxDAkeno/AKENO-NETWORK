@@ -21,7 +21,7 @@ set(PS5_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../ps5")
 set(AKN_THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party" CACHE PATH "Output of scripts/fetch-deps.sh")
 set(AKENO_THIRD_PARTY_DIR "${PS5_DIR}/third_party" CACHE PATH "mbedTLS and CA bundle (clients/ps5/scripts/fetch-deps.sh)")
 
-foreach(input stb_truetype.h inter/Inter-Regular.ttf inter/Inter-Bold.ttf)
+foreach(input stb_truetype.h stb_image.h inter/Inter-Regular.ttf inter/Inter-Bold.ttf)
   if(NOT EXISTS "${AKN_THIRD_PARTY_DIR}/${input}")
     message(FATAL_ERROR "${input} is missing; run clients/ps5-native/scripts/fetch-deps.sh")
   endif()
@@ -68,14 +68,20 @@ target_include_directories(akn_akeno PUBLIC "${PS5_DIR}/include" PRIVATE "${PS5_
 target_compile_options(akn_akeno PRIVATE -Wall -Wextra ${AKN_HARDENING})
 target_link_libraries(akn_akeno PUBLIC m Threads::Threads)
 
+# ---- stb_image (pinned by scripts/fetch-deps.sh), JPEG and PNG only: third-party code -------------
+add_library(akn_stbimage STATIC src/third/stb_image_impl.c)
+target_include_directories(akn_stbimage PRIVATE "${AKN_THIRD_PARTY_DIR}" src/core)
+target_compile_options(akn_stbimage PRIVATE -w)
+
 # ---- Portable core (no SDL): unit-tested -------------------------------------------------------
 add_library(akn_core STATIC
   src/core/nav.c src/core/input.c src/core/audio_test.c src/core/redact.c src/core/log.c src/core/context.c
   src/core/logo.c src/core/png.c src/core/text.c src/core/ui.c src/core/script.c src/core/account.c src/core/social.c
+  src/core/image.c src/core/vector.c src/core/badges.c
   "${PS5_DIR}/app/audio_lab_pcm.c" "${PS5_DIR}/app/game_detect.c")
 target_include_directories(akn_core PUBLIC src/core "${PS5_DIR}/app")
 target_compile_options(akn_core PRIVATE ${AKN_WARNINGS} ${AKN_HARDENING})
-target_link_libraries(akn_core PUBLIC akn_akeno m Threads::Threads)
+target_link_libraries(akn_core PUBLIC akn_akeno akn_stbimage m Threads::Threads)
 
 # ---- Desktop app (SDL2) -------------------------------------------------------------------------
 find_package(PkgConfig QUIET)
@@ -94,7 +100,7 @@ if(SDL2_FOUND)
   target_compile_options(akn_stb PRIVATE -w) # third-party code
 
   add_executable(akeno-native src/app/main.c src/app/app.c src/app/screens.c src/app/gfx.c src/app/net.c src/app/report.c
-    src/app/ipc.c src/app/social.c src/platform/platform_host.c)
+    src/app/ipc.c src/app/social.c src/app/images.c src/platform/platform_host.c)
   target_include_directories(akeno-native PRIVATE src/app src/platform "${PS5_DIR}/src")
   target_compile_options(akeno-native PRIVATE ${AKN_WARNINGS} ${AKN_HARDENING})
   target_compile_definitions(akeno-native PRIVATE
@@ -116,7 +122,7 @@ target_link_libraries(make-icon PRIVATE akn_core)
 enable_testing()
 add_executable(akn_unit_tests tests/unit/test_main.c tests/unit/test_nav_input.c tests/unit/test_audio.c
   tests/unit/test_redact_context.c tests/unit/test_image_text.c tests/unit/test_ui_script.c tests/unit/test_account.c
-  tests/unit/test_social.c src/app/net.c src/app/ipc.c)
+  tests/unit/test_social.c tests/unit/test_pictures.c src/app/net.c src/app/ipc.c)
 target_include_directories(akn_unit_tests PRIVATE tests/unit src/app src/platform)
 target_compile_options(akn_unit_tests PRIVATE ${AKN_WARNINGS})
 target_link_libraries(akn_unit_tests PRIVATE akn_core)
