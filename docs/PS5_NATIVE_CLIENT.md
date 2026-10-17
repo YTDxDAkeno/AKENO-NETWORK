@@ -14,19 +14,24 @@ remain the working client and the fallback.
 
 | Feature | Implemented | Automated tests (PC) | Verified on a PS5 |
 | --- | --- | --- | --- |
-| Full-screen 1920×1080 UI (SDL2 software renderer), AKENO logo, Inter font | yes | screenshots checked pixel by pixel (headless SDL) | **no** |
+| Full-screen 1920×1080 UI (SDL2 software renderer), AKENO logo, Inter font | yes | screenshots checked pixel by pixel (headless SDL) | **yes** — shown on the TV (12.20) |
 | Builds for the PS5 with the pinned SDK and SDL2, reproducibly | yes | CI builds twice and compares; import gate | n/a |
 | Background-context detection (sent to elfldr → opens nothing, notifies, exits) | yes | unit tests of the classification | **no** (test N1) |
-| DualSense input via SDL (`scePadOpen` error shown verbatim) | yes | SDL virtual controller through SDL's real event path | **no** (test N4) |
+| DualSense input via SDL (`scePadOpen` error shown verbatim) | yes | SDL virtual controller through SDL's real event path | partly — navigation reached the Connection screen; full test N4 not reported |
 | Spatial focus navigation, D-pad repeat, left stick, hold-◯ back, dialogs | yes | unit + UI integration tests | **no** |
 | Controller disconnect banner (SDL removal; on PS5 also the pad's connected flag) | yes | virtual unplug/plug | **no** |
-| Foreground audio test, every return code and pacing recorded | yes | fake system calls; SDL dummy device | **no** (test N5) |
-| Reads the existing pairing read-only; `GET /devices/current`; username on screen | yes | fake server: token sent, file never modified, 401 handled | **no** (test N6) |
-| Daemon liveness probe (`GET /api/instance`) | yes | fake daemon | **no** |
+| Foreground audio test, every return code and pacing recorded | yes | fake system calls; SDL dummy device | **not reported yet** (test N5) |
+| Reads the existing pairing read-only; `GET /devices/current`; username on screen | yes | fake server: token sent, file never modified, 401 handled | **yes** — HTTP 200, pairing valid, signed in, 14 permissions (12.20) |
+| Daemon liveness probe (`GET /api/instance`) | yes | fake daemon | **yes** — "Running, 0.5.0-alpha" (12.20) |
+| Native app in the foreground and the daemon in the background at the same time | yes | — | **yes** (12.20) |
 | Redacted log and report, private files (0600) | yes | unit + integration (no token, host or IP in output) | **no** |
 | Clean exit to the system (`sceSystemServiceLoadExec("exit")`, foreground only) | yes | PC exit paths | **no** (test N7) |
 | Launcher folder with AKENO icon (websrv format) | yes | built in CI | **no** (test N2) |
 | Friends, messages, parties, profiles, voice | Phase 2+ | — | — |
+
+Hardware results on firmware 12.20 (owner report, 2026-10-17):
+[PS5_NATIVE_HARDWARE_RESULTS_FW12.20.md](PS5_NATIVE_HARDWARE_RESULTS_FW12.20.md). The tested
+build is shipped as a byte-verified fallback in every native CI artifact (`fallback/`).
 
 ## Requirements
 
@@ -78,7 +83,7 @@ Enter/Space (✕), Esc/Backspace (◯), Tab (OPTIONS), Q/E (L1/R1).
   mtime and inode after a 401.
 - No realtime connection, presence update or notification from the native app: the daemon keeps
   sole ownership (no duplicates, no races). Phase 2 moves the native app onto the daemon via local
-  IPC ([ADR D6](PS5_NATIVE_ADR.md#d6--phase-2-ipc-target-not-built-yet)).
+  IPC ([PS5_NATIVE_PHASE2.md](PS5_NATIVE_PHASE2.md)).
 - Logs and reports pass through redaction: `ak?_` secrets, `Bearer` values, `X-Akeno-*-Key`
   headers, 32+ digit hex runs and every non-loopback URL host. The server address is described,
   never printed ("https (host hidden)").
@@ -124,7 +129,7 @@ generator (`clients/ps5/app/audio_lab_pcm.c`) and the app-info parser (`game_det
 
 ## Known limitations
 
-- Not run on a PS5 yet: everything in the last column of the status table is open.
+- Only the rows marked yes in the last column of the status table are verified on a PS5.
 - Needs a homebrew launcher for the foreground; none is installed by AKENO.
 - Starting it closes a running game (launcher behaviour); in-game use is not possible this way.
 - Text uses Inter (Latin, Greek, Cyrillic); other scripts show replacement glyphs.

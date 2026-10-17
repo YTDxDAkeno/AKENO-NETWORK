@@ -30,11 +30,12 @@ accounts or production?
 | E11 | OnionHEN and etaHEN embed an `hbldr` derived from the same code for their own components; etaHEN's `/data/homebrew` "Payload Homebrew Apps" menu is commented out (`etaHEN_toolbox.xml`). A documented OnionHEN/etaHEN launcher for websrv-format homebrew was **not found** | [SRC] |
 | E12 | ps5-payload-dev/SDL (`ee4c47d`, zlib): video `sceVideoOutOpen(0xFF…)` + `sceSystemServiceHideSplashScreen`; pad via `scePadInit/Open/ReadState` (ignores the pad's `connected` flag); audio `sceAudioOutOpen(0xFF, MAIN, …)` and ignores `sceAudioOutOutput` results; its `main` wrapper exits with `sceSystemServiceLoadExec("exit")` | [SRC] |
 | E13 | SDL2 builds against the pinned SDK `f5d40f0` with only the software renderer (this session, locally and in CI) | build |
+| E14 | Native 0.1, started from a homebrew launcher, ran in the **foreground** on 12.20 **while the daemon ran in the background**: it reached the daemon's loopback probe (0.5.0-alpha) and the AKENO server over TLS (`GET /devices/current` → 200 with the existing pairing, read-only; signed in; 14 permissions). Owner report 2026-10-17, [results](PS5_NATIVE_HARDWARE_RESULTS_FW12.20.md); audio (N5) and the full controller test (N4) not reported yet | [HW-AKENO] |
 
 **Conclusion.** E2, E3, E5–E8 all point the same way: controller and audible audio are granted to
-the **foreground application process**, not to background payloads. This is consistent but still
-[HYP] for AKENO until the native prototype runs in the foreground on 12.20 — which is exactly what
-Phase 1 measures.
+the **foreground application process**, not to background payloads. E14 confirms the
+foreground native app and the background daemon coexist on 12.20 and share the pairing without
+interfering; whether foreground audio is audible (N5) is still open, so that part stays [HYP].
 
 ## 3. Decisions
 
@@ -105,21 +106,24 @@ not). It never calls `POST /api/instance/show` (that opens the browser). CI fail
 references `akeno_pairing_*`, `akeno_logout`, `akeno_forget_credentials` or `akeno_realtime_run`.
 **No server change, no new endpoint.**
 
-### D6 — Phase 2 IPC target (not built yet)
+### D6 — Phase 2 IPC
 
-The native app becomes a client of the daemon instead of a second server client:
+The native app becomes a client of the daemon instead of a second server client (detailed design,
+security analysis and increments: [PS5_NATIVE_PHASE2.md](PS5_NATIVE_PHASE2.md)):
 
 ```
 Native app ──(127.0.0.1:8642, X-Akeno-Native-Key from /data/akeno/native.key 0600)──▶ daemon
-            ◀── server-sent event stream (messages, presence, party, notifications) ───
+            ◀── event ring: messages, presence, party, notifications, game activity  ───
 daemon ──(single HTTPS/WSS session, device token)──▶ AKENO server
 ```
 
-The daemon already proxies an allow-list of `/api/v1` routes for its browser page; the native key
-replaces the per-launch browser secret for this one local client. The daemon suppresses its own
-toasts while the native app reports itself in the foreground (heartbeat), like Omega's
-`ui-active`. This changes the daemon, so it ships as a separate, hardware-tested daemon build;
-the hardware-tested release ELF stays byte-identical until then.
+The daemon already proxies an allow-list of `/api/v1` routes for its browser page and keeps an
+event ring of everything its realtime session receives; a second per-launch secret, on a smaller
+allow-list, opens the same interface to the native app (polling the ring instead of a separate
+event stream). From increment 2.2 the daemon also skips its own toast for a conversation that is
+open in the native app (heartbeat), like Omega's `ui-active`. This changes the daemon, so it ships
+as a **separate daemon build** (`NATIVE_IPC=1`); the hardware-tested release ELF stays
+byte-identical, which CI proves on every commit.
 
 ### D7 — HEN integration is optional and later
 
@@ -173,7 +177,9 @@ launcher), C registers a new application with the system.
    procedure; we have **not** verified it, and deleting from `/system_ex` is itself a
    system-partition write. AKENO's documentation never asks you to install a launcher silently.
 2. Whether to pursue Level C (own tile) later.
-3. Whether to proceed to Phase 2 (daemon IPC) once T2–T4 pass.
+3. ~~Whether to proceed to Phase 2 (daemon IPC).~~ **Decided 2026-10-17:** the owner asked for
+   Phase 2 after E14, incrementally, with the daemon keeping realtime, notifications and game
+   detection ([PS5_NATIVE_PHASE2.md](PS5_NATIVE_PHASE2.md)).
 4. Microphone research (V3) stays blocked until you approve a separate, local-only test.
 
 ## 6. Voice roadmap (unchanged principles)

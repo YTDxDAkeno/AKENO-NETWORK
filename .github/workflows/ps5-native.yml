@@ -20,6 +20,18 @@ concurrency:
 env:
   PS5_SDK_COMMIT: f5d40f02770e9b0001dd9e18056eca70b3da8b40 # same SDK as the daemon (ps5.yml)
   RELEASE_NAME: akeno-native-ps5-0.1.0-prototype
+  # Native 0.1 ran on a PS5 with 12.20 next to the daemon (owner report,
+  # docs/PS5_NATIVE_HARDWARE_RESULTS_FW12.20.md). Two runs published it with the same code: the push
+  # run 39058830774 (build ID d094e62bcaf1) and the pull-request run 39058834341, which built the PR's
+  # merge commit 47488b65f4c2 (same tree). Both are rebuilt from d094e62, must reproduce these files
+  # exactly, and ship next to every new build as the fallback.
+  NATIVE_01_COMMIT: d094e62bcaf11787be42fa2be08e9cc1dff9341d
+  NATIVE_01_PUSH_BUILD_ID: d094e62bcaf1
+  NATIVE_01_PUSH_SHA256: 7eb99ff5a8c6cce49da25a6a52201931001dca7c0a9d2a6bbce6a0ac24eb7560
+  NATIVE_01_PR_BUILD_ID: 47488b65f4c2
+  NATIVE_01_PR_SHA256: 0856094cf434b7e8114bad396fe8f942e87b408e2c847d015cf811aec913e4db
+  NATIVE_01_HOMEBREW_JS_SHA256: fa5334012df469535faf991c2635ac55a2e3100d2a6f38c43885e276f8b28c63
+  NATIVE_01_ICON_SHA256: e3870ccfc517da69f9c4e25e34a98a39d4c488a2825326f63353063220f033a9
 
 jobs:
   host:
@@ -85,6 +97,8 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # the hardware-tested Native 0.1 fallback is rebuilt from its own commit
 
       - name: Install SDK build requirements
         run: |
@@ -128,12 +142,39 @@ jobs:
           "$RUNNER_TEMP/make-icon" "$RUNNER_TEMP/icon0.png" 512
           PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk" make -C clients/ps5-native/console package ICON="$RUNNER_TEMP/icon0.png"
 
+      - name: Rebuild the hardware-tested Native 0.1 (d094e62) and verify it byte for byte (fallback)
+        shell: bash
+        run: |
+          export PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk"
+          tree="$RUNNER_TEMP/native-0.1"
+          git worktree add --detach "$tree" "$NATIVE_01_COMMIT"
+          cp -r clients/ps5/third_party "$tree/clients/ps5/"
+          mkdir -p "$tree/clients/ps5-native/third_party"
+          cp -r clients/ps5-native/third_party/stb_truetype.h clients/ps5-native/third_party/inter "$tree/clients/ps5-native/third_party/"
+          # Same SDL2 commit and configuration as d094e62 (scripts/build-sdl-ps5.sh); the hashes prove it.
+          for id in "$NATIVE_01_PUSH_BUILD_ID" "$NATIVE_01_PR_BUILD_ID"; do
+            make -C "$tree/clients/ps5-native/console" -j"$(nproc)" SDL_PREFIX="$PWD/clients/ps5-native/third_party/sdl-ps5" \
+              BUILD="$RUNNER_TEMP/native-0.1-$id" GIT_COMMIT="$id" package ICON="$RUNNER_TEMP/icon0.png"
+          done
+          check() { echo "$1  $2" | sha256sum -c -; }
+          check "$NATIVE_01_PUSH_SHA256" "$RUNNER_TEMP/native-0.1-$NATIVE_01_PUSH_BUILD_ID/AKENONative/eboot.elf"
+          check "$NATIVE_01_PR_SHA256" "$RUNNER_TEMP/native-0.1-$NATIVE_01_PR_BUILD_ID/AKENONative/eboot.elf"
+          for id in "$NATIVE_01_PUSH_BUILD_ID" "$NATIVE_01_PR_BUILD_ID"; do
+            check "$NATIVE_01_HOMEBREW_JS_SHA256" "$RUNNER_TEMP/native-0.1-$id/AKENONative/homebrew.js"
+            check "$NATIVE_01_ICON_SHA256" "$RUNNER_TEMP/native-0.1-$id/AKENONative/sce_sys/icon0.png"
+          done
+
       - name: Inspect, checksum and describe the build
         shell: bash
         run: |
           out="dist/$RELEASE_NAME"
           mkdir -p "$out/debug"
           cp -r clients/ps5-native/build-ps5/AKENONative "$out/"
+          for id in "$NATIVE_01_PUSH_BUILD_ID" "$NATIVE_01_PR_BUILD_ID"; do
+            mkdir -p "$out/fallback/native-0.1-$id"
+            cp -r "$RUNNER_TEMP/native-0.1-$id/AKENONative" "$out/fallback/native-0.1-$id/"
+          done
+          cp docs/PS5_NATIVE_HARDWARE_RESULTS_FW12.20.md "$out/HARDWARE_RESULTS_0.1.md"
           cp clients/ps5-native/build-ps5/akeno-native.elf "$out/"
           cp clients/ps5-native/build-ps5/akeno-native.debug.elf "$out/debug/"
           for elf in "$out"/akeno-native.elf "$out"/AKENONative/eboot.elf "$out"/debug/akeno-native.debug.elf; do
@@ -147,7 +188,8 @@ jobs:
           cp docs/PS5_NATIVE_ADR.md "$out/ARCHITECTURE_DECISION.md"
           cp docs/LICENSES.md "$out/LICENSES.md"
           cp clients/ps5-native/third_party/inter/OFL.txt "$out/LICENSE-Inter-OFL.txt"
-          (cd "$out" && sha256sum akeno-native.elf AKENONative/eboot.elf AKENONative/homebrew.js AKENONative/sce_sys/icon0.png > SHA256SUMS)
+          (cd "$out" && sha256sum akeno-native.elf AKENONative/eboot.elf AKENONative/homebrew.js AKENONative/sce_sys/icon0.png \
+            fallback/*/AKENONative/eboot.elf fallback/*/AKENONative/homebrew.js fallback/*/AKENONative/sce_sys/icon0.png > SHA256SUMS)
           (cd "$out/debug" && sha256sum akeno-native.debug.elf > SHA256SUMS)
           nm="$RUNNER_TEMP/ps5-payload-sdk/bin/prospero-nm"
           {
@@ -175,9 +217,15 @@ jobs:
             echo "System imports:"
             "$nm" -D --undefined-only "$out/akeno-native.elf" | awk '{print $2}' | grep -E '^(sce|kernel_)' | sort | sed 's/^/  /'
             echo
-            echo "Hardware status: NOT run on a PS5 yet. Nothing in this build is verified on hardware."
-            echo "  Start it only from a homebrew launcher (AKENONative/ folder), following HARDWARE_TEST_PLAN.md."
-            echo "  Sent to an ELF loader instead, it detects the background context, opens nothing and stops."
+            echo "Hardware status:"
+            echo "  AKENONative/ (this commit): NOT run on a PS5. Start it only from a homebrew launcher, following"
+            echo "    HARDWARE_TEST_PLAN.md. Sent to an ELF loader instead, it detects the background context, opens"
+            echo "    nothing and stops."
+            echo "  fallback/native-0.1-$NATIVE_01_PUSH_BUILD_ID/ and fallback/native-0.1-$NATIVE_01_PR_BUILD_ID/: Native 0.1, rebuilt"
+            echo "    from $NATIVE_01_COMMIT and byte-identical to CI runs 39058830774 and 39058834341 (same code,"
+            echo "    different build ID). One of them ran on a PS5 with 12.20 next to the daemon (owner report): screen,"
+            echo "    daemon probe, server HTTP 200, pairing valid, signed in, 14 permissions. Audio and the full"
+            echo "    controller test not reported yet. See HARDWARE_RESULTS_0.1.md."
           } > "$out/BUILDINFO.txt"
           cat "$out/BUILDINFO.txt"
 
