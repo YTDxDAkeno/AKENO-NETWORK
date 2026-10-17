@@ -863,6 +863,9 @@ int akeno_app_main(const akeno_app_options *options) {
     snprintf(app->credential_path, sizeof(app->credential_path), "%s/device.json", app->data_dir);
     snprintf(app->log_path, sizeof(app->log_path), "%s/akeno.log", app->data_dir);
     snprintf(app->instance_path, sizeof(app->instance_path), "%s/instance.key", app->data_dir);
+#ifdef AKENO_NATIVE_IPC
+    snprintf(app->native_path, sizeof(app->native_path), "%s/native.key", app->data_dir);
+#endif
     snprintf(app->ca_path, sizeof(app->ca_path), "%s/ca.pem", app->data_dir);
 
     akeno_platform_init(&app->platform);
@@ -933,6 +936,14 @@ int akeno_app_main(const akeno_app_options *options) {
     random_hex(app, app->instance_key, 32);
     if (write_private_file(app->instance_path, app->instance_key, strlen(app->instance_key)) != 0)
         app_log(app, AKENO_LOG_WARN, "app.instance_key", "Could not write the instance key; a second launch cannot reopen the page.");
+#ifdef AKENO_NATIVE_IPC
+    random_hex(app, app->native_key, 32);
+    if (write_private_file(app->native_path, app->native_key, strlen(app->native_key)) != 0)
+        app_log(app, AKENO_LOG_WARN, "native.key", "Could not write the native key; AKENO Native cannot connect.");
+    else
+        app_log(app, AKENO_LOG_INFO, "native.ready", "Native interface %d ready for AKENO Native (key file readable by the owner only).",
+                AKENO_NATIVE_IPC_VERSION);
+#endif
     app_log(app, AKENO_LOG_INFO, "ui.listening", "Local page on http://127.0.0.1:%d/ (this console only).", app->port);
 
     akeno_platform_notify("AKENO NETWORK " AKENO_APP_RELEASE " started.");
@@ -953,6 +964,9 @@ int akeno_app_main(const akeno_app_options *options) {
     shutdown_workers(app);
     close(listen_fd);
     unlink(app->instance_path);
+#ifdef AKENO_NATIVE_IPC
+    unlink(app->native_path);
+#endif
     akeno_platform_notify("AKENO NETWORK stopped.");
 
 out_tls:
@@ -966,6 +980,9 @@ out:
     if (app->log) fclose(app->log);
     memset(app->session_token, 0, sizeof(app->session_token));
     memset(app->instance_key, 0, sizeof(app->instance_key));
+#ifdef AKENO_NATIVE_IPC
+    memset(app->native_key, 0, sizeof(app->native_key));
+#endif
     pthread_mutex_destroy(&app->lock);
     pthread_mutex_destroy(&app->log_lock);
     free(app);

@@ -105,6 +105,15 @@ if(AKENO_HAVE_MBEDTLS)
     "AKENO_UI_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/app/web\""
     "AKENO_BUILD_ID=\"${AKENO_GIT_COMMIT}-linux-audiolab\"")
   target_link_libraries(akeno-app-audiolab PRIVATE akeno_client_mbedtls)
+
+  # Native IPC: the same app with the local interface for AKENO Native (docs/PS5_NATIVE_PHASE2.md).
+  add_executable(akeno-app-native-ipc app/main.c app/platform_host.c ${AKENO_APP_SOURCES})
+  target_include_directories(akeno-app-native-ipc PRIVATE src app)
+  target_compile_options(akeno-app-native-ipc PRIVATE ${AKENO_WARNINGS} ${AKENO_HARDENING})
+  target_compile_definitions(akeno-app-native-ipc PRIVATE AKENO_NATIVE_IPC
+    "AKENO_UI_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/app/web\""
+    "AKENO_BUILD_ID=\"${AKENO_GIT_COMMIT}-linux-native-ipc\"")
+  target_link_libraries(akeno-app-native-ipc PRIVATE akeno_client_mbedtls)
 endif()
 
 enable_testing()

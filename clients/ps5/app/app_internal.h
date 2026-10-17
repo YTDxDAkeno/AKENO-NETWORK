@@ -30,6 +30,10 @@
 #define AKENO_BUILD_ID "dev"
 #endif
 #define AKENO_PLATFORM_LABEL "PlayStation 5 (homebrew)"
+#ifdef AKENO_NATIVE_IPC
+/* Local interface for AKENO Native (docs/PS5_NATIVE_PHASE2.md); only in the native-IPC build. */
+#define AKENO_NATIVE_IPC_VERSION 1
+#endif
 
 #define APP_EVENT_RING 128
 #define APP_LOG_RING 80
@@ -143,6 +147,14 @@ struct akeno_app {
     int port;
     char session_token[65];
     char instance_key[65];
+#ifdef AKENO_NATIVE_IPC
+    char native_key[65];           /* Second per-launch secret, for AKENO Native only. */
+    char native_path[600];         /* <data>/native.key (0600), removed when AKENO stops. */
+    long long native_seen_at;      /* Main thread: last request with a valid native key. */
+    long long native_denied_logged_at;
+    unsigned long native_requests;
+    unsigned long native_denied;
+#endif
     int browser_launches;
     int browser_last_rc;
 

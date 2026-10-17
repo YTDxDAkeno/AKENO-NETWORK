@@ -12,6 +12,12 @@
 # builds the separate, experimental audio lab instead (PS5 voice research, see
 # docs/PS5_AUDIO_RESEARCH.md): clients/ps5/build-ps5-audiolab/akeno-network-ps5-audiolab-v3.elf.
 # The release ELF never contains the audio lab.
+#
+#   make -C clients/ps5/console NATIVE_IPC=1
+#
+# builds the separate native-IPC daemon for AKENO Native (docs/PS5_NATIVE_PHASE2.md):
+# clients/ps5/build-ps5-native-ipc/akeno-network-ps5-native-ipc.elf. The release ELF never
+# contains the native interface.
 
 ROOT        := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 
@@ -22,7 +28,17 @@ include $(PS5_PAYLOAD_SDK)/toolchain/prospero.mk
 
 THIRD_PARTY ?= $(ROOT)/third_party
 EXPERIMENTAL_AUDIO ?= 0
-ifeq ($(EXPERIMENTAL_AUDIO),1)
+NATIVE_IPC ?= 0
+ifeq ($(EXPERIMENTAL_AUDIO)$(NATIVE_IPC),11)
+$(error EXPERIMENTAL_AUDIO and NATIVE_IPC are separate builds; choose one)
+endif
+ifeq ($(NATIVE_IPC),1)
+BUILD       := $(ROOT)/build-ps5-native-ipc
+NAME        := akeno-network-ps5-native-ipc
+LAB_SRC     :=
+LAB_FLAGS   := -DAKENO_NATIVE_IPC
+BUILD_KIND  := ps5-native-ipc
+else ifeq ($(EXPERIMENTAL_AUDIO),1)
 BUILD       := $(ROOT)/build-ps5-audiolab
 NAME        := akeno-network-ps5-audiolab-v3
 LAB_SRC     := audio_lab.c audio_lab_pcm.c audio_lab_state.c

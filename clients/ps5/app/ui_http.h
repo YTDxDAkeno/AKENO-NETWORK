@@ -19,6 +19,9 @@ typedef struct ui_request_s {
     char origin[128];        /* "" when absent. */
     char token[96];          /* X-Akeno-Token */
     char instance_key[96];   /* X-Akeno-Instance-Key */
+#ifdef AKENO_NATIVE_IPC
+    char native_key[96];     /* X-Akeno-Native-Key (AKENO Native, native-IPC build only) */
+#endif
     char content_type[64];
     long long content_length; /* -1 when absent. */
     size_t head_len;
