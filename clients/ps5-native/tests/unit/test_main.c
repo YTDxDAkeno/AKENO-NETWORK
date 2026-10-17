@@ -18,6 +18,8 @@ void run_account_tests(void);
 void run_social_tests(void);
 void run_picture_tests(void);
 void run_artwork_tests(void);
+void run_chat_tests(void);
+void run_party_tests(void);
 
 int main(void) {
     run_nav_tests();
@@ -33,6 +35,8 @@ int main(void) {
     run_social_tests();
     run_picture_tests();
     run_artwork_tests();
+    run_chat_tests();
+    run_party_tests();
     printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }
