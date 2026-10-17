@@ -406,11 +406,14 @@ await step('AKENO Native: friends, live presence, a friend request and a profile
     'sync bob-status', 'until text 20000 Back at nine', `shot ${shots}/e2e-friends-live.png`,
     // bob's profile
     'pad cross', 'expect screen profile', 'until profile 15000', 'wait 300', 'expect text @it_bob', 'expect text Speedrunner from the e2e test',
-    'expect text friend', 'expect text Not playing right now', `shot ${shots}/e2e-profile.png`, 'pad circle', 'pad circle', 'expect screen home',
+    // the relationship pill of the redesigned profile (0.2 showed "· friend" after the online ID)
+    'expect text Friends', 'expect notext Friend request sent', 'expect notext Wants to be your friend',
+    // bob plays nothing and has no history: no NOW PLAYING card, the empty Recently Played state
+    'expect notext NOW PLAYING', 'expect text RECENTLY PLAYED', 'expect text No games played recently.', `shot ${shots}/e2e-profile.png`, 'pad circle', 'pad circle', 'expect screen home',
     'expect text 1 ONLINE',
     // your own profile
     'pad right', 'pad right', 'pad right', 'expect focus profile', 'pad cross', 'until profile 15000', 'wait 300', 'expect text @it_alice',
-    'expect text you', 'pad circle',
+    'expect text You', 'expect notext Friend request sent', 'pad circle',
     // activity
     'pad right', 'pad cross', 'expect screen activity', 'until activity 15000', 'wait 300', 'expect text YOUR RECENT GAMES',
     'expect text No games tracked yet.', 'expect text None of your friends is playing right now.', `shot ${shots}/e2e-activity.png`,

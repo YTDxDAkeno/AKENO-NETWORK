@@ -469,7 +469,7 @@ async function main() {
     'padhold down 900', 'pad r1', 'expect text 6–12 of 12', 'pad l1', 'pad l1', 'expect text 1–7 of 12',
     // a friend's profile and back to the same row
     'pad cross', 'expect screen profile', 'until profile 10000', 'wait 300', 'expect text Speedrunner.', 'expect text Friday crew', 'expect text 3 of 8 members',
-    'expect text Astro Bot', 'expect text @bob', 'expect text PS5 Alpha Tester', 'until pictures 10000',
+    'expect text Astro Bot', 'expect text @bob', 'expect text Friends', 'expect text PS5 Alpha Tester', 'until pictures 10000',
     `shot ${shots}/profile.png`, 'pad triangle', 'until profile 10000',
     'pad circle', 'expect screen friends', 'expect text Bob',
     // a realtime presence change arrives through the daemon's event ring
@@ -477,7 +477,7 @@ async function main() {
     'expect text 4 ONLINE',
     // your own profile, from Home
     'pad right', 'pad right', 'pad right', 'expect focus profile', 'pad cross', 'expect screen profile', 'until profile 10000', 'wait 300',
-    'expect text @akeno_tester', 'expect text you', 'pad circle', 'expect screen home',
+    'expect text @akeno_tester', 'expect text You', 'pad circle', 'expect screen home',
     // Activity: this console's game (daemon detection), your games, friends playing now
     'pad right', 'expect focus activity', 'pad cross', 'expect screen activity', 'until activity 10000', 'wait 300',
     'expect text Playing Test Game', 'expect text YOUR RECENT GAMES', 'expect text Gran Turismo 7', 'expect text FRIENDS PLAYING NOW',
