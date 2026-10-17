@@ -33,6 +33,9 @@ env:
   # user report: profiles work, the controller shortcut gets 0x809B0081, no tone audible). The
   # release ELF of every later commit must be this file when built with the same build ID.
   RC_COMMIT: 7e28255c63baa528e28866cda53db1dedb3954a6
+  # That run was a pull_request run: it built the PR's merge commit d59055a9b752 (the same tree as
+  # 7e28255), so its build ID is d59055a9b752.
+  RC_BUILD_ID: d59055a9b752
   RC_RELEASE_SHA256: c92e039b384547e69c7a7867b0f7277fcd07db0b1244ce6df3b15840c3e8a342
   RC_AUDIOLAB_V2_SHA256: 824c1560b6857b71716a050df4f30b9372574b1a2ad4971291ad4fc06ad1a35d
   RELEASE_NAME: akeno-network-ps5-alpha-0.5-rc
@@ -98,12 +101,12 @@ jobs:
           export PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk"
           git worktree add --detach "$RUNNER_TEMP/rc" "$RC_COMMIT"
           cp -r clients/ps5/third_party "$RUNNER_TEMP/rc/clients/ps5/"
-          make -C "$RUNNER_TEMP/rc/clients/ps5/console" -j"$(nproc)" GIT_COMMIT="${RC_COMMIT:0:12}"
-          make -C "$RUNNER_TEMP/rc/clients/ps5/console" -j"$(nproc)" EXPERIMENTAL_AUDIO=1 GIT_COMMIT="${RC_COMMIT:0:12}"
+          make -C "$RUNNER_TEMP/rc/clients/ps5/console" -j"$(nproc)" GIT_COMMIT="$RC_BUILD_ID"
+          make -C "$RUNNER_TEMP/rc/clients/ps5/console" -j"$(nproc)" EXPERIMENTAL_AUDIO=1 GIT_COMMIT="$RC_BUILD_ID"
           echo "$RC_RELEASE_SHA256  $RUNNER_TEMP/rc/clients/ps5/build-ps5/akeno-network-ps5.elf" | sha256sum -c -
           echo "$RC_AUDIOLAB_V2_SHA256  $RUNNER_TEMP/rc/clients/ps5/build-ps5-audiolab/akeno-network-ps5-audiolab-v2.elf" | sha256sum -c -
           # This commit's release source, built with the RC's build ID, must give the tested file.
-          make -C clients/ps5/console -j"$(nproc)" BUILD="$RUNNER_TEMP/release-as-rc" GIT_COMMIT="${RC_COMMIT:0:12}"
+          make -C clients/ps5/console -j"$(nproc)" BUILD="$RUNNER_TEMP/release-as-rc" GIT_COMMIT="$RC_BUILD_ID"
           echo "$RC_RELEASE_SHA256  $RUNNER_TEMP/release-as-rc/akeno-network-ps5.elf" | sha256sum -c -
           echo "The release ELF is the hardware-tested 7e28255 release, apart from its build ID."
 
@@ -184,7 +187,7 @@ jobs:
             echo
             echo "Hardware status:"
             echo "  akeno-network-ps5.elf ($version): the same file as the Alpha 0.5 RC that ran on a PS5 with 12.20"
-            echo "    (7e28255, CI run 39043014243) apart from its build ID; CI rebuilds both and compares them."
+            echo "    (7e28255, CI run 39043014243, build ID $RC_BUILD_ID) apart from its build ID; CI rebuilds both and compares them."
             echo "    User report: profiles work; the controller shortcut fails (scePadOpen 0x809B0081); it stays off by default."
             echo "  akeno-network-ps5-audiolab-v3.elf: EXPERIMENTAL audio research build, NOT run on a PS5 yet. Adds a"
             echo "    read-only port state query (sceAudioOutGetPortState) and an HTML <audio> element test to audio lab v2."
