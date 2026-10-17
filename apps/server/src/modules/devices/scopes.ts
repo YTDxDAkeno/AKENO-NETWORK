@@ -46,6 +46,10 @@ const API_ROUTES: Record<string, DeviceScope | null> = {
   // SharePlay status, read-only (the console app shows it; starting, watching and Player 2 need the website).
   'GET /parties/:id/shareplay': 'parties:read',
   'GET /shareplay/status': 'parties:read',
+  // LAN Play status, read-only (the console app shows it; creating/joining/connecting need the website).
+  'GET /parties/:id/lanplay': 'parties:read',
+  'GET /lanplay/status': 'parties:read',
+  'GET /lanplay/games': 'parties:read',
   // The console app opts in to display Player 2 input (it never controls anything).
   'POST /parties/:id/shareplay/receiver': 'parties:read',
   'POST /parties': 'parties:write',

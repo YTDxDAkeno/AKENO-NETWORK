@@ -286,6 +286,7 @@ export class PartiesService {
       effects.add(() => this.notifyChanged([userId], partyId, true));
       effects.add(() => this.ctx.voice.closeRoomLater(partyId));
       effects.add(() => this.ctx.shareplay.onPartyClosed(partyId));
+      effects.add(() => this.ctx.lanplay.onPartyClosed(partyId));
       return;
     }
     await tx
@@ -303,6 +304,7 @@ export class PartiesService {
     // Leaving or being removed ends the voice connection at once.
     effects.add(() => this.ctx.voice.revoke(partyId, userId));
     effects.add(() => this.ctx.shareplay.onMemberLeft(partyId, userId));
+    effects.add(() => this.ctx.lanplay.onMemberLeft(partyId, userId));
   }
 
   async kick(leaderId: string, partyId: string, targetId: string): Promise<void> {
@@ -342,6 +344,7 @@ export class PartiesService {
       await tx.delete(conversations).where(eq(conversations.id, party.conversationId));
       effects.add(() => this.ctx.voice.closeRoomLater(partyId));
       effects.add(() => this.ctx.shareplay.onPartyClosed(partyId));
+      effects.add(() => this.ctx.lanplay.onPartyClosed(partyId));
       effects.add(() => {
         this.notifyChanged(memberIds, partyId, true);
         this.ctx.hub.sendToUsers(

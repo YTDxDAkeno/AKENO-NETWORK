@@ -160,6 +160,9 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         case 'shareplay.input':
           // Only paired console apps receive Player 2 input; browsers use the monitor link.
           break;
+        case 'lanplay.changed':
+          invalidateSoon(['lanplay', 'party', event.data.partyId]);
+          break;
         case 'game-session.changed':
           invalidate(queryKeys.allGameSessions);
           invalidate(queryKeys.gameSession(event.data.sessionId));

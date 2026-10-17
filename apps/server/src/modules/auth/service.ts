@@ -311,6 +311,7 @@ export class AuthService {
     this.ctx.hub.disconnectSession(auth.sessionId, 'You signed out.', REALTIME_CLOSE_CODES.sessionRevoked);
     this.ctx.voice.onSessionsRevoked(auth.userId, (id) => id === auth.sessionId);
     this.ctx.shareplay.onSessionsRevoked(auth.userId, (id) => id === auth.sessionId);
+    this.ctx.lanplay.onSessionsRevoked(auth.userId, (id) => id === auth.sessionId);
     this.ctx.audit.recordInBackground({
       actorId: auth.userId,
       action: 'auth.logout',
@@ -346,6 +347,7 @@ export class AuthService {
     this.ctx.hub.disconnectSession(sessionId, 'This session was signed out.', REALTIME_CLOSE_CODES.sessionRevoked);
     this.ctx.voice.onSessionsRevoked(userId, (id) => id === sessionId);
     this.ctx.shareplay.onSessionsRevoked(userId, (id) => id === sessionId);
+    this.ctx.lanplay.onSessionsRevoked(userId, (id) => id === sessionId);
     this.ctx.audit.recordInBackground({
       actorId: userId,
       action: 'auth.session_revoked',
@@ -368,6 +370,7 @@ export class AuthService {
     );
     this.ctx.voice.onSessionsRevoked(userId, (id) => id !== currentSessionId);
     this.ctx.shareplay.onSessionsRevoked(userId, (id) => id !== currentSessionId);
+    this.ctx.lanplay.onSessionsRevoked(userId, (id) => id !== currentSessionId);
     this.ctx.audit.recordInBackground({
       actorId: userId,
       action: 'auth.other_sessions_revoked',
@@ -417,6 +420,7 @@ export class AuthService {
     );
     this.ctx.voice.onSessionsRevoked(auth.userId, (id) => id !== auth.sessionId);
     this.ctx.shareplay.onSessionsRevoked(auth.userId, (id) => id !== auth.sessionId);
+    this.ctx.lanplay.onSessionsRevoked(auth.userId, (id) => id !== auth.sessionId);
   }
 
   async deleteExpiredSessions(): Promise<number> {

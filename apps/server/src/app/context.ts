@@ -17,6 +17,7 @@ import { MessagesService } from '../modules/messages/service.js';
 import { NotificationsService } from '../modules/notifications/service.js';
 import { PartiesService } from '../modules/parties/service.js';
 import { SharePlayService } from '../modules/shareplay/service.js';
+import { LanPlayService } from '../modules/lanplay/service.js';
 import { RelationsService } from '../modules/users/relations.js';
 import { UsersService } from '../modules/users/service.js';
 import { VoiceService } from '../modules/voice/service.js';
@@ -56,6 +57,7 @@ export interface AppContext {
   badges: BadgesService;
   voice: VoiceService;
   shareplay: SharePlayService;
+  lanplay: LanPlayService;
 }
 
 export function createContext(config: AppConfig, db: Database, log: FastifyBaseLogger): AppContext {
@@ -83,5 +85,8 @@ export function createContext(config: AppConfig, db: Database, log: FastifyBaseL
   ctx.badges = new BadgesService(ctx);
   ctx.voice = new VoiceService(ctx);
   ctx.shareplay = new SharePlayService(ctx);
+  ctx.lanplay = new LanPlayService(ctx, {
+    timings: { sessionTtlMs: config.lanplay.sessionTtlMs, credentialTtlMs: config.lanplay.credentialTtlMs },
+  });
   return ctx;
 }

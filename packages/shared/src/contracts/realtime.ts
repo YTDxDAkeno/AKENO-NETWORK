@@ -54,7 +54,9 @@ export type ServerEvent =
   /** SharePlay state of the party changed (refetch GET /parties/:id/shareplay). */
   | { type: 'shareplay.changed'; data: { partyId: string; ended: boolean } }
   /** Player 2 controller state for the SharePlay host's paired console app (diagnostic receiver). */
-  | { type: 'shareplay.input'; data: SharePlayInputRelay };
+  | { type: 'shareplay.input'; data: SharePlayInputRelay }
+  /** LAN Play session of the party changed (refetch GET /parties/:id/lanplay). */
+  | { type: 'lanplay.changed'; data: { partyId: string; ended: boolean } };
 
 export type ServerEventType = ServerEvent['type'];
 

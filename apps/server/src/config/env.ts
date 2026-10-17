@@ -91,6 +91,16 @@ const envSchema = z
     /** Longest a Player 2 grant lasts before the host has to approve again. */
     SHAREPLAY_GRANT_MAX_MINUTES: z.coerce.number().int().min(5).max(720).default(120),
 
+    /**
+     * LAN Play (experimental) control plane. Off unless explicitly enabled. Even when enabled, no
+     * network transport is wired, so it reports "Transport not available". See
+     * docs/LAN_PLAY_ARCHITECTURE.md.
+     */
+    LAN_PLAY_ENABLED: booleanString.default(false),
+    LAN_PLAY_MAX_PARTICIPANTS: z.coerce.number().int().min(2).max(16).default(8),
+    LAN_PLAY_SESSION_TTL_MINUTES: z.coerce.number().int().min(5).max(1440).default(240),
+    LAN_PLAY_CREDENTIAL_TTL_SECONDS: z.coerce.number().int().min(30).max(3600).default(120),
+
     /** Directory containing the built web client (apps/web/dist). Empty disables static hosting. */
     WEB_DIST_DIR: z.string().default(''),
     MIGRATE_ON_START: booleanString.default(false),
@@ -194,6 +204,12 @@ export interface AppConfig {
     remoteInputEnabled: boolean;
     grantMaxMs: number;
   };
+  lanplay: {
+    enabled: boolean;
+    maxParticipants: number;
+    sessionTtlMs: number;
+    credentialTtlMs: number;
+  };
   media: {
     dir: string;
     maxTotalBytes: number;
@@ -281,6 +297,12 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
       maxQuality: env.SHAREPLAY_MAX_QUALITY,
       remoteInputEnabled: env.SHAREPLAY_REMOTE_INPUT_ENABLED,
       grantMaxMs: env.SHAREPLAY_GRANT_MAX_MINUTES * 60_000,
+    },
+    lanplay: {
+      enabled: env.LAN_PLAY_ENABLED,
+      maxParticipants: env.LAN_PLAY_MAX_PARTICIPANTS,
+      sessionTtlMs: env.LAN_PLAY_SESSION_TTL_MINUTES * 60_000,
+      credentialTtlMs: env.LAN_PLAY_CREDENTIAL_TTL_SECONDS * 1000,
     },
     media: {
       dir: env.MEDIA_DIR.trim(),
