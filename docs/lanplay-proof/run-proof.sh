@@ -28,6 +28,19 @@ cleanup() {
 trap cleanup EXIT
 mkdir -p /run/softether
 
+# Start from a clean, deterministic state. SoftEther persists its hub/users/NICs in
+# /var/lib/softether, and vpncmd returns a non-zero exit code when an object already
+# exists (which would trip `set -e` on a second run). Removing the saved config makes
+# each run create the hub, users and adapters fresh. This only touches the throwaway
+# proof server/client, never a production SoftEther install.
+echo "== Reset SoftEther proof state =="
+vpnclient stop >/dev/null 2>&1 || true
+vpnserver stop >/dev/null 2>&1 || true
+ip netns del ns1 2>/dev/null || true
+ip netns del ns2 2>/dev/null || true
+sleep 1
+rm -f /var/lib/softether/vpn_server.config /var/lib/softether/vpn_client.config 2>/dev/null || true
+
 echo "== Start SoftEther VPN Server and create an L2 Virtual Hub =="
 vpnserver start >/dev/null; sleep 3
 vpncmd /SERVER localhost /PASSWORD: /CMD HubCreate AKENO /PASSWORD:hubpw >/dev/null
@@ -66,13 +79,13 @@ if [ "${WAN:-0}" = "1" ]; then
 fi
 
 echo "== Bidirectional UDP (500 datagrams, ns1 -> ns2 echo) =="
-ip netns exec ns2 python3 "$HERE/udp_echo.py" & EPID=$!; sleep 1
-ip netns exec ns1 python3 "$HERE/udp_client.py"
+ip netns exec ns2 python3 "$HERE/udp_echo.py" --bind 0.0.0.0 --port 40000 & EPID=$!; sleep 1
+ip netns exec ns1 python3 "$HERE/udp_client.py" --dst $SUB.2 --port 40000 --bind $SUB.1 --count 500
 kill $EPID 2>/dev/null || true
 
 echo "== UDP broadcast discovery across the L2 segment =="
-ip netns exec ns2 python3 "$HERE/bcast_listener.py" & LPID=$!; sleep 1
-ip netns exec ns1 python3 "$HERE/bcast_send.py"
+ip netns exec ns2 python3 "$HERE/bcast_listener.py" --port 45000 --timeout 5 & LPID=$!; sleep 1
+ip netns exec ns1 python3 "$HERE/bcast_send.py" --bind $SUB.1 --bcast $SUB.255 --port 45000
 wait $LPID 2>/dev/null || true
 
 echo "== Hub traffic counters (frames really traversed SoftEther) =="

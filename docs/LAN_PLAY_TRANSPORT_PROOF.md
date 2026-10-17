@@ -85,6 +85,9 @@ licence to review).
 
 ## 4. Shortest concrete setup plan (reproduce on real hardware)
 
+**Windows 11:** ready-to-run PowerShell tools automate steps A.1–A.3 below with safety gates on every
+system-level change — see `docs/LAN_PLAY_WINDOWS_PROOF.md` and `docs/lanplay-proof/windows/`.
+
 **A. PC ↔ PC first (no console):** ~30 min.
 1. On two Windows 11 PCs (or two Linux boxes), install SoftEther VPN Server on one, VPN Client on
    both (or Server+Client on one and Client on the other). Create a Virtual Hub `AKENO`, two users.
