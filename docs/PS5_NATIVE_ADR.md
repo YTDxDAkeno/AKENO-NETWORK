@@ -1,7 +1,8 @@
 # ADR-0001 — AKENO NETWORK Native for PS5
 
-Status: **accepted for the Phase 1 prototype** (2026-10-17). Nothing in this record is verified on
-a PS5 unless the row says so. Owner decisions still open are listed at the end.
+Status: **accepted**. Phase 1 (Native 0.1) is confirmed on a PS5 with 12.20 (E14, E15);
+Phase 2 is in progress. Nothing in this record is verified on a PS5 unless the row says so.
+Owner decisions still open are listed at the end.
 
 Labels used throughout: **[HW-AKENO]** measured by the console owner on firmware 12.20 with an
 AKENO build · **[HW-ext]** an external project's own hardware claim, not reproduced by us ·
@@ -30,12 +31,14 @@ accounts or production?
 | E11 | OnionHEN and etaHEN embed an `hbldr` derived from the same code for their own components; etaHEN's `/data/homebrew` "Payload Homebrew Apps" menu is commented out (`etaHEN_toolbox.xml`). A documented OnionHEN/etaHEN launcher for websrv-format homebrew was **not found** | [SRC] |
 | E12 | ps5-payload-dev/SDL (`ee4c47d`, zlib): video `sceVideoOutOpen(0xFF…)` + `sceSystemServiceHideSplashScreen`; pad via `scePadInit/Open/ReadState` (ignores the pad's `connected` flag); audio `sceAudioOutOpen(0xFF, MAIN, …)` and ignores `sceAudioOutOutput` results; its `main` wrapper exits with `sceSystemServiceLoadExec("exit")` | [SRC] |
 | E13 | SDL2 builds against the pinned SDK `f5d40f0` with only the software renderer (this session, locally and in CI) | build |
-| E14 | Native 0.1, started from a homebrew launcher, ran in the **foreground** on 12.20 **while the daemon ran in the background**: it reached the daemon's loopback probe (0.5.0-alpha) and the AKENO server over TLS (`GET /devices/current` → 200 with the existing pairing, read-only; signed in; 14 permissions). Owner report 2026-10-17, [results](PS5_NATIVE_HARDWARE_RESULTS_FW12.20.md); audio (N5) and the full controller test (N4) not reported yet | [HW-AKENO] |
+| E14 | Native 0.1 (`d094e62bcaf1-ps5`), started from a homebrew launcher, ran as the **foreground application `FAKE00000`** on 12.20 **while the daemon ran in the background**: it reached the daemon's loopback probe (0.5.0-alpha) and the AKENO server over TLS (`GET /devices/current` → 200 with the existing pairing, read-only; signed in; 14 permissions). Owner report and `native-report.txt`, 2026-10-17, [results](PS5_NATIVE_HARDWARE_RESULTS_FW12.20.md) | [HW-AKENO] |
+| E15 | In that foreground process: native video 1920×1080; the DualSense **opened successfully** (2,274 controller events, 48 focus movements, 0 dropped); **four `sceAudioOut` tone tests, all heard** by the owner; sent with the ELF loader instead, the app's background-context protection triggered (`native.log`). Full per-button controller coverage and the clean exit were not itemised | [HW-AKENO] |
 
-**Conclusion.** E2, E3, E5–E8 all point the same way: controller and audible audio are granted to
-the **foreground application process**, not to background payloads. E14 confirms the
-foreground native app and the background daemon coexist on 12.20 and share the pairing without
-interfering; whether foreground audio is audible (N5) is still open, so that part stays [HYP].
+**Conclusion.** Controller and audible audio are granted to the **foreground application
+process**, not to background payloads. This is now **confirmed for AKENO on 12.20**. The background
+daemon gets `0x809B0081` and silent output (E2, E3). The foreground native app opens the
+DualSense and plays audible sound (E15). It also coexists with the daemon and shares its pairing
+without interfering (E14). E5–E8 agreed in advance.
 
 ## 3. Decisions
 
@@ -167,8 +170,8 @@ hunks (the Account Bridge line does not touch `ui_http.*`). `ps5.yml` and `ci.ym
 | Level | What | Status | Requires |
 | --- | --- | --- | --- |
 | A — standalone ELF via the owner's elfldr | The **daemon** (unchanged Alpha 0.5) | [HW-AKENO] | nothing new |
-| A′ — native ELF via elfldr | Runs as a background process: by D1 it detects this, opens nothing, notifies and exits | expected; to be confirmed by hardware test T1 | nothing new |
-| B — homebrew launcher entry | `/data/homebrew/AKENONative/` with `eboot.elf`, `homebrew.js`, AKENO `icon0.png`, shown and started by websrv's launcher | **prototype target**, not hardware-tested | a homebrew launcher (websrv) — §5, owner approval |
+| A′ — native ELF via elfldr | Runs as a background process: by D1 it detects this, opens nothing, notifies and exits | [HW-AKENO]: the protection triggered (E15, from the log) | nothing new |
+| B — homebrew launcher entry | `/data/homebrew/AKENONative/` with `eboot.elf`, `homebrew.js`, AKENO `icon0.png`, shown and started by a websrv-format launcher | [HW-AKENO]: ran as foreground application `FAKE00000` (E14, E15) | a homebrew launcher (websrv format), already present on the owner's console |
 | C — own PS5 Home-screen tile | An AKENO title ID registered with the system (fPKG via kstuff, or `sceAppInstUtilAppInstallTitleDir` like websrv's own tile) | research only | title registration + PKG/fSELF tooling; separate risk review and approval; never a Sony title ID |
 
 Levels B and C are not equivalent: B adds no system entry for AKENO (websrv's own tile opens the
@@ -176,7 +179,7 @@ launcher), C registers a new application with the system.
 
 ## 5. What the owner must decide (no action taken)
 
-1. **Which homebrew launcher to use for the foreground test.** If websrv (with its Homebrew
+1. ~~Which homebrew launcher to use for the foreground test.~~ **Resolved 2026-10-17:** the owner's existing websrv-format launcher started Native 0.1 as `FAKE00000` (E14). Kept for reference: If websrv (with its Homebrew
    Launcher PKG) is already installed, nothing new is needed. If not, installing it makes these
    **persistent** changes, all done by websrv, not by AKENO: a registered `FAKE00000` title and
    tile; `/system_ex/app/FAKE00000` (with a copy of PS Now's `eboot.bin`) on first homebrew
@@ -191,15 +194,16 @@ launcher), C registers a new application with the system.
    detection ([PS5_NATIVE_PHASE2.md](PS5_NATIVE_PHASE2.md)).
 4. Microphone research (V3) stays blocked until you approve a separate, local-only test.
 
-## 6. Voice roadmap (unchanged principles)
+## 6. Voice roadmap
 
-V1 (this prototype): audible tone from the foreground app. V2: listen-only party audio — LiveKit
+V1: audible tone from the foreground app — **met** (E15: four tests, all heard; no microphone).
+V2: listen-only party audio — LiveKit
 stays the infrastructure; options are a server-side LiveKit→Opus/WSS bridge or native WebRTC;
 decided by V1 and measured latency/CPU. V3: microphone API research and a separately approved
 local-only level meter (Omega's daemon uses `libSceAudioIn` from a background payload; whether
 that captures on 12.20 is [HYP]). V4: two-way. V5: voice during a game — independent problem;
 E3/E6 indicate background output is silent, so in-game voice is currently **not** expected to
-work. Nothing about voice is claimed.
+work. Voice chat is **not** claimed: only V1 is verified.
 
 ## 7. Licences
 

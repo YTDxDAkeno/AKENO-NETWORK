@@ -1,7 +1,8 @@
 # Hardware test plan — AKENO NETWORK Native 0.2 preview (Phase 2.1)
 
-For **your PS5 with firmware 12.20 (kstuff)**, the same setup that ran Native 0.1 next to the
-daemon ([results](PS5_NATIVE_HARDWARE_RESULTS_FW12.20.md)). The questions this test answers:
+For **your PS5 with firmware 12.20 (kstuff)**, the same setup that ran Native 0.1
+(`d094e62bcaf1-ps5`) next to the daemon, with the controller working and audible sound
+([results](PS5_NATIVE_HARDWARE_RESULTS_FW12.20.md)). The questions this test answers:
 **do Friends, Profiles and Activity work natively, with live updates, through the daemon's local
 interface — while the daemon keeps the only server connection, the notifications and the game
 detection?** ([Phase 2 plan](PS5_NATIVE_PHASE2.md)). Nothing here is verified until you run it.
@@ -21,7 +22,8 @@ come online.
    | `AKENONative/` | AKENO Native 0.2 for the launcher (`eboot.elf`, `homebrew.js`, `sce_sys/icon0.png`) |
    | `daemon/akeno-network-ps5-native-ipc.elf` | the Alpha 0.5 daemon **plus** the native interface (separate build; send it with your ELF loader) |
    | `fallback/akeno-network-ps5-alpha-0.5-rc-7e28255.elf` | the hardware-tested Alpha 0.5 RC daemon, byte-identical (your rollback) |
-   | `fallback/native-0.1-*/AKENONative/` | the Native 0.1 you tested (two copies with different build IDs; use the one whose build ID your System screen showed) |
+   | `fallback/native-0.1-d094e62bcaf1/AKENONative/` | **the hardware-tested Native 0.1** (`d094e62bcaf1-ps5`, byte-identical): your rollback |
+   | `fallback/native-0.1-47488b65f4c2/` | the same code with the PR merge build ID; **not** run on a PS5, kept for reference only |
    | `akeno-native.elf` | for the background safety check only (as N1 in the 0.1 plan) |
 3. **What changes on the console compared with what you run today**
    - The native-IPC daemon is the Alpha 0.5 daemon with one addition: at every start it writes a
@@ -107,12 +109,16 @@ Pictures (avatars, banners) are Phase 2.4: this build shows initials.
 | P7.2 | With AKENO Native open, send yourself a message from your phone | The daemon's system notification still appears (in this build AKENO Native shows no message banners of its own) |
 | P7.3 | System → Save diagnostic report; Home → Exit → Exit | Back to the PS5; start again from the launcher: works |
 
-## Test P8 — Still open from 0.1 (please run them now)
+## Test P8 — Still open from 0.1
+
+Audio (four tests, all heard) and controller input (2,274 events, none dropped) are already
+verified with 0.1 ([results](PS5_NATIVE_HARDWARE_RESULTS_FW12.20.md)). What is left:
 
 | # | Step | Expected / report |
 | --- | --- | --- |
-| P8.1 | Controller test: every button, both sticks, L2/R2, hold ◯ 1 s ([0.1 plan, N4](HARDWARE_TEST_PLAN_PS5_NATIVE_0.1.md#test-n4--dualsense-input-part-2-controller)) | Each control lights up; hold ◯ returns |
-| P8.2 | Audio test, defaults, then 256 frames at −14 dBFS ([N5](HARDWARE_TEST_PLAN_PS5_NATIVE_0.1.md#test-n5--sound-part-3-milestone-v1)) | **Heard or not heard** — the answer decides the voice roadmap; where you listened |
+| P8.1 | Controller test: every button, both sticks, L2/R2, the touchpad, hold ◯ 1 s ([0.1 plan, N4](HARDWARE_TEST_PLAN_PS5_NATIVE_0.1.md#test-n4--dualsense-input-part-2-controller)) | Each control lights up; the press counters count; hold ◯ returns |
+| P8.2 | Optional: switch the controller off and on (Control Center → Accessories, then PS button) | Yellow banner while off; navigation works again afterwards |
+| P8.3 | Optional: one audio test in 0.2 | Still heard (the audio code is unchanged since 0.1) |
 
 ## Optional — Native 0.2 with the release daemon
 
@@ -130,8 +136,8 @@ Connection and System work as in 0.1.
 
 ## Rollback
 
-- **Native:** replace `/data/homebrew/AKENONative/` with `fallback/native-0.1-<build ID>/AKENONative/`
-  (or delete it). `/data/akeno-native/` may stay or be deleted.
+- **Native:** replace `/data/homebrew/AKENONative/` with `fallback/native-0.1-d094e62bcaf1/AKENONative/`
+  (the hardware-tested 0.1), or delete it. `/data/akeno-native/` may stay or be deleted.
 - **Daemon:** page → **Exit AKENO**, then send `fallback/akeno-network-ps5-alpha-0.5-rc-7e28255.elf`
   (the hardware-tested RC) or the release ELF you used before. `/data/akeno/native.key` is deleted
   when the native-IPC daemon stops; if it was left behind (crash, power loss) it is harmless — the
@@ -149,6 +155,6 @@ Connection and System work as in 0.1.
 | P5.1–P5.4 | | |
 | P6.1–P6.2 | | |
 | P7.1–P7.3 | | |
-| P8.1 controller | | |
-| P8.2 audio (heard?) | | where you listened: |
+| P8.1 controller (every button) | | |
+| P8.2–P8.3 (optional) | | |
 | Optional | | |

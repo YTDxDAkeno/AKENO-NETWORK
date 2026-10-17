@@ -2,8 +2,8 @@
 
 A native, full-screen AKENO application for a jailbroken PS5: SDL2 at 1920×1080, DualSense
 navigation and your AKENO account — **without the system browser**. Native 0.1 proved on a PS5
-with firmware 12.20 that this app runs in the foreground next to the AKENO daemon
-([results](PS5_NATIVE_HARDWARE_RESULTS_FW12.20.md)). **0.2 adds the first social screens —
+with firmware 12.20 that this app runs in the foreground next to the AKENO daemon, with the
+DualSense working and **audible sound** ([results](PS5_NATIVE_HARDWARE_RESULTS_FW12.20.md)). **0.2 adds the first social screens —
 Friends, Profiles and Activity — read through the daemon's local interface**, with live updates
 from the daemon's realtime session ([Phase 2 plan](PS5_NATIVE_PHASE2.md)). Messages, parties and
 settings follow in 2.2–2.4.
@@ -16,14 +16,14 @@ detection; AKENO Native opens no second realtime session. The daemon's browser p
 
 | Feature | Implemented | Automated tests (PC) | Verified on a PS5 |
 | --- | --- | --- | --- |
-| Full-screen 1920×1080 UI (SDL2 software renderer), AKENO logo, Inter font | yes | screenshots checked pixel by pixel (headless SDL) | **yes** — 0.1 shown on the TV (12.20) |
+| Full-screen 1920×1080 UI (SDL2 software renderer), AKENO logo, Inter font | yes | screenshots checked pixel by pixel (headless SDL) | **yes** — 0.1: native 1920×1080 on the TV (12.20) |
 | Builds for the PS5 with the pinned SDK and SDL2, reproducibly | yes | CI builds twice and compares; import gate | n/a |
-| Runs in the foreground from a homebrew launcher, next to the daemon | yes | — | **yes** — 0.1 (12.20; launcher not named) |
-| Background-context detection (sent to elfldr → opens nothing, notifies, exits) | yes | unit tests of the classification | **no** (0.1 test N1) |
-| DualSense input via SDL (`scePadOpen` error shown verbatim) | yes | SDL virtual controller through SDL's real event path | partly — 0.1 navigation reached the Connection screen; full test not reported |
-| Spatial focus navigation, list scrolling (D-pad, stick, L1/R1), hold-◯ back, dialogs | yes | unit + UI integration tests | partly (navigation, 0.1) |
+| Runs in the foreground from a homebrew launcher, next to the daemon | yes | — | **yes** — 0.1 ran as foreground application `FAKE00000` (12.20) |
+| Background-context detection (sent to elfldr → opens nothing, notifies, exits) | yes | unit tests of the classification | **yes** — 0.1: the protection triggered in the ELF-loader attempts (`native.log`) |
+| DualSense input via SDL (`scePadOpen` error shown verbatim) | yes | SDL virtual controller through SDL's real event path | **yes** — 0.1: opened, 2,274 events, 0 dropped; per-button coverage not itemised |
+| Spatial focus navigation, list scrolling (D-pad, stick, L1/R1), hold-◯ back, dialogs | yes | unit + UI integration tests | partly — 0.1: 48 focus movements; list scrolling is new in 0.2 |
 | Controller disconnect banner (SDL removal; on PS5 also the pad's connected flag) | yes | virtual unplug/plug | **no** |
-| Foreground audio test, every return code and pacing recorded | yes | fake system calls; SDL dummy device | **not reported yet** (0.2 test P8.2) |
+| Foreground audio test, every return code and pacing recorded | yes | fake system calls; SDL dummy device | **yes — audible**: 0.1, four tests, all heard (voice roadmap V1) |
 | Reads the existing pairing read-only; `GET /devices/current`; username on screen | yes | fake server: token sent, file never modified, 401 handled | **yes** — 0.1: HTTP 200, pairing valid, signed in, 14 permissions |
 | Daemon liveness probe (`GET /api/instance`) | yes | fake daemon | **yes** — 0.1: "Running, 0.5.0-alpha" |
 | **Native interface to the daemon** (key file, hello, state, event ring; GET only) | 0.2 | unit (key file rules, loopback client), fake daemon, **end to end with the real server and the native-IPC daemon** | **no** (test P1, P7.1) |
@@ -32,14 +32,14 @@ detection; AKENO Native opens no second realtime session. The daemon's browser p
 | **Activity**: this console's game (daemon detection), your recent games, friends playing | 0.2 | fake daemon + end to end | **no** (P6) |
 | Release daemon (no native interface) recognised, with what to do | 0.2 | fake daemon + end to end with the release daemon | **no** |
 | Redacted log and report, private files (0600); no names of other people in them | yes | unit + integration + end to end | **no** |
-| Clean exit to the system (`sceSystemServiceLoadExec("exit")`, foreground only) | yes | PC exit paths | **no** |
-| Launcher folder with AKENO icon (websrv format) | yes | built in CI | presumably (0.1 ran in the foreground) |
+| Clean exit to the system (`sceSystemServiceLoadExec("exit")`, foreground only) | yes | PC exit paths | **not reported yet** (0.2 test P7.3) |
+| Launcher folder with AKENO icon (websrv format) | yes | built in CI | **yes** — 0.1 started as `FAKE00000` |
 | Messages (2.2), parties (2.3), settings and pictures (2.4), voice | later | — | — |
 
 Hardware results on firmware 12.20 (owner report, 2026-10-17):
 [PS5_NATIVE_HARDWARE_RESULTS_FW12.20.md](PS5_NATIVE_HARDWARE_RESULTS_FW12.20.md). Every native CI
-artifact ships the tested 0.1 build (byte-verified) and the hardware-tested Alpha 0.5 RC daemon
-under `fallback/`.
+artifact ships the hardware-tested Native 0.1 build (`fallback/native-0.1-d094e62bcaf1/`,
+byte-verified) and the hardware-tested Alpha 0.5 RC daemon under `fallback/`.
 
 ## Requirements
 
@@ -89,7 +89,8 @@ Enter/Space (✕), Esc/Backspace (◯), Tab (OPTIONS), Q/E (L1/R1).
 
 **Uninstall:** delete `/data/homebrew/AKENONative/` and `/data/akeno-native/`. Nothing else exists.
 To go back to the release daemon: Exit AKENO on its page and send the release ELF (or
-`fallback/akeno-network-ps5-alpha-0.5-rc-7e28255.elf`).
+`fallback/akeno-network-ps5-alpha-0.5-rc-7e28255.elf`). To go back to Native 0.1: restore
+`fallback/native-0.1-d094e62bcaf1/AKENONative/` (the hardware-tested build).
 
 ## Security and privacy
 

@@ -28,11 +28,12 @@ env:
   RC_COMMIT: 7e28255c63baa528e28866cda53db1dedb3954a6
   RC_BUILD_ID: d59055a9b752
   RC_RELEASE_SHA256: c92e039b384547e69c7a7867b0f7277fcd07db0b1244ce6df3b15840c3e8a342
-  # Native 0.1 ran on a PS5 with 12.20 next to the daemon (owner report,
-  # docs/PS5_NATIVE_HARDWARE_RESULTS_FW12.20.md). Two runs published it with the same code: the push
-  # run 39058830774 (build ID d094e62bcaf1) and the pull-request run 39058834341, which built the PR's
-  # merge commit 47488b65f4c2 (same tree). Both are rebuilt from d094e62, must reproduce these files
-  # exactly, and ship next to every new build as the fallback.
+  # Native 0.1 build d094e62bcaf1 (push run 39058830774) ran on a PS5 with 12.20 next to the daemon:
+  # foreground, controller, audible audio, account (owner report and native-report.txt,
+  # docs/PS5_NATIVE_HARDWARE_RESULTS_FW12.20.md). It is the known-good fallback. The pull-request run
+  # 39058834341 built the same tree from the PR's merge commit (build ID 47488b65f4c2); that file was
+  # not run on a PS5 and is kept for reference only. Both are rebuilt from d094e62 and must
+  # reproduce these files exactly.
   NATIVE_01_COMMIT: d094e62bcaf11787be42fa2be08e9cc1dff9341d
   NATIVE_01_PUSH_BUILD_ID: d094e62bcaf1
   NATIVE_01_PUSH_SHA256: 7eb99ff5a8c6cce49da25a6a52201931001dca7c0a9d2a6bbce6a0ac24eb7560
@@ -344,11 +345,14 @@ jobs:
             echo "    native interface (docs/PS5_NATIVE_PHASE2.md); send it with your ELF loader instead of the release ELF."
             echo "  fallback/akeno-network-ps5-alpha-0.5-rc-7e28255.elf: the hardware-tested Alpha 0.5 RC daemon, rebuilt"
             echo "    from $RC_COMMIT and byte-identical to CI run 39043014243 (ran on a PS5 with 12.20, owner report)."
-            echo "  fallback/native-0.1-$NATIVE_01_PUSH_BUILD_ID/ and fallback/native-0.1-$NATIVE_01_PR_BUILD_ID/: Native 0.1, rebuilt"
-            echo "    from $NATIVE_01_COMMIT and byte-identical to CI runs 39058830774 and 39058834341 (same code,"
-            echo "    different build ID). One of them ran on a PS5 with 12.20 next to the daemon (owner report): screen,"
-            echo "    daemon probe, server HTTP 200, pairing valid, signed in, 14 permissions. Audio and the full"
-            echo "    controller test not reported yet. See HARDWARE_RESULTS_0.1.md."
+            echo "  fallback/native-0.1-$NATIVE_01_PUSH_BUILD_ID/: the HARDWARE-TESTED Native 0.1 (known-good fallback), rebuilt from"
+            echo "    $NATIVE_01_COMMIT and byte-identical to CI run 39058830774. Ran on a PS5 with 12.20 next to the daemon"
+            echo "    (owner report and native-report.txt): foreground application FAKE00000, video 1920x1080, DualSense opened"
+            echo "    (2,274 events, 0 dropped), four audio tests all heard, account authenticated, background protection"
+            echo "    triggered when sent with the ELF loader. Per-button controller coverage and the clean exit were not"
+            echo "    itemised. See HARDWARE_RESULTS_0.1.md."
+            echo "  fallback/native-0.1-$NATIVE_01_PR_BUILD_ID/: the same code with the PR merge build ID (CI run 39058834341);"
+            echo "    NOT run on a PS5, kept for reference only."
           } > "$out/BUILDINFO.txt"
           cat "$out/BUILDINFO.txt"
 
