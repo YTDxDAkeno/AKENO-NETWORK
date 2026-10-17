@@ -52,6 +52,15 @@ export const ERROR_CODES = [
   'PLAYER2_TAKEN',
   'NO_REQUEST',
   'GRANT_CHANGED',
+  // LAN Play (experimental) control plane
+  'LAN_PLAY_UNAVAILABLE',
+  'LAN_SESSION_ACTIVE',
+  'NO_LAN_SESSION',
+  'NOT_IN_LAN_SESSION',
+  'NOT_LAN_HOST',
+  'LAN_PARTICIPANTS_FULL',
+  'LAN_TRANSPORT_UNAVAILABLE',
+  'LAN_GAME_UNKNOWN',
   'INTERNAL_ERROR',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];

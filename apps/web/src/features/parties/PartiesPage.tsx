@@ -6,6 +6,7 @@ import { Link } from 'react-router';
 import { Avatar } from '../../components/Avatar';
 import { GameActivityLine } from '../../components/GameActivity';
 import { SharePlayPanel } from '../shareplay/SharePlayPanel';
+import { LanPlayPanel } from '../lanplay/LanPlayPanel';
 import { MemberVolumeControl, PartyVoicePanel, VoiceStateLine, useMemberVoice } from '../voice/PartyVoice';
 import { Badge } from '../../components/Badge';
 import { Button } from '../../components/Button';
@@ -201,6 +202,7 @@ function CurrentParty({ party }: { party: PartyDto }) {
         </header>
         <PartyVoicePanel party={party} />
         <SharePlayPanel party={party} />
+        <LanPlayPanel party={party} />
         <ul className="grid gap-3 p-4 sm:grid-cols-2" data-testid="party-members">
           {party.members.map((member) => (
             <MemberTile key={member.user.id} member={member} party={party} isLeader={isLeader} meId={me.id} onAction={(run) => action.mutate(run)} />

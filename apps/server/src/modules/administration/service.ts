@@ -164,6 +164,7 @@ export class AdminService {
       this.ctx.hub.disconnectUser(userId, 'This account has been suspended.', REALTIME_CLOSE_CODES.sessionRevoked);
       this.ctx.voice.removeUserEverywhere(userId);
       this.ctx.shareplay.removeUserEverywhere(userId);
+      this.ctx.lanplay.removeUserEverywhere(userId);
     }
     const [dto] = (await this.listUsers(undefined, 1000)).filter((user) => user.id === userId);
     if (!dto) throw Errors.notFound('The user');

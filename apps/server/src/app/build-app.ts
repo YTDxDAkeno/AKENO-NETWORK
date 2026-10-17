@@ -26,6 +26,7 @@ import { notificationsRoutes } from '../modules/notifications/routes.js';
 import { partiesRoutes } from '../modules/parties/routes.js';
 import { usersRoutes } from '../modules/users/routes.js';
 import { sharePlayRoutes } from '../modules/shareplay/routes.js';
+import { lanPlayRoutes } from '../modules/lanplay/routes.js';
 import { voiceRoutes } from '../modules/voice/routes.js';
 import { realtimeGateway, startRealtimeMaintenance } from '../realtime/gateway.js';
 import { isApiLikePath, isStaticWebRequest, registerStaticWeb } from '../services/static-web.js';
@@ -154,6 +155,7 @@ export async function buildApp(options: BuildAppOptions): Promise<BuiltApp> {
       await api.register(activityRoutes(ctx));
       await api.register(voiceRoutes(ctx));
       await api.register(sharePlayRoutes(ctx));
+      await api.register(lanPlayRoutes(ctx));
     },
     { prefix: API_PREFIX },
   );
@@ -187,6 +189,7 @@ export async function buildApp(options: BuildAppOptions): Promise<BuiltApp> {
   let activitySweep: NodeJS.Timeout | null = null;
   let voiceReconcile: NodeJS.Timeout | null = null;
   let sharePlayReconcile: NodeJS.Timeout | null = null;
+  let lanPlaySweep: NodeJS.Timeout | null = null;
   app.addHook('onReady', async () => {
     await ctx.media.init();
     await ctx.games.load();
@@ -211,6 +214,11 @@ export async function buildApp(options: BuildAppOptions): Promise<BuiltApp> {
         sharePlayReconcile = setInterval(reconcile, 30_000);
         sharePlayReconcile.unref();
       }
+      if (ctx.lanplay.enabled) {
+        // Ends LAN Play sessions that passed their TTL (safety cap; sessions carry no traffic).
+        lanPlaySweep = setInterval(() => ctx.lanplay.sweep(), 60_000);
+        lanPlaySweep.unref();
+      }
     }
   });
 
@@ -219,7 +227,9 @@ export async function buildApp(options: BuildAppOptions): Promise<BuiltApp> {
     if (activitySweep) clearInterval(activitySweep);
     if (voiceReconcile) clearInterval(voiceReconcile);
     if (sharePlayReconcile) clearInterval(sharePlayReconcile);
+    if (lanPlaySweep) clearInterval(lanPlaySweep);
     ctx.shareplay.shutdown();
+    ctx.lanplay.shutdown();
     stopMaintenance?.();
     try {
       await ctx.presence.flushLastSeen();
