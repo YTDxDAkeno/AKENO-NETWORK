@@ -89,6 +89,14 @@ static void route_state(akeno_app *app, ui_response *r) {
     pthread_mutex_lock(&app->lock);
     akeno_buf_append_str(b, "{\"ok\":true,\"app\":{");
     json_kv_str(b, "version", AKENO_APP_VERSION, 0);
+#ifdef AKENO_EXPERIMENTAL_AUDIO
+    /* The lab names itself here (app.js is shared with the release and only appends "Audio lab v2"
+     * for the old audioLab flag, which this build no longer sends). */
+    json_kv_str(b, "release", AKENO_APP_RELEASE " \xc2\xb7 Audio lab v3", 1);
+    json_kv_int(b, "audioLabVersion", 3, 1);
+#else
+    json_kv_str(b, "release", AKENO_APP_RELEASE, 1);
+#endif
     json_kv_str(b, "build", AKENO_BUILD_ID, 1);
     json_kv_str(b, "platform", app->platform.name, 1);
     json_kv_str(b, "firmware", app->platform.firmware, 1);
@@ -120,6 +128,8 @@ static void route_state(akeno_app *app, ui_response *r) {
     app_activity_json(app, b, 0);
     akeno_buf_append_str(b, ",\"inbox\":");
     inbox_summary_json(app, b);
+    akeno_buf_append_str(b, ",\"quickAccess\":");
+    app_quick_access_json(app, b);
     json_kv_int(b, "eventsNext", (long long)app->next_seq, 1);
     akeno_buf_append_str(b, "}");
     pthread_mutex_unlock(&app->lock);
@@ -218,6 +228,17 @@ static void route_settings(akeno_app *app, const akeno_json *root, ui_response *
         respond_error(r, 400, "INVALID_NAME", "The console name must be 1 to 48 characters long.");
         return;
     }
+    const char *combo = akeno_json_get_string(root, "quickAccessCombo", NULL);
+    if (combo && !akeno_shortcut_combo_find(combo)) {
+        respond_error(r, 400, "INVALID_SHORTCUT", "Choose one of the offered controller combinations.");
+        return;
+    }
+    int64_t hold = 0;
+    const akeno_json *hold_json = akeno_json_get(root, "quickAccessHoldMs");
+    if (hold_json && (akeno_json_int64(hold_json, &hold) != 0 || !akeno_shortcut_hold_valid((int)hold))) {
+        respond_error(r, 400, "INVALID_HOLD", "Choose a hold time of 1, 1.5 or 2 seconds.");
+        return;
+    }
     pthread_mutex_lock(&app->lock);
     if (server_changed) snprintf(app->server, sizeof(app->server), "%s", server);
     if (name) snprintf(app->device_name, sizeof(app->device_name), "%s", name);
@@ -227,6 +248,12 @@ static void route_settings(akeno_app *app, const akeno_json *root, ui_response *
     app->activity_enabled = akeno_json_get_bool(root, "activityEnabled", app->activity_enabled);
     if (app->activity_enabled && !activity_before) app->act_wanted = 1;
     app->actionable_notifications = akeno_json_get_bool(root, "actionableNotifications", app->actionable_notifications);
+    int qa_before = app->qa_shortcut;
+    app->qa_shortcut = akeno_json_get_bool(root, "quickAccessShortcut", app->qa_shortcut);
+    int qa_changed = qa_before != app->qa_shortcut || combo || hold_json;
+    if (combo) app_copy_str(app->qa_combo, sizeof(app->qa_combo), combo);
+    if (hold_json) app->qa_hold_ms = (int)hold;
+    if (qa_changed) app->qa.config_gen++;
     if (server_changed) app->credentials_changed = 1;
     pthread_mutex_unlock(&app->lock);
     if (app_save_settings(app) != AKENO_OK) {
@@ -234,6 +261,9 @@ static void route_settings(akeno_app *app, const akeno_json *root, ui_response *
         return;
     }
     if (server_changed) app_log(app, AKENO_LOG_INFO, "settings.server", "Server set to %s.", server);
+    if (qa_changed)
+        app_log(app, AKENO_LOG_INFO, "settings.quickaccess", "Controller shortcut %s (%s, hold %d ms).", app->qa_shortcut ? "on" : "off",
+                app->qa_combo, app->qa_hold_ms);
     app_tick(app);
     respond_ok(r);
 }
@@ -299,12 +329,15 @@ static void respond_image(ui_response *r, const char *type, const unsigned char 
     free(encoded);
 }
 
-/* GET /api/media?id=<media id>&v=sm|md|fallback: a profile picture or game artwork from the server. */
+/* GET /api/media?id=<media id>&v=sm|md|lg|fallback: a profile picture, banner or game artwork. */
 static void route_media(akeno_app *app, const ui_request *req, ui_response *r) {
     char id[40] = "", variant[16] = "";
     ui_http_query_param(req->query, "id", id, sizeof(id));
     ui_http_query_param(req->query, "v", variant, sizeof(variant));
-    const char *file = strcmp(variant, "sm") == 0 ? "sm.webp" : strcmp(variant, "md") == 0 ? "md.webp" : "fallback.jpg";
+    const char *file = strcmp(variant, "sm") == 0   ? "sm.webp"
+                       : strcmp(variant, "md") == 0 ? "md.webp"
+                       : strcmp(variant, "lg") == 0 ? "lg.webp"
+                                                    : "fallback.jpg";
     if (!app->ui_client || !akeno_client_is_paired(app->ui_client)) {
         respond_error(r, 401, "NOT_PAIRED", "This console is not paired.");
         return;
@@ -513,7 +546,8 @@ static void route_diagnostics(akeno_app *app, ui_response *r) {
     akeno_buf_append_str(b, ",\"realtime\":{");
     json_kv_str(b, "state", app->rt_state, 0);
     json_kv_str(b, "detail", app->rt_detail, 1);
-    akeno_buf_append_str(b, "}");
+    akeno_buf_append_str(b, "},\"quickAccess\":");
+    app_quick_access_json(app, b);
     pthread_mutex_unlock(&app->lock);
 #ifdef AKENO_EXPERIMENTAL_AUDIO
     json_kv_bool(b, "experimentalAudio", 1, 1); /* audio lab build: the page shows its section */
@@ -583,20 +617,131 @@ static void respond_audio_status(ui_response *r) {
     respond_json(r, 200);
 }
 
-/* POST /api/diagnostics/audio/tone {"confirm":"play"}: the explicit confirmation is required. */
+/*
+ * POST /api/diagnostics/audio/tone {"confirm":"play","preset":"stereo16-1024","level":"moderate","delaySeconds":0}:
+ * the explicit confirmation is required; presets and levels are the ones audio_lab.c offers.
+ */
 static void route_audio_tone(akeno_app *app, const akeno_json *root, ui_response *r) {
     const char *confirm = akeno_json_get_string(root, "confirm", NULL);
     if (!confirm || strcmp(confirm, "play") != 0) {
         respond_error(r, 400, "CONFIRMATION_REQUIRED", "Confirm the experimental test tone first.");
         return;
     }
-    int rc = audio_lab_tone_start();
-    if (rc == 1) {
-        respond_error(r, 409, "BUSY", "The test tone is already playing.");
+    int64_t delay = 0;
+    const akeno_json *delay_json = akeno_json_get(root, "delaySeconds");
+    if (delay_json && akeno_json_int64(delay_json, &delay) != 0) delay = -1;
+    char err[160] = "";
+    int rc = audio_lab_tone_start(akeno_json_get_string(root, "preset", NULL), akeno_json_get_string(root, "level", NULL), (int)delay, err,
+                                  sizeof(err));
+    if (rc != 0) {
+        respond_error(r, rc == -1 ? 400 : rc == -2 ? 500 : rc == 3 ? 429 : 409,
+                      rc == -1 ? "INVALID" : rc == 1 ? "BUSY" : rc == 2 ? "TOO_SOON" : rc == 3 ? "LIMIT" : "THREAD", err);
+        if (rc == -2) app_log(app, AKENO_LOG_WARN, "audio.tone", "The experimental test tone could not start: %s", err);
         return;
     }
-    app_log(app, rc == 0 ? AKENO_LOG_INFO : AKENO_LOG_WARN, "audio.tone", rc == 0 ? "Experimental test tone started by the user."
-                                                                                  : "The experimental test tone could not start.");
+    app_log(app, AKENO_LOG_INFO, "audio.tone", "Experimental test tone started by the user (preset %s, level %s, delay %d s).",
+            akeno_json_get_string(root, "preset", "default"), akeno_json_get_string(root, "level", "default"), (int)delay);
+    respond_audio_status(r);
+}
+
+/* POST /api/diagnostics/audio/feedback {"run":N,"heard":true|false,"route":"tv"}: the user's own report. */
+static void route_audio_feedback(akeno_app *app, const akeno_json *root, ui_response *r) {
+    int64_t run = 0;
+    const akeno_json *heard = akeno_json_get(root, "heard");
+    const char *route = akeno_json_get_string(root, "route", "");
+    static const char *const routes[] = { "", "tv", "controller-headset", "usb-headset", "other" };
+    int route_ok = 0;
+    for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) route_ok |= strcmp(route, routes[i]) == 0;
+    if (!root || akeno_json_int64(akeno_json_get(root, "run"), &run) != 0 || !heard ||
+        heard->type != AKENO_JSON_BOOL || !route_ok) {
+        respond_error(r, 400, "INVALID_BODY", "Expected {\"run\": number, \"heard\": boolean, \"route\": string}.");
+        return;
+    }
+    int yes = heard->boolean != 0;
+    if (audio_lab_feedback((int)run, yes, route) != 0) {
+        respond_error(r, 404, "UNKNOWN_RUN", "That test is unknown or still running.");
+        return;
+    }
+    app_log(app, AKENO_LOG_INFO, "audio.feedback", "User report for test %d: %s%s%s.", (int)run, yes ? "heard" : "not heard",
+            yes && route[0] ? " on " : "", yes ? route : "");
+    respond_audio_status(r);
+}
+
+/* POST /api/diagnostics/audio/browser: the page's own Web Audio test, reported for comparison. */
+static void route_audio_browser(akeno_app *app, const akeno_json *root, ui_response *r) {
+    if (!root || root->type != AKENO_JSON_OBJECT) {
+        respond_error(r, 400, "INVALID_BODY", "Expected a JSON object.");
+        return;
+    }
+    audio_lab_browser_result result;
+    memset(&result, 0, sizeof(result));
+    result.api_available = akeno_json_get_bool(root, "apiAvailable", 0);
+    app_copy_str(result.state, sizeof(result.state), akeno_json_get_string(root, "state", ""));
+    int64_t rate = 0;
+    if (akeno_json_int64(akeno_json_get(root, "sampleRate"), &rate) == 0 && rate > 0 && rate < 1000000) result.sample_rate = (int)rate;
+    result.clock_advanced = akeno_json_get_bool(root, "clockAdvanced", 0);
+    const akeno_json *heard = akeno_json_get(root, "heard");
+    result.heard = heard && heard->type == AKENO_JSON_BOOL ? (heard->boolean ? 1 : 0) : -1;
+    const char *route = akeno_json_get_string(root, "route", "");
+    app_copy_str(result.route, sizeof(result.route),
+                 strcmp(route, "tv") == 0 || strcmp(route, "controller-headset") == 0 || strcmp(route, "usb-headset") == 0 ||
+                         strcmp(route, "other") == 0
+                     ? route
+                     : "");
+    app_copy_str(result.error, sizeof(result.error), akeno_json_get_string(root, "error", ""));
+    for (char *c = result.state; *c; c++)
+        if ((unsigned char)*c < 0x20) *c = ' ';
+    for (char *c = result.error; *c; c++)
+        if ((unsigned char)*c < 0x20) *c = ' ';
+    audio_lab_browser_report(&result);
+    app_log(app, AKENO_LOG_INFO, "audio.browser", "Browser audio test: API %s, state %s, heard %d.", result.api_available ? "available" : "missing",
+            result.state, result.heard);
+    respond_audio_status(r);
+}
+
+static void printable(char *s) {
+    for (char *c = s; *c; c++)
+        if ((unsigned char)*c < 0x20) *c = ' ';
+}
+
+static double json_seconds(const akeno_json *root, const char *key) {
+    const akeno_json *v = akeno_json_get(root, key);
+    return v && v->type == AKENO_JSON_NUMBER && v->number >= 0 && v->number < 3600 ? v->number : -1;
+}
+
+/* POST /api/diagnostics/audio/media: the page's HTML <audio> element test (v3), for comparison. */
+static void route_audio_media(akeno_app *app, const akeno_json *root, ui_response *r) {
+    if (!root || root->type != AKENO_JSON_OBJECT) {
+        respond_error(r, 400, "INVALID_BODY", "Expected a JSON object.");
+        return;
+    }
+    audio_lab_media_result result;
+    memset(&result, 0, sizeof(result));
+    const char *source = akeno_json_get_string(root, "source", "");
+    app_copy_str(result.source, sizeof(result.source), strcmp(source, "blob") == 0 || strcmp(source, "data") == 0 ? source : "");
+    app_copy_str(result.play_result, sizeof(result.play_result), akeno_json_get_string(root, "playResult", ""));
+    result.loaded_metadata = akeno_json_get_bool(root, "loadedMetadata", 0);
+    result.can_play = akeno_json_get_bool(root, "canPlay", 0);
+    result.playing = akeno_json_get_bool(root, "playing", 0);
+    result.ended = akeno_json_get_bool(root, "ended", 0);
+    int64_t code = 0;
+    if (akeno_json_int64(akeno_json_get(root, "errorCode"), &code) == 0 && code >= 0 && code <= 4) result.error_code = (int)code;
+    result.duration = json_seconds(root, "duration");
+    result.current_time = json_seconds(root, "currentTime");
+    const akeno_json *heard = akeno_json_get(root, "heard");
+    result.heard = heard && heard->type == AKENO_JSON_BOOL ? (heard->boolean ? 1 : 0) : -1;
+    const char *route = akeno_json_get_string(root, "route", "");
+    app_copy_str(result.route, sizeof(result.route),
+                 strcmp(route, "tv") == 0 || strcmp(route, "controller-headset") == 0 || strcmp(route, "usb-headset") == 0 ||
+                         strcmp(route, "other") == 0
+                     ? route
+                     : "");
+    app_copy_str(result.features, sizeof(result.features), akeno_json_get_string(root, "features", ""));
+    printable(result.play_result);
+    printable(result.features);
+    audio_lab_media_report(&result);
+    app_log(app, AKENO_LOG_INFO, "audio.media", "Browser audio element test: %s URL, play() %s, ended %d, error %d, heard %d.",
+            result.source[0] ? result.source : "unknown", result.play_result, result.ended, result.error_code, result.heard);
     respond_audio_status(r);
 }
 #endif
@@ -646,6 +791,19 @@ void app_route(akeno_app *app, const ui_request *req, const char *body, size_t b
         r->content_type = "text/css; charset=utf-8";
         r->static_body = akeno_ui_css;
         r->static_len = (size_t)(akeno_ui_css_end - akeno_ui_css) - 1;
+        return;
+    }
+    if (is(req, "GET", "/audiolab.js")) {
+        r->status = 200;
+        r->content_type = "text/javascript; charset=utf-8";
+#ifdef AKENO_EXPERIMENTAL_AUDIO
+        r->static_body = akeno_ui_audiolab_js;
+        r->static_len = (size_t)(akeno_ui_audiolab_js_end - akeno_ui_audiolab_js) - 1;
+#else
+        static const char none[] = "/* AKENO NETWORK: the audio lab is not part of this build. */\n";
+        r->static_body = none;
+        r->static_len = sizeof(none) - 1;
+#endif
         return;
     }
     if (is(req, "GET", "/favicon.ico")) {
@@ -718,6 +876,24 @@ void app_route(akeno_app *app, const ui_request *req, const char *body, size_t b
         pthread_mutex_unlock(&app->lock);
         app_tick(app);
         respond_ok(r);
+    } else if (is(req, "GET", "/api/quick-access")) {
+        respond_json(r, 200);
+        akeno_buf_append_str(&r->body, "{\"ok\":true,\"quickAccess\":");
+        pthread_mutex_lock(&app->lock);
+        app_quick_access_json(app, &r->body);
+        pthread_mutex_unlock(&app->lock);
+        akeno_buf_append_str(&r->body, "}");
+    } else if (is(req, "POST", "/api/quick-access/test")) {
+        doc = akeno_json_parse(body ? body : "", body_len, NULL, 0);
+        int64_t seconds = 30;
+        if (doc) akeno_json_int64(akeno_json_get(akeno_json_root(doc), "seconds"), &seconds);
+        app_quick_access_test(app, (int)(seconds > 0 && seconds <= 60 ? seconds : 30));
+        respond_json(r, 200);
+        akeno_buf_append_str(&r->body, "{\"ok\":true,\"quickAccess\":");
+        pthread_mutex_lock(&app->lock);
+        app_quick_access_json(app, &r->body);
+        pthread_mutex_unlock(&app->lock);
+        akeno_buf_append_str(&r->body, "}");
     } else if (is(req, "GET", "/api/diagnostics")) {
         route_diagnostics(app, r);
     } else if (is(req, "POST", "/api/diagnostics/connection")) {
@@ -738,6 +914,22 @@ void app_route(akeno_app *app, const ui_request *req, const char *body, size_t b
     } else if (is(req, "POST", "/api/diagnostics/audio/tone")) {
         doc = akeno_json_parse(body ? body : "", body_len, NULL, 0);
         route_audio_tone(app, akeno_json_root(doc), r);
+    } else if (is(req, "POST", "/api/diagnostics/audio/cancel")) {
+        if (audio_lab_cancel() == 0) app_log(app, AKENO_LOG_INFO, "audio.cancel", "Experimental test cancelled by the user.");
+        respond_audio_status(r);
+    } else if (is(req, "POST", "/api/diagnostics/audio/feedback")) {
+        doc = akeno_json_parse(body ? body : "", body_len, NULL, 0);
+        route_audio_feedback(app, akeno_json_root(doc), r);
+    } else if (is(req, "POST", "/api/diagnostics/audio/media")) {
+        doc = akeno_json_parse(body ? body : "", body_len, NULL, 0);
+        route_audio_media(app, akeno_json_root(doc), r);
+    } else if (is(req, "POST", "/api/diagnostics/audio/browser")) {
+        doc = akeno_json_parse(body ? body : "", body_len, NULL, 0);
+        route_audio_browser(app, akeno_json_root(doc), r);
+    } else if (is(req, "GET", "/api/diagnostics/audio/report")) {
+        r->status = 200;
+        r->content_type = "text/plain; charset=utf-8";
+        audio_lab_report_text(&r->body);
 #endif
     } else if (is(req, "POST", "/api/exit")) {
         app_log(app, AKENO_LOG_INFO, "app.exit_requested", "Exit requested from the console page.");

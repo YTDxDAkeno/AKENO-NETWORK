@@ -27,11 +27,74 @@ The console build additionally contains, downloaded at pinned versions with SHA-
 | mbedTLS | 3.6.7 (LTS) | Apache-2.0 | TLS 1.2/1.3 and X.509 verification (statically linked) |
 | Mozilla CA certificate bundle, via certifi | 2026.07.22 | MPL-2.0 | Trusted roots embedded in the ELF |
 | ps5-payload-sdk (crt, libc, stubs) | `f5d40f0` | GPLv3+ (FreeBSD headers under BSD licenses) | Startup code and libc linked into the PS5 ELF |
+| Lucide icons (path data of 8 icons, from lucide-react) | 1.56.0 | ISC | Badge medallion icons in the console page (`app/web/app.js`, embedded in both PS5 ELFs); notice below |
 
 Because the PS5 ELF links the SDK's GPLv3+ runtime, a distributed PS5 binary is a combined work
 under the GPLv3; AKENO's MIT and mbedTLS's Apache-2.0 code are compatible with that. The complete
 corresponding source is this repository plus the pinned SDK and inputs named above. The PR #1
 diagnostic ELF (`clients/ps5/ps5-smoke`) is built from the same SDK.
+
+### Lucide icons in the PS5 console page (Alpha 0.5)
+
+The console page draws AKENO's badge medallions with the same line icons as the website
+(`apps/web/src/components/BadgeIcon.tsx`). Because the page has no package manager, the path data
+of exactly these eight Lucide icons is copied, unmodified, into `clients/ps5/app/web/app.js`, which
+is embedded in `akeno-network-ps5.elf` and the audio lab ELFs (`akeno-network-ps5-audiolab-v2.elf`, `-v3.elf`):
+
+`crown` (AKENO Founder), `shield-check` (Administrator), `braces` (Developer), `badge-check`
+(Verified Contributor), `sprout` (Early Supporter), `flask-conical` (Beta Tester), `gamepad-2`
+(PS5 Alpha Tester), `ticket` (Community Event Participant).
+
+None of them is among the icons Lucide lists as derived from Feather (MIT), so only Lucide's ISC
+licence applies. Its full notice is reproduced in `app.js` next to the data (so it travels inside
+every ELF), in this file, and in the build artifact (`LICENSES.md`):
+
+```
+ISC License
+
+Copyright (c) 2026 Lucide Icons and Contributors
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+```
+
+The hexagon medallion shape, colours and badge names are AKENO's own (`packages/shared/src/badges.ts`).
+
+### Reference sources for the PS5 research (read, not linked into AKENO)
+
+Function declarations used by the PS5 platform layer were taken from these projects; no code from
+them is compiled into AKENO except the declarations' shapes and constants:
+
+| Project | Commit | License | What was used |
+| --- | --- | --- | --- |
+| ps5-payload-dev/SDL (`src/audio/ps5`, `src/joystick/ps5`) | `ee4c47d` | zlib | `sceAudioOut*` and `scePad*` declarations, formats, button bits, `PS5_PadData` layout |
+| ps5-payload-dev/websrv (`src/ps5/hbldr.c`) | `7748df9` | GPLv3+ | Declaration of `sceUserServiceGetForegroundUser`; read to understand how homebrew is launched (its method is **not** used) |
+| ps5-payload-dev/elfldr | `02cfe91` | GPLv3+ | Read to understand how payloads are spawned (no code used) |
+| boykopovar/AnyPS5 (`core/libs/prx/libSceAudioOut`, `libSceAudioIn`, `libScePad`, `libSceVoice`, `docs/dev/debt`, issue #3177) | `f517240` | GPL-2.0-or-later | Research only (2026-10-17): structure layouts, argument lists, error codes and a 13.60 hardware log are cited in the research docs. **No code copied**, nothing used in a build |
+| sainsaji/PS5-Audio-Passthrough-Research (`docs/FINDINGS.md`, `sample-app/src/platform/ps5`) | `c3be9c2` | GPL-3.0 | Research only (2026-10-17): hardware results on firmware 12.70, call sequences and return codes cited in the research docs. **No code copied**, nothing used in a build |
+
+| shadps4-emu/shadPS4 (`src/core/libraries/audio/audioout.h/.cpp`) | `e6c79a5` | GPL-2.0-or-later | Research only (audio lab v3): the `sceAudioOutGetPortState` declaration, the 32-byte `SceAudioOutPortState` layout and the output-state constants were compared; **no code copied** |
+| red-prig/fpPS4 (`src/audio/ps4_libsceaudioout.pas`) | `04cefd4` | LGPL-2.1 | Research only (audio lab v3): same comparison; **no code copied** |
+| OpenOrbis/OpenOrbis-PS4-Toolchain (`include/orbis/AudioOut.h`) | `0a1aaf9` | GPL-3.0 | Research only (audio lab v3): the two-argument declaration; **no code copied** |
+| SvenGDK/SharpProspero (`src/SharpProspero/Interop/Audio/AudioOut.cs`) | `5dfdb4b` | GPL-3.0 | Research only (audio lab v3): the PS5 interop declaration with `Size = 32`; **no code copied** |
+
+AKENO's `clients/ps5/app/audio_lab_state.c` declares the function itself from these facts
+(`int32_t (*)(int32_t handle, void *state)`), treats the structure as raw bytes and decodes only
+field offsets and constants — interoperability facts, not copied expression.
+
+AKENO is MIT-licensed. Code from the GPL projects above could only be incorporated after a
+licence review, because the combined ELF would then have to be distributed under the GPL. Only
+facts needed for interoperability (function names, argument order, constants, observed return
+codes) are recorded, with their source.
 
 ## Runtime dependencies (shipped)
 
