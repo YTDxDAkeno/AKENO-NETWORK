@@ -105,10 +105,13 @@ const char *akeno_platform_audio_library_dir(void);
 int akeno_platform_audio_lookup(const char *library, const char *const *names, int *found, size_t count, char *err, size_t err_len);
 
 /*
- * Audio lab v2: one output test through sceAudioOut with the declarations of the PS5 audio driver
- * of ps5-payload-dev/SDL. Every parameter stays inside what that driver uses (user 0xFF = system,
- * port type 0 = main, 48 kHz, S16/float mono/stereo, 256..2048 frames per call).
+ * Audio lab v2/v3: one output test through sceAudioOut with the declarations of the PS5 audio
+ * driver of ps5-payload-dev/SDL. Every parameter stays inside what that driver uses (user 0xFF =
+ * system, port type 0 = main, 48 kHz, S16/float mono/stereo, 256..2048 frames per call).
+ * v3 adds read-only measurements of the test's own port (audio_lab_state.h): before the first
+ * block, in the middle of the tone and before the port is closed.
  */
+#include "audio_lab_state.h"
 typedef struct {
     int user_id;           /* 0xFF (system), as the SDL driver */
     int port_type;         /* 0 (main), as the SDL driver */
@@ -143,6 +146,9 @@ typedef struct {
     int close_rc;
     int cancelled;
     char error[200];
+    int port_state_exported;     /* sceAudioOutGetPortState was found (looked up with dlsym) */
+    int port_state_stopped;      /* it wrote outside its window once: never called again in this process */
+    audio_lab_state_sample port_state[AUDIO_LAB_STATE_POINTS];
 } akeno_audio_result;
 
 /*

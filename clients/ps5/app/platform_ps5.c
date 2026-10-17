@@ -27,6 +27,10 @@
  *   sceAudioOutInit/Open/Output/Close ps5-payload-dev/SDL   prototypes and constants from its PS5 audio
  *                                                           driver (src/audio/ps5, commit ee4c47d);
  *                                                           resolved at run time (prototype C)
+ *   sceAudioOutGetPortState           OpenOrbis, shadPS4,   (int32 handle, state*), read-only, on the
+ *                                     fpPS4, SharpProspero, test's own port only; guarded buffer
+ *                                     AnyPS5 (see           (audio_lab_state.h); resolved at run time,
+ *                                     PS5_AUDIO_RESEARCH)   skipped when not exported (audio lab v3)
  *
  * Game detection never attaches to, injects into or modifies another process.
  *
@@ -488,8 +492,10 @@ void akeno_platform_pad_close(void) {
  * format and frames per call follow the SDL driver's common path (S16 stereo, 1024) unless the
  * user picks another verified combination, silence is written before and after the tone, and
  * every call is timed so the report shows whether the system consumed the samples in real time.
- * Nothing else is called: no volume, routing, port state or focus function (no verified PS5
- * declaration exists for those; audio_lab.c only looks their names up).
+ *
+ * Audio lab v3 adds one read-only query of the test's own port, sceAudioOutGetPortState, three
+ * times per test (audio_lab_state.h has the evidence and the guards). Nothing else is called: no
+ * volume, routing, focus, attach, HDMI or privilege function (audio_lab.c only looks their names up).
  */
 #include "audio_lab_pcm.h"
 
@@ -523,6 +529,9 @@ static audio_out_close_fn g_audio_out_close;
 static int g_audio_init_done = 0;
 static int g_audio_init_rc = 0;
 static unsigned char g_audio_block[AUDIO_LAB_MAX_BLOCK_BYTES] __attribute__((aligned(64)));
+static audio_lab_port_state_fn g_audio_get_port_state; /* NULL when not exported */
+static int g_port_state_stopped = 0; /* it wrote outside its window once: never called again */
+static unsigned char g_port_state_arena[AUDIO_LAB_STATE_ARENA_BYTES] __attribute__((aligned(64)));
 /* Own lock (not g_lock): a test blocks for seconds and must not hold up notifications or the browser. */
 static pthread_mutex_t g_audio_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -554,6 +563,8 @@ static int audio_out_load(akeno_audio_result *r) {
         g_audio_out_open = open_fn;
         g_audio_out_output = output;
         g_audio_out_close = close_fn;
+        /* Optional: only looked up here, and called by measure_port_state on the test's own port. */
+        g_audio_get_port_state = (audio_lab_port_state_fn)dlsym(lib, "sceAudioOutGetPortState");
         r->init_called = 1;
         g_audio_init_rc = init();
         g_audio_init_done = g_audio_init_rc == 0;
@@ -565,6 +576,14 @@ static int audio_out_load(akeno_audio_result *r) {
         return -1;
     }
     return 0;
+}
+
+/* g_audio_lock held. One read-only measurement of the test's own port (two guarded calls). */
+static void measure_port_state(int32_t handle, akeno_audio_result *r, int point, long long first_start) {
+    if (!g_audio_get_port_state || g_port_state_stopped) return;
+    audio_lab_state_sample *s = &r->port_state[point];
+    if (audio_lab_state_measure(g_audio_get_port_state, handle, g_port_state_arena, s) != 0) g_port_state_stopped = 1;
+    s->at_us = first_start ? monotonic_us() - first_start : 0;
 }
 
 int akeno_platform_audio_run(const akeno_audio_params *p, akeno_audio_result *r) {
@@ -590,7 +609,9 @@ int akeno_platform_audio_run(const akeno_audio_params *p, akeno_audio_result *r)
         pthread_mutex_unlock(&g_audio_lock);
         return -1;
     }
-    int result = 0;
+    r->port_state_exported = g_audio_get_port_state != NULL;
+    measure_port_state(handle, r, AUDIO_LAB_STATE_BEFORE_PLAYBACK, 0);
+    int result = 0, measured_mid = 0;
     long long first_start = 0, last_end = 0;
     for (unsigned long done = 0; done < p->frames; done += p->grain) {
         if (p->cancel && *p->cancel) {
@@ -623,8 +644,14 @@ int akeno_platform_audio_run(const akeno_audio_params *p, akeno_audio_result *r)
             if (r->call_min_us < 0 || us < r->call_min_us) r->call_min_us = us;
             if (us > r->call_max_us) r->call_max_us = us;
         }
+        if (!measured_mid && done + p->grain >= p->frames / 2) { /* half way: inside the tone */
+            measure_port_state(handle, r, AUDIO_LAB_STATE_DURING_PLAYBACK, first_start);
+            measured_mid = 1;
+        }
     }
     r->wall_us = first_start ? last_end - first_start : 0;
+    measure_port_state(handle, r, AUDIO_LAB_STATE_BEFORE_CLOSE, first_start);
+    r->port_state_stopped = g_port_state_stopped;
     r->close_called = 1;
     r->close_rc = g_audio_out_close(handle);
     if (r->close_rc != 0 && result == 0) {

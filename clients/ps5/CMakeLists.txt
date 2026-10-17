@@ -98,7 +98,7 @@ if(AKENO_HAVE_MBEDTLS)
   target_link_libraries(akeno-app PRIVATE akeno_client_mbedtls)
 
   # Audio lab: the same app with the experimental PS5 audio research (simulated on Linux).
-  add_executable(akeno-app-audiolab app/main.c app/platform_host.c app/audio_lab.c app/audio_lab_pcm.c ${AKENO_APP_SOURCES})
+  add_executable(akeno-app-audiolab app/main.c app/platform_host.c app/audio_lab.c app/audio_lab_pcm.c app/audio_lab_state.c ${AKENO_APP_SOURCES})
   target_include_directories(akeno-app-audiolab PRIVATE src app)
   target_compile_options(akeno-app-audiolab PRIVATE ${AKENO_WARNINGS} ${AKENO_HARDENING})
   target_compile_definitions(akeno-app-audiolab PRIVATE AKENO_EXPERIMENTAL_AUDIO
@@ -109,14 +109,16 @@ endif()
 
 enable_testing()
 add_executable(akeno_unit_tests tests/unit/test_main.c tests/unit/test_core.c tests/unit/test_app.c tests/unit/test_game.c
-  tests/unit/test_shortcut.c tests/unit/test_audio_pcm.c app/ui_http.c app/game_detect.c app/shortcut.c app/audio_lab_pcm.c)
+  tests/unit/test_shortcut.c tests/unit/test_audio_pcm.c tests/unit/test_audio_state.c app/ui_http.c app/game_detect.c app/shortcut.c
+  app/audio_lab_pcm.c app/audio_lab_state.c)
 target_include_directories(akeno_unit_tests PRIVATE src app)
 target_compile_options(akeno_unit_tests PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(akeno_unit_tests PRIVATE akeno_client)
 add_test(NAME unit COMMAND akeno_unit_tests)
 if(AKENO_HAVE_MBEDTLS)
   add_executable(akeno_unit_tests_mbedtls tests/unit/test_main.c tests/unit/test_core.c tests/unit/test_app.c tests/unit/test_game.c
-    tests/unit/test_shortcut.c tests/unit/test_audio_pcm.c app/ui_http.c app/game_detect.c app/shortcut.c app/audio_lab_pcm.c)
+    tests/unit/test_shortcut.c tests/unit/test_audio_pcm.c tests/unit/test_audio_state.c app/ui_http.c app/game_detect.c app/shortcut.c
+  app/audio_lab_pcm.c app/audio_lab_state.c)
   target_include_directories(akeno_unit_tests_mbedtls PRIVATE src app)
   target_compile_options(akeno_unit_tests_mbedtls PRIVATE -Wall -Wextra -Werror)
   target_link_libraries(akeno_unit_tests_mbedtls PRIVATE akeno_client_mbedtls)

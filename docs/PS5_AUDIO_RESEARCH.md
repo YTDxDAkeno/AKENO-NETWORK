@@ -1,8 +1,10 @@
-# PS5 audio: research, the silent v1 tone, and audio lab v2
+# PS5 audio: research, the silent tone, and audio labs v2 and v3
 
 Status 2026-10-17. **Audible output from AKENO on a PS5 is NOT confirmed**: audio lab v2 was tested
-on firmware 12.20 and none of its tones was heard (below). The cause is **not** established yet;
-the audio-focus idea below remains a hypothesis. Microphone capture is not attempted. Desktop and phone voice (see [VOICE.md](VOICE.md)) do not depend on any of this.
+on firmware 12.20; the system accepted and paced every block and none of its tones was heard
+(below). Why is **not** established; the audio-focus idea below remains a hypothesis. Audio lab v3
+(this commit, not yet run on a PS5) adds one read-only measurement of AKENO's own port and an HTML
+`<audio>` element test. Microphone capture is not attempted. Desktop and phone voice (see [VOICE.md](VOICE.md)) do not depend on any of this.
 
 ## What the hardware test of audio lab v1 showed
 
@@ -18,26 +20,35 @@ Your test of `akeno-network-ps5-audiolab.elf` (CI run 38558019000, `ae94851`) on
 ## What the hardware test of audio lab v2 showed (firmware 12.20, 2026-10-17)
 
 Owner's report for `akeno-network-ps5-audiolab-v2.elf` (Alpha 0.5 RC, `7e28255`), recorded in
-[PS5_HARDWARE_RESULTS_FW12.20.md](PS5_HARDWARE_RESULTS_FW12.20.md):
+[PS5_HARDWARE_RESULTS_FW12.20.md](PS5_HARDWARE_RESULTS_FW12.20.md). The owner read the complete
+`/data/akeno/audiolab-report.txt` and confirmed these measured results for **every** completed
+test with feedback (formats S16/float mono/stereo, 256–2048 frames per call, all three levels,
+immediate and delayed):
 
-| Test | Result |
+| Report line | Measured on 12.20 |
 | --- | --- |
-| Lab start, library check | started successfully |
-| Tone tests with feedback (formats, frames per call, levels) | **none audible** |
-| Delayed test (tone while the home screen is in front) | **not audible** |
+| `sceAudioOutInit` | **0x00000000** (success) |
+| `sceAudioOutOpen` (user 0xFF system, port type 0 main, 48000 Hz) | **succeeded** — a port handle was returned |
+| `sceAudioOutOutput` | **every call succeeded** (no first error) |
+| Submitted / PCM nonzero | **yes**: nonzero samples were submitted (tone between 250 ms of silence before and after) |
+| Timing | **"consumed at playback speed"**: calls 2…n blocked for about one block's duration each |
+| User report | **not heard**, for every test — with the browser in front and, in the delayed test, on the home screen |
 | Browser comparison (C6) | "API missing, state unavailable, heard −1": the 12.20 browser has **neither `AudioContext` nor `webkitAudioContext`** |
 
-Not yet known, because the per-run lines of the report were not sent: whether `sceAudioOutOpen`
-and every `sceAudioOutOutput` returned success, and whether the calls were **paced** (the
-"Timing" line). Those decide between the explanations below — see
-[Reading the audio lab v2 report](#reading-the-audio-lab-v2-report).
+The message that reported these results gave the confirmed outcome of each line, not the
+per-run numbers (handle values, call counts, per-call milliseconds); those are not copied here
+because they were not part of it. Every v3 run records them again in its report.
+
+**Classification ([Reading the audio lab v2 report](#reading-the-audio-lab-v2-report)):**
+"accepted, paced, silent". The API works, the format is accepted, and an audio clock consumes
+the port at playback speed — but nothing reaches the TV or headset. Ruled out on 12.20: an API
+error, an unsupported format or block size, a submission error and discarded (unpaced) samples.
 
 What the results already exclude or weaken:
 
 - **Not the browser being in front:** the delayed test on the home screen was silent too, so "the
   browser owns the audio focus" alone does not explain the silence.
-- **Not one bad preset:** every preset and level was silent, so a single format or block-size
-  mistake is unlikely (an *unsupported* format would also show as an open error in the report).
+- **Not a format problem:** every preset opened and was paced, and every level was silent.
 - **No browser route via Web Audio:** the system browser cannot synthesise or play PCM through Web
   Audio, so "play party audio in the page with Web Audio" (the first row of the decision table
   below) is not available on 12.20.
@@ -67,10 +78,10 @@ configuration so they can be excluded.
 
 ### Leading hypothesis (not confirmed): process context and application audio focus
 
-> Status 2026-10-17: **not confirmed and not refuted.** The v2 hardware test was silent in every
-> context, including the home screen; the report's timing lines are needed before this hypothesis
-> can be weighed against the alternatives listed in
-> [Reading the audio lab v2 report](#reading-the-audio-lab-v2-report).
+> Status 2026-10-17: **not confirmed and not refuted.** The v2 hardware test was accepted and paced
+> but silent in every context, including the home screen. That fits a routing/mixing loss for a
+> background process, which focus is one form of; it does not show that focus is the mechanism.
+> Audio lab v3 measures what the system reports about the port itself.
 
 - **How SDL homebrew actually runs.** The PS5 homebrew that plays audio with this SDL driver
   (FFplay, RetroArch, ScummVM ports, …) is started by ps5-payload-dev/websrv's homebrew loader
@@ -192,7 +203,7 @@ research is **hardware-tested on a PS5 Pro, firmware 12.70**, from an installed 
 | Routing evidence on the console | the **kernel log** (klogsrv, TCP 3232) prints `[AvControl] audio: port:HDMI src:… fmt:…` and `AudioOut: exclusive (pid=…)` when HDMI output is reconfigured | hardware, 12.70. Whether a plain PCM port logs anything is not shown |
 | Exclusive HDMI | after `sceAudioOutExConfigureOutput` "all PCM ports of the process are muted (the process holds HDMI audio exclusively)"; the Settings menu only uses re-encode modes | hardware, 12.70. **Not used by AKENO** (changes HDMI output mode; needs separate approval) |
 | Symbol lookup | "`sceKernelDlsym` is refused in a sandboxed app"; linked imports work | hardware, 12.70, sandboxed app. AKENO is not sandboxed (elfldr) and its `dlsym` lookups work on 12.20 (v1/v2 probe) |
-| `AudioOutPortState` | `uint16 output; uint8 channel; uint8 reserved; int16 volume; uint16 rerouteCounter; uint64 flag; uint64 activeState` (24 bytes); `output` 1 = main/HDMI, 0x40 = personal/voice, 4 = pad speaker, 0x80 = aux | **emulator model** (AnyPS5 `SceTypes.hpp`, `sceAudioOutGetPortState`); PS4-era headers describe a 32-byte layout with the same first fields. **No console measurement** — its size must be measured, not assumed |
+| `AudioOutPortState` | `uint16 output; uint8 channel; uint8 reserved; int16 volume; uint16 rerouteCounter; uint64 flag; uint64 activeState` (24 bytes); `output` 1 = main/HDMI, 0x40 = personal/voice, 4 = pad speaker, 0x80 = aux | **emulator model** (AnyPS5 `SceTypes.hpp`, unsourced). shadPS4, fpPS4 and SharpProspero use 32 bytes with the same first fields (see [validation](#validation-of-sceaudiooutgetportstate-before-any-console-call)). **No console measurement** |
 | `sceAudioOutGetLastOutputTime(handle, uint64*)` | in the emulators: the process time at which the last block was *accepted*, "not the time the block reached the device" | AnyPS5 notes: signature from PS4 reimplementations, "not confirmed on a PS5 title" |
 | Audio timing vs. playback | emulator pacing is wall-clock based (SDL), so it says nothing about the console's device clock | AnyPS5 (emulator) |
 | Port types | main 0, BGM 1, voice 2, personal 3, pad speaker 4, Ex 6, vibration 10, Audio3D 126, aux 127 | AnyPS5 (PS4 numbering); only **main 0** is hardware-verified on the PS5 |
@@ -224,10 +235,10 @@ context) and 3 (a separately approved test) are not. **No AudioIn call is made.*
 PS5 voice chat is **not working and not claimed**. Each outcome of test C (hardware test plan)
 points to one next step; nothing beyond it is started before the result exists.
 
-**12.20 result so far:** C3 not heard, C5 not heard, C6 *Web Audio API missing* — so the first row
-("voice through the page with Web Audio") is ruled out, and the remaining rows depend on the C4
-timing line of the report. With "paced", the next step is the read-only port-state diagnostic
-proposed below; with "not paced", native output from a background payload is unavailable on 12.20.
+**12.20 result:** C4 **paced**, C3 not heard, C5 not heard, C6 *Web Audio API missing*. The first
+row ("voice through the page with Web Audio") is ruled out; the case is "paced, silent everywhere",
+which no row covered. The next step is audio lab v3 (below): read-only port state, and the
+browser's `<audio>` element as the remaining page route.
 
 | C4 timing | C3 heard (browser in front) | C5 heard (home screen) | C6 browser tone heard | Meaning | Next evidence-based step |
 | --- | --- | --- | --- | --- | --- |
@@ -242,40 +253,101 @@ declaration of `sceAudioIn*` (or a working PS5 homebrew that captures) and a sep
 single test. The branch `feature/akeno-ps5-direct-capture` (another session's read-only capture
 diagnostic) is not part of Alpha 0.5; its findings should be read before any capture prototype.
 
-## Proposed next diagnostic: audio lab v3 — one read-only port-state read
+## Audio lab v3: read-only port state and the HTML `<audio>` element
 
-**Not implemented yet; for approval.** One addition to the existing v2 tone test, nothing else
-changes (same presets, levels, confirmation, limits, report):
+A separate ELF, `akeno-network-ps5-audiolab-v3.elf`: audio lab v2 unchanged (same presets, levels,
+confirmation, limits, delayed test, report), plus two additions. **Not run on a PS5 yet.**
 
-- After `sceAudioOutOpen` succeeds, AKENO calls **`sceAudioOutGetPortState(handle, buffer)`** on
-  **its own port** three times: before the first block, in the middle of the tone, and before
-  `sceAudioOutClose`.
-- `buffer` is a 64-byte-aligned, 256-byte buffer pre-filled with a guard pattern. The report shows
-  the return code, **how many bytes the call wrote** (which measures the real structure size
-  instead of assuming 24 or 32 bytes) and the raw bytes in hex. A decoded line (`output`, `channel`,
-  `volume`, `rerouteCounter`, `flag`) is labelled "decoded with the PS4/emulator layout, unverified".
-- Nothing is set: no volume, routing, focus, attach/detach, HDMI mode or privilege call. The only
-  new import is that one function, resolved with `dlopen`/`dlsym` like the others; the release ELF
-  is unchanged (CI checks).
+### Validation of `sceAudioOutGetPortState` before any console call
 
-What it answers:
+| Question | Evidence | Strength |
+| --- | --- | --- |
+| Does the PS5 export it? | Listed in the pinned ps5-payload-sdk `libSceAudioOut` stub, which is generated from firmware exports; audio lab v2 looked it up on 12.20 with `dlsym`. v3 calls it only when `dlsym` returns it | name: strong |
+| Arguments | `int32 sceAudioOutGetPortState(int32 handle, SceAudioOutPortState *state)` in OpenOrbis (`include/orbis/AudioOut.h`, `(int32_t, void *)`), shadPS4 (`audioout.h`), fpPS4 (`ps4_libsceaudioout.pas`), SharpProspero (PS5, `Interop/Audio/AudioOut.cs`) and AnyPS5 (PS5). Five sources, two of them PS5-specific, agree on two arguments | good, but no console measurement |
+| Real PS5 code calls it | AnyPS5 PR #2130: Unity's main thread in a title (MiniGolf) calls it at start-up | indirect (emulator observation) |
+| Structure layout | `uint16 output; uint8 channel; uint8 reserved; int16 volume; uint16 rerouteCounter; uint64 flag; uint64 reserved[2]` = **32 bytes** in shadPS4, fpPS4 and SharpProspero (`Size = 32`); AnyPS5's 24-byte variant came in a bulk "add libs function signatures" commit without a source | 32 bytes: consistent, unmeasured |
+| `output` bits | 0x00 unknown, 0x01 primary, 0x02 secondary, 0x04 tertiary, 0x40 headphone, 0x80 external (fpPS4 and shadPS4 constants, PS4 SDK names) | PS4 only |
+| Behaviour | a query: fills the caller's structure, returns 0 or a negative `0x8026xxxx` code (not initialised, invalid port, invalid pointer, not opened in the emulators). No source shows it changing state | consistent |
 
-| Port state on 12.20 | Interpretation |
-| --- | --- |
-| call fails (code) | the function is not usable from the payload; nothing else is learned |
-| `output` = 0 (no device bit) while the calls are paced | the port is open and clocked but **connected to no output** — routing of the background process |
-| `output` has the main/HDMI bit, `volume` > 0, still silent | the port claims HDMI: the loss is later in the mix (focus/mute of the process) |
-| `volume` = 0 | the port is muted at the port level |
+Conclusion: the **name** is verified on 12.20; the **argument list** is consistent across every
+source; the **structure size is not verified**. That is enough for a read-only call on AKENO's own
+open port with a buffer that tolerates any plausible size and detects anything larger. It is not
+enough to trust decoded fields, so they are labelled unverified everywhere.
 
-Optional, no AKENO change: if a kernel-log server already answers on the console (TCP 3232),
-capture its lines during one tone test; `[AvControl]`/`AudioOut` lines naming AKENO's process would
-add the system's own view. Installing a log server is the owner's decision.
+### What v3 does with it
+
+- Three measurements per test on the test's own port: **before the first block**, **in the middle
+  of the tone** (after the block that crosses half the planned frames) and **before
+  `sceAudioOutClose`**.
+- Each measurement is two calls. The structure pointer is a 256-byte window, 64-byte aligned,
+  inside a 4096-byte static arena; the 64 bytes before and the 3776 bytes after the window are
+  canaries (`0xC3`). The window is filled with `0xA5` for the first call and `0x5A` for the
+  second, so a written byte is seen even when its value equals one fill. The second call is
+  skipped when the first returns an error.
+- If any canary changes, the function wrote outside its window: the measurement is marked, and
+  **the function is never called again in that launch** (the arena absorbs up to 3.7 KB of
+  overrun).
+- Recorded per call: the **raw return code**, the **raw window bytes**, the canary state; per
+  measurement: which bytes were written, the highest written offset, whether both calls agree.
+  The written-byte count is a lower bound only: a field the function leaves untouched is
+  invisible, so it does not prove the structure's size.
+- Decoded (PS4 layout, **unverified**): `output` with its bit names, `channel`, `volume`,
+  `rerouteCounter`, `flag` — only for bytes a call actually wrote.
+- Port-state results never change the test's outcome (accepted / failed / not heard).
+
+### Safety evidence for every new call
+
+| Call | Where | Why it is safe enough to run |
+| --- | --- | --- |
+| `dlsym(libSceAudioOut, "sceAudioOutGetPortState")` | audio lab ELF only, on the first test | same lookup as v2 (already run on 12.20); a missing name only skips the measurement |
+| `sceAudioOutGetPortState(own_handle, window)` | audio lab ELF only, ≤ 6 calls per test, only while the test's own port is open | a query on AKENO's own handle; consistent two-argument declaration in five sources; guarded window with canaries and a permanent stop on overrun; no volume, routing, focus, attach/detach, HDMI, mode or privilege function is called |
+| HTML `<audio>` playback of a WAV generated by the page | audio lab page only, after a button press and a confirmation | a standard browser API in the system browser (no system call); plays the same 1.5 s, 440 Hz tone at the selected level (≤ −14 dBFS); lab-only `media-src blob: data:` in the page policy, the release policy is unchanged |
+| Feature checks (`canPlayType`, `MediaSource.isTypeSupported`, presence of `getUserMedia`/`RTCPeerConnection`) | audio lab page only | presence and capability queries; nothing is played, opened, recorded or asked for |
+
+Release ELF: unchanged. CI rebuilds the hardware-tested Alpha 0.5 RC (`7e28255`) and builds this
+commit's release source with the RC's build ID; both must give the same file (SHA-256
+`c92e039b…`). The lab ELF imports exactly the release's 96 symbols; the new function is resolved
+at run time.
+
+### How to read the v3 port state
+
+| Port state on 12.20 (paced, silent) | Interpretation | Next step |
+| --- | --- | --- |
+| the call fails (code) | not usable from the payload; nothing learned about routing | rely on the `<audio>` result |
+| `output` without a device bit (0), calls agree | the port is open and clocked but the system attaches it to **no output** | evidence for a process-level routing restriction; read-only research of how the system attaches output to a process |
+| `output` primary/headphone, `volume` > 0, still silent | the system claims the port reaches a device; the loss is later (mix/mute of the process) | compare with the `<audio>` result; no change to focus or routing without approval |
+| `volume` = 0 | the port is muted at port level | find out who sets it (read-only) |
+| bytes written beyond 32, or canaries changed | the PS4 layout is wrong on the PS5 | record the raw bytes; no decoding is trusted |
+| `rerouteCounter` changes during the tone | the system re-routed the port while it played | compare with what you did (PS button, home screen) |
+
+### HTML `<audio>` element and browser compatibility
+
+Known: the 12.20 system browser has no Web Audio API (measured). Not known: whether it plays
+`<audio>` at all — no reliable public compatibility data for the PS5's (unofficial) browser was
+found; a WebKit engine is reported by press coverage only. v3 therefore **measures** instead of
+assuming:
+
+- a read-only feature table: Web Audio and OfflineAudioContext presence, the `<audio>` element and
+  `play()`, Blob URLs, `canPlayType` for WAV, MP3, AAC, Ogg Vorbis/Opus and WebM Opus, Media
+  Source Extensions, and the **presence** of `getUserMedia` and `RTCPeerConnection` (never called);
+  the browser's user agent;
+- a user-started `<audio>` test: the same tone as a 48 kHz 16-bit WAV generated by the page, from
+  a `blob:` URL (or a `data:` URL without Blob URLs), with the `play()` result, the media events
+  (loadedmetadata, canplay, playing, ended), `MediaError` code, duration and played time, then
+  your report (heard where / not heard). The WAV is generated in the page because the console
+  app's small HTTP server does not answer byte-range requests, which WebKit media loading uses.
+
+What it decides: if `<audio>` is **heard**, the page has a working output path on 12.20 (the basis
+for listen-only party audio through the page, with audio coming over the existing connection);
+if it plays to the end but is **not heard** either, output from both the payload and the page is
+lost, which points to the console's audio routing for these contexts rather than to AKENO's code.
+**No microphone, WebRTC or capture is used or approved.**
 
 ## Hardware test plan
 
-See [HARDWARE_TEST_PLAN_PS5_ALPHA_0.5.md](HARDWARE_TEST_PLAN_PS5_ALPHA_0.5.md), test C. Run it from
-the home screen; **do not** run audio tests while a game runs and do not attempt microphone capture
-(both need a separate approval).
+See [HARDWARE_TEST_PLAN_PS5_ALPHA_0.5.md](HARDWARE_TEST_PLAN_PS5_ALPHA_0.5.md): test C (audio lab v2,
+done on 12.20) and **test D (audio lab v3)**. Run audio tests from the home screen; **do not** run
+them while a game runs and do not attempt microphone capture (both need a separate approval).
 
 ## Path to a PS5 party participant (unchanged)
 
@@ -288,9 +360,13 @@ started; both need levels 3–4 above first.
 ## Code
 
 `clients/ps5/app/audio_lab.c` / `.h` (tests, states, report), `audio_lab_pcm.c` / `.h` (tone
-generation, unit-tested), the `AKENO_EXPERIMENTAL_AUDIO` sections of `platform_ps5.c` (the only
-place that calls `sceAudioOut*`, resolved with `dlopen` at the first test), `platform_host.c`
-(simulation with failure injection: `AKENO_SIM_AUDIO`, `AKENO_SIM_AUDIO_FAIL=init|open|output|close`,
-`AKENO_SIM_AUDIO_PACE=none`), `app_routes.c` (`/api/diagnostics/audio/*`) and `web/audiolab.js`
-(served only by the lab build; the release serves an empty script). The release ELF contains none
+generation, unit-tested), `audio_lab_state.c` / `.h` (v3: guarded port-state measurement and the
+unverified decoding, unit-tested in `tests/unit/test_audio_state.c`), the `AKENO_EXPERIMENTAL_AUDIO`
+sections of `platform_ps5.c` (the only place that calls `sceAudioOut*`, resolved with `dlopen` at
+the first test), `platform_host.c` (simulation with failure injection: `AKENO_SIM_AUDIO`,
+`AKENO_SIM_AUDIO_FAIL=init|open|output|close`, `AKENO_SIM_AUDIO_PACE=none`,
+`AKENO_SIM_AUDIO_PORTSTATE=ps4|unconnected|fail|missing|overrun`), `app_routes.c`
+(`/api/diagnostics/audio/*`, including `/media` for the `<audio>` result), `ui_server.c` (the
+lab-only `media-src blob: data:`) and `web/audiolab.js` (served only by the lab build; the release
+serves an empty script). The release ELF contains none
 of this, which CI checks (`console/check-imports.sh`, symbol and string checks).

@@ -1,5 +1,5 @@
 /*
- * Audio lab v2 (AKENO_EXPERIMENTAL_AUDIO builds only). See audio_lab.h and
+ * Audio lab v3 (AKENO_EXPERIMENTAL_AUDIO builds only). See audio_lab.h and
  * docs/PS5_AUDIO_RESEARCH.md.
  *
  * Audio lab v1 played a tone that a PS5 with firmware 12.20 accepted (sceAudioOutOutput returned
@@ -9,9 +9,11 @@
  *   3. samples consumed by the system   output calls blocked for about the block duration, i.e.
  *                                       the audio subsystem paced them at playback speed
  *   4. sound reaching TV or headset     only the user can tell: reported per run on the page
- * Leading hypothesis (docs/PS5_AUDIO_RESEARCH.md): the payload runs in a background system
- * process, not in an application with audio focus, so its port is mixed silently. The delayed
- * test (start, then leave the browser) and the page's own Web Audio test compare against that.
+ * On a PS5 with 12.20, v2 reached level 3 for every preset and level, and nothing was heard.
+ * v3 adds read-only measurements of the test's own port (sceAudioOutGetPortState, three times per
+ * test; audio_lab_state.h) to see where the system says the port's samples go, and a browser
+ * <audio> element test, since the system browser has no Web Audio API. Why a paced port stays
+ * silent is open (docs/PS5_AUDIO_RESEARCH.md); the audio-focus idea is a hypothesis.
  *
  * Microphone (libSceAudioIn): names are looked up, nothing is ever called. There is no PS5
  * declaration of those functions, and no capture code exists in any AKENO build.
@@ -76,18 +78,20 @@ typedef struct {
 } probe_library;
 
 /*
- * libSceAudioOut: the four functions the SDL driver calls, and (looked up only) names that say
- * something about routing, volume and application focus; none of them has a PS5 declaration.
+ * libSceAudioOut: the four functions the SDL driver calls, the read-only port state query of v3,
+ * and (looked up only) names that say something about routing, volume and application focus.
  * libSceAudioIn: not in the SDK; the names are those of the PS4's capture interface.
  */
 static const probe_library k_libraries[] = {
     { "libSceAudioOut.sprx", { "sceAudioOutInit", "sceAudioOutOpen", "sceAudioOutOutput", "sceAudioOutClose" }, 4,
       "ps5-payload-sdk stub + ps5-payload-dev/SDL", "used by the output test" },
+    { "libSceAudioOut.sprx", { "sceAudioOutGetPortState" }, 1, "PS4 SDK layout (OpenOrbis, shadPS4, fpPS4, SharpProspero, AnyPS5)",
+      "read-only, on the output test's own port (v3)" },
     { "libSceAudioOut.sprx",
-      { "sceAudioOutGetPortState", "sceAudioOutSetVolume", "sceAudioOutGetLastOutputTime", "sceAudioOutGetHandleStatusInfo",
-        "sceAudioOutGetSystemState", "sceAudioOutSetMainOutput", "sceAudioOutGetFocusEnablePid", "sceAudioOutAttachToApplicationByPid",
+      { "sceAudioOutSetVolume", "sceAudioOutGetLastOutputTime", "sceAudioOutGetHandleStatusInfo", "sceAudioOutGetSystemState",
+        "sceAudioOutSetMainOutput", "sceAudioOutGetFocusEnablePid", "sceAudioOutAttachToApplicationByPid",
         "sceAudioOutDetachFromApplicationByPid", "sceAudioOutChangeAppModuleState" },
-      10, "ps5-payload-sdk stub (names only, no declarations)", "looked up only, never called" },
+      9, "ps5-payload-sdk stub (names only, no declarations)", "looked up only, never called" },
     { "libSceAudioIn.sprx", { "sceAudioInOpen", "sceAudioInInput", "sceAudioInClose" }, 3, "PS4 homebrew stubs (not in the PS5 SDK)",
       "looked up only, never called (no microphone access)" },
 };
@@ -124,6 +128,8 @@ static pthread_t g_thread;
 static int g_thread_started = 0;    /* main thread only */
 static audio_lab_browser_result g_browser; /* g_lock */
 static int g_browser_reported = 0;  /* g_lock */
+static audio_lab_media_result g_media;     /* g_lock */
+static int g_media_reported = 0;    /* g_lock */
 
 static long long mono_ms(void) {
     struct timespec ts;
@@ -428,6 +434,14 @@ void audio_lab_browser_report(const audio_lab_browser_result *result) {
     pthread_mutex_unlock(&g_lock);
 }
 
+void audio_lab_media_report(const audio_lab_media_result *result) {
+    pthread_mutex_lock(&g_lock);
+    g_media = *result;
+    g_media_reported = 1;
+    write_report_locked();
+    pthread_mutex_unlock(&g_lock);
+}
+
 /* ---- Status JSON and report ---------------------------------------------------------------- */
 
 /* Headline over all runs; caller holds g_lock. */
@@ -449,6 +463,118 @@ static const char *headline_locked(int *run_out) {
     *run_out = latest->id;
     if (strcmp(latest->outcome, "accepted") == 0 && latest->feedback == 0) return "accepted-not-heard";
     return latest->outcome;
+}
+
+/* ---- Port state (v3): measured values first, the PS4-layout decoding labelled as unverified ---- */
+
+static const char *const k_state_points[AUDIO_LAB_STATE_POINTS] = { "before-playback", "during-playback", "before-close" };
+static const char *const k_state_point_labels[AUDIO_LAB_STATE_POINTS] = { "before playback", "during the tone", "before closing" };
+
+static void decoded_json(akeno_buf *b, const audio_lab_state_sample *s) {
+    audio_lab_state_decoded d;
+    char names[80];
+    audio_lab_state_decode(s, &d);
+    audio_lab_state_output_names(d.output, names, sizeof(names));
+    akeno_buf_append_str(b, "{\"verified\":false,\"layout\":\"PS4 SDK layout (shadPS4, fpPS4, SharpProspero); unverified on the PS5\"");
+    if (d.output_known) {
+        akeno_buf_printf(b, ",\"output\":\"0x%04x\",\"outputNames\":", d.output);
+        akeno_buf_append_json_string(b, names);
+    } else {
+        akeno_buf_append_str(b, ",\"output\":null,\"outputNames\":null");
+    }
+    if (d.channel_known) akeno_buf_printf(b, ",\"channel\":%u", d.channel);
+    else akeno_buf_append_str(b, ",\"channel\":null");
+    if (d.volume_known) akeno_buf_printf(b, ",\"volume\":%d", d.volume);
+    else akeno_buf_append_str(b, ",\"volume\":null");
+    if (d.reroute_known) akeno_buf_printf(b, ",\"rerouteCounter\":%u", d.reroute_counter);
+    else akeno_buf_append_str(b, ",\"rerouteCounter\":null");
+    if (d.flag_known) akeno_buf_printf(b, ",\"flag\":\"0x%llx\"}", d.flag);
+    else akeno_buf_append_str(b, ",\"flag\":null}");
+}
+
+static void port_state_json(akeno_buf *b, const akeno_audio_result *x) {
+    char hex[AUDIO_LAB_STATE_WINDOW_BYTES * 3 + 1];
+    akeno_buf_printf(b, "{\"exported\":%s,\"stopped\":%s,\"points\":[", x->port_state_exported ? "true" : "false",
+                     x->port_state_stopped ? "true" : "false");
+    for (int p = 0; p < AUDIO_LAB_STATE_POINTS; p++) {
+        const audio_lab_state_sample *s = &x->port_state[p];
+        size_t shown = audio_lab_state_shown_bytes(s);
+        if (p) akeno_buf_append_str(b, ",");
+        akeno_buf_printf(b, "{\"point\":\"%s\",\"attempted\":%s", k_state_points[p], s->attempted ? "true" : "false");
+        if (!s->attempted) {
+            akeno_buf_append_str(b, "}");
+            continue;
+        }
+        akeno_buf_printf(b, ",\"atMs\":%.1f,\"calls\":[", (double)s->at_us / 1000.0);
+        int first = 1;
+        for (int c = 0; c < 2; c++) {
+            const audio_lab_state_call *k = &s->call[c];
+            if (!k->called) continue;
+            audio_lab_state_hex(k->bytes, shown, hex, sizeof(hex));
+            akeno_buf_printf(b, "%s{\"fill\":\"0x%02x\",\"result\":\"0x%08x\",\"leadIntact\":%s,\"tailIntact\":%s,\"bytes\":\"%s\"}",
+                             first ? "" : ",", k->fill, (unsigned)k->rc, k->lead_intact ? "true" : "false", k->tail_intact ? "true" : "false", hex);
+            first = 0;
+        }
+        audio_lab_state_values_hex(s, shown, hex, sizeof(hex));
+        akeno_buf_printf(b, "],\"windowBytes\":%u,\"shownBytes\":%zu,\"writtenBytes\":%d,\"highestWrittenOffset\":%d,\"guardsIntact\":%s,"
+                            "\"callsAgree\":%s,\"values\":\"%s\",\"decoded\":",
+                         AUDIO_LAB_STATE_WINDOW_BYTES, shown, s->written_count, s->highest_written, s->guards_intact ? "true" : "false",
+                         s->calls_agree ? "true" : "false", hex);
+        decoded_json(b, s);
+        akeno_buf_append_str(b, "}");
+    }
+    akeno_buf_append_str(b, "]}");
+}
+
+static void port_state_text(akeno_buf *t, const akeno_audio_result *x) {
+    char hex[AUDIO_LAB_STATE_WINDOW_BYTES * 3 + 1];
+    if (!x->open_called || x->open_rc < 1) {
+        akeno_buf_append_str(t, "  Port state: not read (no port was opened).\n");
+        return;
+    }
+    if (!x->port_state_exported) {
+        akeno_buf_append_str(t, "  Port state: not read - sceAudioOutGetPortState is not exported.\n");
+        return;
+    }
+    akeno_buf_printf(t, "  Port state (sceAudioOutGetPortState on this test's own port, read-only)%s\n",
+                     x->port_state_stopped ? ": STOPPED - a call wrote outside its 256-byte window; not called again in this launch" : "");
+    akeno_buf_append_str(t, "    Measured: return codes, raw bytes, written bytes, canaries. Decoded fields: PS4 layout, UNVERIFIED on the PS5.\n");
+    for (int p = 0; p < AUDIO_LAB_STATE_POINTS; p++) {
+        const audio_lab_state_sample *s = &x->port_state[p];
+        if (!s->attempted) {
+            akeno_buf_printf(t, "    %s: not measured\n", k_state_point_labels[p]);
+            continue;
+        }
+        size_t shown = audio_lab_state_shown_bytes(s);
+        akeno_buf_printf(t, "    %s (%.0f ms after the first block):", k_state_point_labels[p], (double)s->at_us / 1000.0);
+        for (int c = 0; c < 2; c++)
+            if (s->call[c].called) akeno_buf_printf(t, " call %d (fill %02x) 0x%08x;", c + 1, s->call[c].fill, (unsigned)s->call[c].rc);
+        akeno_buf_printf(t, " %d of %u bytes written (highest offset %d); canaries %s; calls %s\n", s->written_count,
+                         AUDIO_LAB_STATE_WINDOW_BYTES, s->highest_written, s->guards_intact ? "intact" : "CHANGED",
+                         s->calls_agree ? "agree" : "DIFFER");
+        for (int c = 0; c < 2; c++) {
+            if (!s->call[c].called) continue;
+            audio_lab_state_hex(s->call[c].bytes, shown, hex, sizeof(hex));
+            akeno_buf_printf(t, "      call %d raw: %s\n", c + 1, hex);
+        }
+        audio_lab_state_values_hex(s, shown, hex, sizeof(hex));
+        akeno_buf_printf(t, "      written values: %s (-- = not written)\n", hex);
+        audio_lab_state_decoded d;
+        char names[80];
+        audio_lab_state_decode(s, &d);
+        audio_lab_state_output_names(d.output, names, sizeof(names));
+        if (!d.output_known && !d.channel_known && !d.volume_known) {
+            akeno_buf_append_str(t, "      decoded (UNVERIFIED): nothing to decode\n");
+            continue;
+        }
+        akeno_buf_append_str(t, "      decoded (UNVERIFIED PS4 layout):");
+        if (d.output_known) akeno_buf_printf(t, " output 0x%04x (%s)", d.output, names);
+        if (d.channel_known) akeno_buf_printf(t, ", channel %u", d.channel);
+        if (d.volume_known) akeno_buf_printf(t, ", volume %d", d.volume);
+        if (d.reroute_known) akeno_buf_printf(t, ", rerouteCounter %u", d.reroute_counter);
+        if (d.flag_known) akeno_buf_printf(t, ", flag 0x%llx", d.flag);
+        akeno_buf_append_str(t, "\n");
+    }
 }
 
 static void run_json(akeno_buf *b, const lab_run *r) {
@@ -489,6 +615,8 @@ static void run_json(akeno_buf *b, const lab_run *r) {
     akeno_buf_append_str(b, r->feedback < 0 ? "null" : r->feedback ? "true" : "false");
     akeno_buf_append_str(b, ",\"route\":");
     akeno_buf_append_json_string(b, r->route);
+    akeno_buf_append_str(b, ",\"portState\":");
+    port_state_json(b, x);
     akeno_buf_append_str(b, "}");
 }
 
@@ -497,7 +625,7 @@ void audio_lab_status_json(akeno_buf *b) {
     int headline_run = 0;
     const char *state = headline_locked(&headline_run);
     long long now = mono_ms();
-    akeno_buf_append_str(b, "{\"experimental\":true,\"version\":2,\"state\":");
+    akeno_buf_append_str(b, "{\"experimental\":true,\"version\":3,\"state\":");
     akeno_buf_append_json_string(b, state);
     akeno_buf_printf(b, ",\"stateRun\":%d,\"running\":%s,\"playing\":%s,\"secondsUntilStart\":%lld,\"runsLeft\":%d,\"cooldownMs\":%lld",
                      headline_run, g_running ? "true" : "false", g_playing ? "true" : "false",
@@ -528,7 +656,9 @@ void audio_lab_status_json(akeno_buf *b) {
     akeno_buf_append_json_string(b, "Main port (type 0) of the system user (0xFF): the system decides where it plays (TV/HDMI, or a "
                                     "headset when the console routes all audio there). No verified interface lists or selects outputs.");
     akeno_buf_append_str(b, ",\"portState\":");
-    akeno_buf_append_json_string(b, "not read: sceAudioOutGetPortState exists only as a name (no verified PS5 declaration)");
+    akeno_buf_append_json_string(b, "Read-only: sceAudioOutGetPortState on the test's own port before playback, during the tone and before "
+                                    "closing (two calls each, 256-byte guarded window). Measured: return codes, raw bytes, written bytes, "
+                                    "canaries. Decoded fields use the PS4 layout and are UNVERIFIED on the PS5.");
     akeno_buf_append_str(b, ",\"probe\":");
     akeno_buf_append_str(b, g_probe_json ? g_probe_json : "null");
     akeno_buf_append_str(b, ",\"runs\":[");
@@ -549,6 +679,24 @@ void audio_lab_status_json(akeno_buf *b) {
         akeno_buf_append_json_string(b, g_browser.route);
         akeno_buf_append_str(b, ",\"error\":");
         akeno_buf_append_json_string(b, g_browser.error);
+        akeno_buf_append_str(b, "}");
+    } else {
+        akeno_buf_append_str(b, "null");
+    }
+    akeno_buf_append_str(b, ",\"media\":");
+    if (g_media_reported) {
+        akeno_buf_append_str(b, "{\"source\":");
+        akeno_buf_append_json_string(b, g_media.source);
+        akeno_buf_append_str(b, ",\"playResult\":");
+        akeno_buf_append_json_string(b, g_media.play_result);
+        akeno_buf_printf(b, ",\"loadedMetadata\":%s,\"canPlay\":%s,\"playing\":%s,\"ended\":%s,\"errorCode\":%d,\"duration\":%.3f,"
+                            "\"currentTime\":%.3f,\"heard\":%s,\"route\":",
+                         g_media.loaded_metadata ? "true" : "false", g_media.can_play ? "true" : "false", g_media.playing ? "true" : "false",
+                         g_media.ended ? "true" : "false", g_media.error_code, g_media.duration, g_media.current_time,
+                         g_media.heard < 0 ? "null" : g_media.heard ? "true" : "false");
+        akeno_buf_append_json_string(b, g_media.route);
+        akeno_buf_append_str(b, ",\"features\":");
+        akeno_buf_append_json_string(b, g_media.features);
         akeno_buf_append_str(b, "}");
     } else {
         akeno_buf_append_str(b, "null");
@@ -603,6 +751,7 @@ static void run_text(akeno_buf *t, const lab_run *r) {
                      r->paced < 0 ? "not enough calls to judge"
                      : r->paced  ? "consumed at playback speed (the system paced the samples)"
                                  : "returned faster than real time (samples were not paced)");
+    port_state_text(t, x);
     akeno_buf_printf(t, "  sceAudioOutClose: %s0x%08x\n", x->close_called ? "" : "(not called) ", (unsigned)x->close_rc);
     akeno_buf_printf(t, "  Outcome: %s%s%s\n", r->outcome, x->error[0] ? " - " : "", x->error);
     akeno_buf_printf(t, "  User report: %s%s%s\n", r->feedback < 0 ? "not reported" : r->feedback ? "HEARD" : "not heard",
@@ -617,12 +766,12 @@ static void report_locked(akeno_buf *t) {
     time_t t_now = time(NULL);
     struct tm tm;
     if (gmtime_r(&t_now, &tm)) strftime(now, sizeof(now), "%Y-%m-%dT%H:%M:%SZ", &tm);
-    akeno_buf_printf(t, "AKENO NETWORK audio lab v2 report\nBuild %s, firmware %s, generated %s\n", g_build, g_firmware[0] ? g_firmware : "unknown",
+    akeno_buf_printf(t, "AKENO NETWORK audio lab v3 report\nBuild %s, firmware %s, generated %s\n", g_build, g_firmware[0] ? g_firmware : "unknown",
                      now);
     akeno_buf_append_str(t, "Contains no account data, tokens or credentials. No audio was recorded.\n\n");
     akeno_buf_printf(t, "STATE: %s%s\n", state_sentence(state), headline_run && strcmp(state, "audible-confirmed") == 0 ? " (see the run below)" : "");
-    akeno_buf_append_str(t, "Route: main port of the system user; the system chooses where it plays. Port state, volume and routing are not "
-                            "read (no verified declarations).\n\n");
+    akeno_buf_append_str(t, "Route: main port of the system user; the system chooses where it plays. Volume, routing, focus and HDMI "
+                            "output are never changed; v3 only reads its own port's state.\n\n");
     akeno_buf_append_str(t, "LIBRARIES (read-only probe)\n");
     akeno_buf_append_str(t, g_probe_text ? g_probe_text : "  Not run yet (Check audio libraries).\n");
     akeno_buf_append_str(t, "\nOUTPUT TESTS (newest first)\n");
@@ -641,6 +790,18 @@ static void report_locked(akeno_buf *t) {
                          g_browser.clock_advanced ? "yes" : "no",
                          g_browser.heard < 0 ? "not reported" : g_browser.heard ? "HEARD" : "not heard", g_browser.heard == 1 ? " on " : "",
                          g_browser.heard == 1 ? route_label(g_browser.route) : "", g_browser.error[0] ? "; error: " : "", g_browser.error);
+    } else {
+        akeno_buf_append_str(t, "  Not run yet.\n");
+    }
+    akeno_buf_append_str(t, "\nBROWSER <audio> ELEMENT (generated WAV, for comparison; v3)\n");
+    if (g_media_reported) {
+        akeno_buf_printf(t, "  Source: %s URL; play(): %s; events: loadedmetadata %s, canplay %s, playing %s, ended %s; MediaError %d; "
+                            "duration %.2f s, played %.2f s; user report: %s%s%s\n",
+                         g_media.source, g_media.play_result, g_media.loaded_metadata ? "yes" : "no", g_media.can_play ? "yes" : "no",
+                         g_media.playing ? "yes" : "no", g_media.ended ? "yes" : "no", g_media.error_code, g_media.duration,
+                         g_media.current_time, g_media.heard < 0 ? "not reported" : g_media.heard ? "HEARD" : "not heard",
+                         g_media.heard == 1 ? " on " : "", g_media.heard == 1 ? route_label(g_media.route) : "");
+        akeno_buf_printf(t, "  Browser features (read-only check): %s\n", g_media.features[0] ? g_media.features : "not reported");
     } else {
         akeno_buf_append_str(t, "  Not run yet.\n");
     }

@@ -39,7 +39,7 @@ diagnostic ELF (`clients/ps5/ps5-smoke`) is built from the same SDK.
 The console page draws AKENO's badge medallions with the same line icons as the website
 (`apps/web/src/components/BadgeIcon.tsx`). Because the page has no package manager, the path data
 of exactly these eight Lucide icons is copied, unmodified, into `clients/ps5/app/web/app.js`, which
-is embedded in `akeno-network-ps5.elf` and `akeno-network-ps5-audiolab-v2.elf`:
+is embedded in `akeno-network-ps5.elf` and the audio lab ELFs (`akeno-network-ps5-audiolab-v2.elf`, `-v3.elf`):
 
 `crown` (AKENO Founder), `shield-check` (Administrator), `braces` (Developer), `badge-check`
 (Verified Contributor), `sprout` (Early Supporter), `flask-conical` (Beta Tester), `gamepad-2`
@@ -82,7 +82,16 @@ them is compiled into AKENO except the declarations' shapes and constants:
 | boykopovar/AnyPS5 (`core/libs/prx/libSceAudioOut`, `libSceAudioIn`, `libScePad`, `libSceVoice`, `docs/dev/debt`, issue #3177) | `f517240` | GPL-2.0-or-later | Research only (2026-10-17): structure layouts, argument lists, error codes and a 13.60 hardware log are cited in the research docs. **No code copied**, nothing used in a build |
 | sainsaji/PS5-Audio-Passthrough-Research (`docs/FINDINGS.md`, `sample-app/src/platform/ps5`) | `c3be9c2` | GPL-3.0 | Research only (2026-10-17): hardware results on firmware 12.70, call sequences and return codes cited in the research docs. **No code copied**, nothing used in a build |
 
-AKENO is MIT-licensed. Code from the two GPL projects above could only be incorporated after a
+| shadps4-emu/shadPS4 (`src/core/libraries/audio/audioout.h/.cpp`) | `e6c79a5` | GPL-2.0-or-later | Research only (audio lab v3): the `sceAudioOutGetPortState` declaration, the 32-byte `SceAudioOutPortState` layout and the output-state constants were compared; **no code copied** |
+| red-prig/fpPS4 (`src/audio/ps4_libsceaudioout.pas`) | `04cefd4` | LGPL-2.1 | Research only (audio lab v3): same comparison; **no code copied** |
+| OpenOrbis/OpenOrbis-PS4-Toolchain (`include/orbis/AudioOut.h`) | `0a1aaf9` | GPL-3.0 | Research only (audio lab v3): the two-argument declaration; **no code copied** |
+| SvenGDK/SharpProspero (`src/SharpProspero/Interop/Audio/AudioOut.cs`) | `5dfdb4b` | GPL-3.0 | Research only (audio lab v3): the PS5 interop declaration with `Size = 32`; **no code copied** |
+
+AKENO's `clients/ps5/app/audio_lab_state.c` declares the function itself from these facts
+(`int32_t (*)(int32_t handle, void *state)`), treats the structure as raw bytes and decodes only
+field offsets and constants — interoperability facts, not copied expression.
+
+AKENO is MIT-licensed. Code from the GPL projects above could only be incorporated after a
 licence review, because the combined ELF would then have to be distributed under the GPL. Only
 facts needed for interoperability (function names, argument order, constants, observed return
 codes) are recorded, with their source.

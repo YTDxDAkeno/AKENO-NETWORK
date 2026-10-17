@@ -1926,11 +1926,17 @@ if (audioLabBinary) {
     try {
       for (const [method, path] of [['GET', '/api/diagnostics/audio'], ['POST', '/api/diagnostics/audio/tone'], ['POST', '/api/diagnostics/audio/probe'],
         ['POST', '/api/diagnostics/audio/feedback'], ['POST', '/api/diagnostics/audio/browser'], ['POST', '/api/diagnostics/audio/cancel'],
-        ['GET', '/api/diagnostics/audio/report']]) {
+        ['POST', '/api/diagnostics/audio/media'], ['GET', '/api/diagnostics/audio/report']]) {
         assert.equal((await appApi(release, method, path, method === 'POST' ? { confirm: 'play' } : undefined)).status, 404, path);
       }
       assert.equal((await appApi(release, 'GET', '/api/diagnostics')).body.experimentalAudio, undefined);
-      assert.equal((await appState(release)).app.audioLab, undefined);
+      const releaseApp = (await appState(release)).app;
+      assert.equal(releaseApp.audioLab, undefined);
+      assert.equal(releaseApp.audioLabVersion, undefined);
+      assert.equal(releaseApp.release, 'Alpha 0.5');
+      const page = await fetch(`http://127.0.0.1:${release.port}/`);
+      assert.doesNotMatch(page.headers.get('content-security-policy'), /media-src/, 'the release page may load no media');
+      assert.match(page.headers.get('content-security-policy'), /default-src 'none'/);
       assert.ok(!release.events.some((e) => e.event === 'audio-run'));
     } finally {
       release.child.kill('SIGTERM');
@@ -1938,18 +1944,26 @@ if (audioLabBinary) {
     }
   });
 
-  await step('audio lab v2: nothing runs until the user asks; the probe looks names up read-only', async () => {
+  await step('audio lab v3: nothing runs until the user asks; the probe looks names up read-only', async () => {
     await restartLab({});
     assert.equal((await appApi(lab, 'GET', '/api/diagnostics')).body.experimentalAudio, true);
-    assert.equal((await appState(lab)).app.audioLab, true);
+    const labApp = (await appState(lab)).app;
+    assert.equal(labApp.audioLab, undefined, 'the shared app.js would label it v2');
+    assert.equal(labApp.audioLabVersion, 3);
+    assert.equal(labApp.release, 'Alpha 0.5 \u00b7 Audio lab v3');
+    const csp = (await fetch(`http://127.0.0.1:${lab.port}/`)).headers.get('content-security-policy');
+    assert.match(csp, /media-src blob: data:; /, 'only the lab page may play its generated WAV');
+    assert.match(csp, /default-src 'none'; script-src 'self'/);
     const idle = await audioState();
-    assert.equal(idle.version, 2);
+    assert.equal(idle.version, 3);
     assert.equal(idle.state, 'not-run');
     assert.equal(idle.probe, null);
     assert.deepEqual(idle.runs, []);
     assert.deepEqual(idle.presets.map((p) => p.id), ['stereo16-1024', 'mono16-256', 'stereofloat-1024', 'stereo16-2048']);
     assert.deepEqual(idle.levels.map((l) => l.id), ['quiet', 'moderate', 'clear']);
-    assert.match(idle.portState, /not read/);
+    assert.match(idle.portState, /^Read-only: sceAudioOutGetPortState on the test's own port/);
+    assert.match(idle.portState, /UNVERIFIED on the PS5/);
+    assert.equal(idle.media, null);
     assert.match(idle.routing, /No verified interface/);
     assert.equal(audioRuns().length, 0, 'no tone without a request');
     assert.equal((await appApi(lab, 'POST', '/api/diagnostics/audio/probe', undefined, { 'X-Akeno-Token': 'wrong' })).status, 403);
@@ -1957,13 +1971,15 @@ if (audioLabBinary) {
     const probe = (await appApi(lab, 'POST', '/api/diagnostics/audio/probe')).body.audio.probe;
     assert.equal(probe.libraryDir, libDir);
     assert.deepEqual(probe.audioFiles, ['libSceAudioOut.sprx', 'libSceAudioIn.sprx', 'libSceVoiceQoS.sprx']);
-    const [used, names, input] = probe.libraries;
+    const [used, portState, names, input] = probe.libraries;
     assert.equal(used.name, 'libSceAudioOut.sprx');
     assert.deepEqual(used.symbols.map((sym) => sym.name), ['sceAudioOutInit', 'sceAudioOutOpen', 'sceAudioOutOutput', 'sceAudioOutClose']);
     assert.ok(used.loaded && used.symbols.every((sym) => sym.exported));
+    assert.deepEqual(portState.symbols.map((sym) => sym.name), ['sceAudioOutGetPortState']);
+    assert.match(portState.use, /read-only, on the output test's own port/);
     assert.equal(names.use, 'looked up only, never called');
     assert.ok(names.symbols.some((sym) => sym.name === 'sceAudioOutGetFocusEnablePid'));
-    assert.ok(names.symbols.some((sym) => sym.name === 'sceAudioOutGetPortState'));
+    assert.ok(!names.symbols.some((sym) => sym.name === 'sceAudioOutGetPortState'));
     assert.equal(input.name, 'libSceAudioIn.sprx');
     assert.match(input.use, /never called/);
     assert.equal(input.loaded, false);
@@ -1974,7 +1990,7 @@ if (audioLabBinary) {
     assert.equal(statSync(join(work, 'app-audiolab', 'audiolab-report.txt')).mode & 0o777, 0o600);
   });
 
-  await step('audio lab v2: the tone needs a confirmation, uses the SDL driver configuration and reports every stage', async () => {
+  await step('audio lab v3: the tone needs a confirmation, uses the SDL driver configuration and reports every stage', async () => {
     const unconfirmed = await appApi(lab, 'POST', '/api/diagnostics/audio/tone', {});
     assert.equal(unconfirmed.status, 400);
     assert.equal(unconfirmed.body.error.code, 'CONFIRMATION_REQUIRED');
@@ -2006,6 +2022,28 @@ if (audioLabBinary) {
     assert.equal(run.bufferAligned, true);
     assert.equal(run.closeResult, '0x00000000');
     assert.equal(run.heard, null);
+    // v3: AKENO's own port measured before, during and after the tone (simulated PS4 layout).
+    assert.equal(run.portState.exported, true);
+    assert.equal(run.portState.stopped, false);
+    assert.deepEqual(run.portState.points.map((p) => p.point), ['before-playback', 'during-playback', 'before-close']);
+    for (const point of run.portState.points) {
+      assert.equal(point.attempted, true, point.point);
+      assert.deepEqual(point.calls.map((c) => [c.fill, c.result, c.leadIntact, c.tailIntact]),
+        [['0xa5', '0x00000000', true, true], ['0x5a', '0x00000000', true, true]]);
+      assert.equal(point.writtenBytes, 32);
+      assert.equal(point.highestWrittenOffset, 31);
+      assert.equal(point.windowBytes, 256);
+      assert.equal(point.shownBytes, 32);
+      assert.equal(point.guardsIntact, true);
+      assert.equal(point.callsAgree, true);
+      assert.match(point.calls[0].bytes, /^01 00 02 00 7f 00 00 00( 00){24}$/);
+      assert.equal(point.values, point.calls[0].bytes);
+      assert.deepEqual(point.decoded, { verified: false, layout: 'PS4 SDK layout (shadPS4, fpPS4, SharpProspero); unverified on the PS5',
+        output: '0x0001', outputNames: 'primary', channel: 2, volume: 127, rerouteCounter: 0, flag: '0x0' });
+    }
+    assert.equal(run.portState.points[0].atMs, 0);
+    assert.ok(run.portState.points[1].atMs > 700 && run.portState.points[1].atMs < 1500, String(run.portState.points[1].atMs));
+    assert.ok(run.portState.points[2].atMs >= run.portState.points[1].atMs);
     const state = await audioState();
     assert.equal(state.state, 'accepted', 'never "working" without the user saying so');
     assert.deepEqual(audioRuns().map((e) => [e.format, e.grain, e.frames, e.cancelled]), [[1, 1024, 96256, false]]);
@@ -2030,6 +2068,7 @@ if (audioLabBinary) {
     assert.equal(second.calls, 375);
     assert.equal(second.initCalled, false, 'sceAudioOutInit is called once per launch');
     assert.ok(second.peak > 0.048 && second.peak <= 0.0501, String(second.peak));
+    assert.equal(second.portState.points[1].decoded.channel, 1, 'the simulated state follows the port format');
     const heard = await appApi(lab, 'POST', '/api/diagnostics/audio/feedback', { run: 2, heard: true, route: 'tv' });
     assert.equal(heard.body.audio.state, 'audible-confirmed');
     assert.equal(heard.body.audio.stateRun, 2);
@@ -2041,12 +2080,20 @@ if (audioLabBinary) {
     assert.match(text.text, /Run #2 .*\n {2}Request: user 0xFF \(system\), port type 0 \(main\), 48000 Hz, S16 mono/);
     assert.match(text.text, /User report: HEARD on TV \/ HDMI/);
     assert.match(text.text, /Run #1[\s\S]*consumed at playback speed[\s\S]*User report: not heard/);
+    assert.match(text.text, /AKENO NETWORK audio lab v3 report/);
+    assert.match(text.text, /Port state \(sceAudioOutGetPortState on this test's own port, read-only\)\n/);
+    assert.match(text.text, /Measured: return codes, raw bytes, written bytes, canaries\. Decoded fields: PS4 layout, UNVERIFIED on the PS5\./);
+    assert.match(text.text, /before playback \(0 ms after the first block\): call 1 \(fill a5\) 0x00000000; call 2 \(fill 5a\) 0x00000000; 32 of 256 bytes written \(highest offset 31\); canaries intact; calls agree/);
+    assert.match(text.text, /during the tone \(\d+ ms after the first block\)/);
+    assert.match(text.text, /call 1 raw: 01 00 02 00 7f 00 00 00/);
+    assert.match(text.text, /decoded \(UNVERIFIED PS4 layout\): output 0x0001 \(primary\), channel 2, volume 127, rerouteCounter 0, flag 0x0/);
+    assert.match(text.text, /BROWSER <audio> ELEMENT[\s\S]*Not run yet\./);
     assert.ok(!text.text.includes(lab.token), 'no page secret in the report');
     assert.doesNotMatch(text.text, /akd_|akp_|Bearer/);
     assert.equal(readFileSync(join(work, 'app-audiolab', 'audiolab-report.txt'), 'utf8').includes('HEARD on TV / HDMI'), true);
   });
 
-  await step('audio lab v2: a delayed test waits, can be cancelled and then plays nothing', async () => {
+  await step('audio lab v3: a delayed test waits, can be cancelled and then plays nothing', async () => {
     await sleep(3100);
     const before = audioRuns().length;
     const waiting = await appApi(lab, 'POST', '/api/diagnostics/audio/tone', { confirm: 'play', delaySeconds: 10 });
@@ -2058,10 +2105,11 @@ if (audioLabBinary) {
     const run = await finished(3);
     assert.equal(run.outcome, 'cancelled');
     assert.equal(run.openCalled, false);
+    assert.ok(run.portState.points.every((p) => !p.attempted), 'no port, no port state');
     assert.equal(audioRuns().length, before, 'nothing was played');
   });
 
-  await step('audio lab v2: each failing stage is reported as such and the app keeps running', async () => {
+  await step('audio lab v3: each failing stage is reported as such and the app keeps running', async () => {
     const expect = [
       [{ AKENO_SIM_AUDIO_FAIL: 'init' }, 'init-failed', (r) => assert.equal(r.initResult, '0x80260001')],
       [{ AKENO_SIM_AUDIO_FAIL: 'open' }, 'open-failed', (r) => assert.equal(r.openResult, '0x80260005')],
@@ -2073,6 +2121,33 @@ if (audioLabBinary) {
       [{ AKENO_SIM_AUDIO_FAIL: 'close' }, 'accepted', (r) => assert.match(r.error, /sceAudioOutClose returned 0x80260006/)],
       [{ AKENO_SIM_AUDIO: '' }, 'not-supported', (r) => assert.match(r.error, /libSceAudioOut\.sprx/)],
       [{ AKENO_SIM_AUDIO_PACE: 'none' }, 'accepted', (r) => assert.equal(r.paced, false, 'samples returned faster than real time')],
+      [{ AKENO_SIM_AUDIO_FAIL: 'open' }, 'open-failed', (r) => assert.ok(r.portState.points.every((p) => !p.attempted), 'no port, no port state')],
+      // Port state problems never change the outcome of the output test.
+      [{ AKENO_SIM_AUDIO_PORTSTATE: 'fail' }, 'accepted', (r) => {
+        for (const p of r.portState.points) {
+          assert.deepEqual(p.calls.map((c) => c.result), ['0x80260003'], 'the second call is skipped after an error');
+          assert.equal(p.writtenBytes, 0);
+          assert.equal(p.decoded.output, null);
+        }
+      }],
+      [{ AKENO_SIM_AUDIO_PORTSTATE: 'missing' }, 'accepted', (r) => {
+        assert.equal(r.portState.exported, false);
+        assert.ok(r.portState.points.every((p) => !p.attempted));
+      }],
+      [{ AKENO_SIM_AUDIO_PORTSTATE: 'unconnected' }, 'accepted', (r) => {
+        assert.equal(r.portState.points[1].decoded.output, '0x0000');
+        assert.equal(r.portState.points[1].decoded.outputNames, 'none');
+        assert.equal(r.portState.points[1].decoded.channel, 0);
+      }],
+      [{ AKENO_SIM_AUDIO_PORTSTATE: 'overrun' }, 'accepted', (r) => {
+        const [first, during, close] = r.portState.points;
+        assert.equal(first.guardsIntact, false);
+        assert.deepEqual(first.calls.map((c) => [c.leadIntact, c.tailIntact]), [[true, false]], 'no second call after a changed canary');
+        assert.equal(first.shownBytes, 256);
+        assert.equal(r.portState.stopped, true);
+        assert.equal(during.attempted, false);
+        assert.equal(close.attempted, false);
+      }],
     ];
     for (const [env, outcome, check] of expect) {
       await restartLab(env);
@@ -2085,7 +2160,7 @@ if (audioLabBinary) {
     }
   });
 
-  await step('audio lab v2: the diagnostics page runs the checks, asks for the user\'s report and shows the browser comparison', async () => {
+  await step('audio lab v3: the diagnostics page runs the checks, shows the port state, asks for the user\'s report and compares both browser paths', async () => {
     let chromium;
     try {
       ({ chromium } = createRequire(resolve(root, 'apps/web/package.json'))('@playwright/test'));
@@ -2107,10 +2182,11 @@ if (audioLabBinary) {
       const errors = [];
       page.on('pageerror', (error) => errors.push(String(error)));
       await page.goto(`http://127.0.0.1:${lab.port}/#t=${lab.token}`);
-      await page.locator('#release-badge', { hasText: 'Audio lab v2' }).waitFor();
+      await page.locator('#release-badge', { hasText: 'Alpha 0.5 · Audio lab v3' }).waitFor();
+      assert.doesNotMatch(await page.locator('#release-badge').textContent(), /v2/);
       await page.locator('#pair-diag').click();
       const section = page.locator('#audio-lab');
-      await section.getByRole('heading', { name: 'Audio lab v2 (experimental build)' }).waitFor();
+      await section.getByRole('heading', { name: 'Audio lab v3 (experimental build)' }).waitFor();
       await section.locator('#audio-state', { hasText: 'No output test yet' }).waitFor();
       await section.locator('#audio-probe').click();
       await section.getByText(/libSceAudioOut\.sprx \(used by the output test\)/).waitFor();
@@ -2123,7 +2199,8 @@ if (audioLabBinary) {
       await section.locator('#audio-feedback').waitFor({ timeout: 15_000 });
       await section.locator('#audio-state', { hasText: 'Samples accepted — audible output NOT confirmed' }).waitFor();
       await section.getByText(/consumed at playback speed/).waitFor();
-      if (process.env.AKENO_UI_SCREENSHOTS) await page.screenshot({ path: join(process.env.AKENO_UI_SCREENSHOTS, 'audio-lab-v2-accepted.png'), fullPage: true });
+      await section.getByText(/before-playback: 0 \(success\) \/ 0 \(success\), 32 bytes written · decoded \(unverified\): output 0x0001 \(primary\), channel 2, volume 127/).waitFor();
+      if (process.env.AKENO_UI_SCREENSHOTS) await page.screenshot({ path: join(process.env.AKENO_UI_SCREENSHOTS, 'audio-lab-v3-accepted.png'), fullPage: true });
       await section.locator('#audio-heard-no').click();
       await section.locator('#audio-state', { hasText: 'Samples accepted, but nothing was heard' }).waitFor();
 
@@ -2132,12 +2209,35 @@ if (audioLabBinary) {
       await section.locator('#audio-browser-feedback').waitFor({ timeout: 10_000 });
       await section.locator('#audio-bheard-tv').click();
       await section.getByText(/Last browser tone/).waitFor();
+      await section.getByText(/canPlayType WAV/).waitFor();
+
+      // HTML <audio> element: the generated WAV from a blob: URL, then the user's report.
+      await section.locator('#audio-media').click();
+      await section.getByText(/through the browser's HTML <audio> element/).waitFor();
+      await section.locator('#audio-media-play').click();
+      await section.locator('#audio-media-feedback').waitFor({ timeout: 10_000 });
+      const pending = await section.locator('#audio-media-feedback').textContent();
+      assert.match(pending, /blob URL\): play\(\) resolved, played to the end\. Did you hear it\?/);
+      await section.locator('#audio-mheard-no').click();
+      await section.getByText(/Last <audio> tone/).waitFor();
+      const media = (await audioState()).media;
+      assert.equal(media.source, 'blob');
+      assert.equal(media.playResult, 'resolved');
+      assert.equal(media.loadedMetadata, true);
+      assert.equal(media.ended, true);
+      assert.equal(media.errorCode, 0);
+      assert.ok(media.duration > 1.9 && media.duration < 2.1, String(media.duration));
+      assert.equal(media.heard, false);
+      assert.match(media.features, /Web Audio \(AudioContext\): available; .*canPlayType WAV: (maybe|probably)/);
+      assert.equal(audioRuns().length, 1, 'the <audio> test does not touch the native port');
       await section.locator('#audio-report-btn').click();
       await section.locator('#audio-report', { hasText: 'BROWSER AUDIO' }).waitFor();
       const report = await section.locator('#audio-report').textContent();
       assert.match(report, /User report: not heard/);
       assert.match(report, /API: available/);
-      if (process.env.AKENO_UI_SCREENSHOTS) await page.screenshot({ path: join(process.env.AKENO_UI_SCREENSHOTS, 'audio-lab-v2-report.png'), fullPage: true });
+      assert.match(report, /BROWSER <audio> ELEMENT \(generated WAV, for comparison; v3\)\n {2}Source: blob URL; play\(\): resolved; events: loadedmetadata yes, canplay yes, playing yes, ended yes; MediaError 0; duration 2\.00 s/);
+      assert.match(report, /Browser features \(read-only check\): Web Audio/);
+      if (process.env.AKENO_UI_SCREENSHOTS) await page.screenshot({ path: join(process.env.AKENO_UI_SCREENSHOTS, 'audio-lab-v3-report.png'), fullPage: true });
       assert.deepEqual(errors, []);
       assert.equal(audioRuns().length, 1);
     } finally {

@@ -10,7 +10,7 @@
 #   make -C clients/ps5/console EXPERIMENTAL_AUDIO=1
 #
 # builds the separate, experimental audio lab instead (PS5 voice research, see
-# docs/PS5_AUDIO_RESEARCH.md): clients/ps5/build-ps5-audiolab/akeno-network-ps5-audiolab-v2.elf.
+# docs/PS5_AUDIO_RESEARCH.md): clients/ps5/build-ps5-audiolab/akeno-network-ps5-audiolab-v3.elf.
 # The release ELF never contains the audio lab.
 
 ROOT        := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
@@ -24,10 +24,10 @@ THIRD_PARTY ?= $(ROOT)/third_party
 EXPERIMENTAL_AUDIO ?= 0
 ifeq ($(EXPERIMENTAL_AUDIO),1)
 BUILD       := $(ROOT)/build-ps5-audiolab
-NAME        := akeno-network-ps5-audiolab-v2
-LAB_SRC     := audio_lab.c audio_lab_pcm.c
+NAME        := akeno-network-ps5-audiolab-v3
+LAB_SRC     := audio_lab.c audio_lab_pcm.c audio_lab_state.c
 LAB_FLAGS   := -DAKENO_EXPERIMENTAL_AUDIO
-BUILD_KIND  := ps5-audiolab-v2
+BUILD_KIND  := ps5-audiolab-v3
 else
 BUILD       := $(ROOT)/build-ps5
 NAME        := akeno-network-ps5

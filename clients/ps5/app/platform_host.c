@@ -277,6 +277,45 @@ static long long sim_now_us(void) {
 
 static int g_sim_audio_init_done = 0;
 
+/*
+ * sceAudioOutGetPortState stand-in. AKENO_SIM_AUDIO_PORTSTATE: "ps4" (default) writes the 32-byte
+ * PS4 layout (primary output, the port's channels, volume 127), "unconnected" writes no output bit
+ * and 0 channels, "fail" returns 0x80260003, "missing" is not exported, "overrun" writes 320 bytes
+ * (past the window, to test the canaries).
+ */
+static const char *sim_port_state_mode(void) {
+    const char *mode = getenv("AKENO_SIM_AUDIO_PORTSTATE");
+    return mode && mode[0] ? mode : "ps4";
+}
+
+static unsigned g_sim_port_channels = 2;
+static int g_sim_port_state_stopped = 0;
+
+static int32_t sim_get_port_state(int32_t handle, void *state) {
+    const char *mode = sim_port_state_mode();
+    if (handle != 17) return (int32_t)0x80260003u;
+    if (strcmp(mode, "fail") == 0) return (int32_t)0x80260003u;
+    unsigned char *b = state;
+    if (strcmp(mode, "overrun") == 0) {
+        memset(b, 0, 320);
+        return 0;
+    }
+    memset(b, 0, AUDIO_LAB_STATE_LAYOUT_BYTES);
+    int connected = strcmp(mode, "unconnected") != 0;
+    b[0] = connected ? 0x01 : 0x00; /* output (uint16, little endian) */
+    b[2] = (unsigned char)(connected ? g_sim_port_channels : 0);
+    b[4] = 127;                     /* volume (int16) */
+    return 0;
+}
+
+static void sim_measure_port_state(akeno_audio_result *r, int point, long long first) {
+    static unsigned char arena[AUDIO_LAB_STATE_ARENA_BYTES] __attribute__((aligned(64)));
+    if (!r->port_state_exported || g_sim_port_state_stopped) return;
+    audio_lab_state_sample *s = &r->port_state[point];
+    if (audio_lab_state_measure(sim_get_port_state, r->open_rc, arena, s) != 0) g_sim_port_state_stopped = 1;
+    s->at_us = first ? sim_now_us() - first : 0;
+}
+
 int akeno_platform_audio_run(const akeno_audio_params *p, akeno_audio_result *r) {
     static unsigned char block[AUDIO_LAB_MAX_BLOCK_BYTES] __attribute__((aligned(64)));
     memset(r, 0, sizeof(*r));
@@ -310,8 +349,11 @@ int akeno_platform_audio_run(const akeno_audio_params *p, akeno_audio_result *r)
     int realtime = !pace || strcmp(pace, "none") != 0;
     long long block_us = (long long)p->grain * 1000000LL / (long long)p->rate;
     long long first = 0, last = 0;
-    int result = 0;
+    int result = 0, measured_mid = 0;
     r->call_min_us = -1;
+    g_sim_port_channels = audio_lab_format_channels(p->format);
+    r->port_state_exported = strcmp(sim_port_state_mode(), "missing") != 0;
+    sim_measure_port_state(r, AUDIO_LAB_STATE_BEFORE_PLAYBACK, 0);
     for (unsigned long done = 0; done < p->frames; done += p->grain) {
         if (p->cancel && *p->cancel) {
             r->cancelled = 1;
@@ -348,8 +390,14 @@ int akeno_platform_audio_run(const akeno_audio_params *p, akeno_audio_result *r)
             if (r->call_min_us < 0 || us < r->call_min_us) r->call_min_us = us;
             if (us > r->call_max_us) r->call_max_us = us;
         }
+        if (!measured_mid && done + p->grain >= p->frames / 2) {
+            sim_measure_port_state(r, AUDIO_LAB_STATE_DURING_PLAYBACK, first);
+            measured_mid = 1;
+        }
     }
     r->wall_us = first ? last - first : 0;
+    sim_measure_port_state(r, AUDIO_LAB_STATE_BEFORE_CLOSE, first);
+    r->port_state_stopped = g_sim_port_state_stopped;
     r->close_called = 1;
     r->close_rc = sim_audio_fail("close") ? (int)0x80260006u : 0;
     if (r->close_rc != 0 && result == 0) {

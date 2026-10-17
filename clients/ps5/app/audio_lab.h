@@ -1,5 +1,5 @@
 /*
- * Audio lab v2: experimental PS5 audio research (docs/PS5_AUDIO_RESEARCH.md). Compiled only into
+ * Audio lab v3: experimental PS5 audio research (docs/PS5_AUDIO_RESEARCH.md). Compiled only into
  * the separate audio lab build (AKENO_EXPERIMENTAL_AUDIO); the release build of the console app
  * contains none of it. Every action is started by the user on the diagnostics page; nothing runs
  * on its own and no audio is captured, stored or sent anywhere.
@@ -52,7 +52,22 @@ typedef struct {
 } audio_lab_browser_result;
 void audio_lab_browser_report(const audio_lab_browser_result *result);
 
-/* {"experimental":true,"version":2,"state":...,"probe":{...}|null,"runs":[...],...} */
+/* Result of the page's HTML <audio> element test (v3): a generated WAV played from a blob: or
+ * data: URL, since the 12.20 system browser has no Web Audio API. */
+typedef struct {
+    char source[8];          /* "blob" or "data" */
+    char play_result[64];    /* resolved, rejected: <error name>, no promise, exception: <message> */
+    int loaded_metadata, can_play, playing, ended;
+    int error_code;          /* MediaError.code (1..4), 0 none */
+    double duration;         /* seconds, as reported by the element (-1 unknown) */
+    double current_time;     /* seconds played when the test ended */
+    int heard;               /* 1 heard, 0 not heard, -1 not reported */
+    char route[24];
+    char features[480];      /* the page's read-only feature check, one line */
+} audio_lab_media_result;
+void audio_lab_media_report(const audio_lab_media_result *result);
+
+/* {"experimental":true,"version":3,"state":...,"probe":{...}|null,"runs":[...],...} */
 void audio_lab_status_json(akeno_buf *b);
 
 /* Plain-text report without any account data, tokens or credentials. */

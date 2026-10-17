@@ -9,7 +9,7 @@ Two ELF files are built from the same source:
 | File | What it is |
 | --- | --- |
 | `akeno-network-ps5.elf` | Release candidate: everything that works today, plus profiles, Quick Access settings and the (off by default) controller shortcut experiment. No audio code. |
-| `akeno-network-ps5-audiolab-v2.elf` | The same app plus the experimental **audio lab v2** (Diagnostics). For the audio test only. |
+| `akeno-network-ps5-audiolab-v3.elf` | The same app plus the experimental **audio lab v3** (Diagnostics; v2 plus a read-only port-state query and an `<audio>` test). Replaces v2, which stays in `fallback/`. For the audio test only. |
 
 Both use `/data/akeno`: pairing, settings and drafts are shared, so you can switch between them (and
 back to the fallback builds) without pairing again. Only one runs at a time.
@@ -51,6 +51,17 @@ back to the fallback builds) without pairing again. Only one runs at a time.
   test mode, full diagnostics. **Unverified on hardware** — see [QUICK_ACCESS.md](QUICK_ACCESS.md).
 - The page remembers its last screen and unsent drafts across a reload of the browser page.
 - Open targets `profile` and `profile:<id>` for links and second launches.
+
+### Audio lab v3 (separate ELF, after the 12.20 results)
+- Everything in v2, plus three **read-only** measurements of the test's own port with
+  `sceAudioOutGetPortState` (before playback, during the tone, before closing): raw return codes
+  and bytes in a guarded 256-byte window, which bytes were written, canaries, and the PS4-layout
+  decoding marked **unverified**. A write outside the window stops the call for that launch.
+- A browser **`<audio>` element** test (the system browser has no Web Audio API): a generated WAV
+  from a `blob:`/`data:` URL, `play()` result, media events, your report, and a read-only feature
+  table (codecs, MSE, presence of getUserMedia/WebRTC — never called).
+- Nothing changes volume, routing, focus, HDMI output or privileges; no microphone access.
+- The release ELF is unchanged: CI shows it is the tested 7e28255 file apart from its build ID.
 
 ### Audio lab v2 (separate ELF)
 - Root-cause research of the silent v1 tone and a much more detailed lab: staged results that

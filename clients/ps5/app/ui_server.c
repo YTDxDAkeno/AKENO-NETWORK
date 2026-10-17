@@ -25,6 +25,14 @@
 #define WRITE_DEADLINE_MS 10000
 #define RESPONSE_LIMIT ((size_t)2 << 20)
 
+/* Audio lab builds only: the page's <audio> element test plays a WAV it generates itself (blob:,
+ * or data: when blob URLs are missing). The release page may load no media at all. */
+#ifdef AKENO_EXPERIMENTAL_AUDIO
+#define AKENO_CSP_MEDIA "media-src blob: data:; "
+#else
+#define AKENO_CSP_MEDIA ""
+#endif
+
 int app_exit_requested(void);
 
 static int set_nonblocking(int fd) {
@@ -108,7 +116,7 @@ static void send_response(int fd, const ui_response *r, int head_only) {
                      "Referrer-Policy: no-referrer\r\n"
                      "Cross-Origin-Resource-Policy: same-origin\r\n"
                      "Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
-                     "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'\r\n"
+                     "connect-src 'self'; " AKENO_CSP_MEDIA "base-uri 'none'; form-action 'none'; frame-ancestors 'none'\r\n"
                      "Connection: close\r\n\r\n",
                      r->status, reason(r->status), body_len, r->content_type ? "Content-Type: " : "",
                      r->content_type ? r->content_type : "", r->content_type ? "\r\n" : "", redirect ? "Location: " : "",

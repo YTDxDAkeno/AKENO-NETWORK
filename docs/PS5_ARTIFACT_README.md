@@ -1,21 +1,23 @@
-# AKENO NETWORK for PS5 — Alpha 0.5 release candidate (build artifact)
+# AKENO NETWORK for PS5 — Alpha 0.5 release candidate and audio lab v3 (build artifact)
 
-This folder is the output of the **PS5 console build** GitHub Actions workflow. Nothing in it has
-run on a PS5 yet; test it with `HARDWARE_TEST_PLAN.md` (PS5 firmware 12.20 with kstuff).
+This folder is the output of the **PS5 console build** GitHub Actions workflow. The release ELF is
+the Alpha 0.5 RC you tested on 12.20 (apart from its build ID; CI checks it). Audio lab v3 has not
+run on a PS5 yet; test it with `HARDWARE_TEST_PLAN.md`, test D (PS5 firmware 12.20 with kstuff).
 
 ## Contents
 
 | File | Use |
 | --- | --- |
-| `akeno-network-ps5.elf` | **Release candidate.** Messaging, game activity, notifications as before, plus profiles, Quick Access and the controller shortcut experiment (off by default). |
-| `akeno-network-ps5-audiolab-v2.elf` | **Experimental audio lab v2.** The same app plus Diagnostics → Audio lab v2. Only for test C. |
+| `akeno-network-ps5.elf` | **Release candidate.** Messaging, game activity, notifications as before, plus profiles (work on 12.20), Quick Access and the controller shortcut experiment (off by default; does not work on 12.20). |
+| `akeno-network-ps5-audiolab-v3.elf` | **Experimental audio lab v3.** The same app plus Diagnostics → Audio lab v3 (read-only port state, `<audio>` test). Only for test D. |
+| `fallback/akeno-network-ps5-alpha-0.5-rc-7e28255.elf`, `fallback/akeno-network-ps5-audiolab-v2-7e28255.elf` | The Alpha 0.5 RC and audio lab v2 you tested on 12.20, byte-identical to CI run 39043014243. |
 | `fallback/akeno-network-ps5-previous-ae94851.elf` | The previous release build (`ae94851`), byte-identical to CI run 38558019000. |
 | `fallback/akeno-network-ps5-audiolab-v1-ae94851.elf` | The audio lab v1 you tested (`ae94851`), byte-identical to CI run 38558019000. |
 | `fallback/akeno-network-ps5-alpha-0.1.elf` | Alpha 0.1, byte-identical to the first build that ran on your PS5. |
 | `debug/` | Unstripped ELF files (symbols, for crash analysis) and the toolchain diagnostic. Not needed to use AKENO. |
 | `SHA256SUMS` | Checksums of every ELF. |
 | `BUILDINFO.txt` | Source commit, workflow run, SDK, compiler, imports and hardware status. |
-| `HARDWARE_TEST_PLAN.md` | Tests A (release), B (quick access) and C (audio). |
+| `HARDWARE_TEST_PLAN.md` | Tests A (release), B (quick access), C (audio lab v2, done) and D (audio lab v3). |
 | `RELEASE_NOTES.md`, `AUDIO_RESEARCH.md` | What changed; the audio findings. |
 | `LICENSES.md` | Licences of everything shipped in the ELF files (mbedTLS, CA bundle, SDK runtime, Lucide icons). |
 
@@ -26,7 +28,7 @@ run on a PS5 yet; test it with `HARDWARE_TEST_PLAN.md` (PS5 firmware 12.20 with 
    names the commit).
 3. At the bottom of the run page, under **Artifacts**, download **akeno-network-ps5-alpha-0.5-rc**
    (everything above, as a ZIP). Single files are also there: **akeno-network-ps5-elf** and
-   **akeno-network-ps5-audiolab-v2-elf** (GitHub wraps each in a ZIP too). You must be signed in to
+   **akeno-network-ps5-audiolab-v3-elf** (GitHub wraps each in a ZIP too). You must be signed in to
    GitHub to download artifacts; they are kept for 90 days.
 4. Unzip, then check the files:
    - Linux/macOS: `sha256sum -c SHA256SUMS`
@@ -51,4 +53,6 @@ system files or the server.
   PS5; new controller functions are loaded only when you turn the shortcut on.
 - No game process injection, kernel hooks, firmware offsets or input interception; the PS button is
   never touched; no microphone code exists; audio plays only after you confirm a test.
+- Audio lab v3 only reads the state of its own audio port; nothing changes volume, routing,
+  focus, HDMI output or privileges.
 - Logs and the audio report contain no tokens or passwords.

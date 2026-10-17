@@ -1,4 +1,8 @@
-# Hardware test plan — AKENO NETWORK PS5 Alpha 0.5 (release candidate) and audio lab v2
+# Hardware test plan — AKENO NETWORK PS5 Alpha 0.5 (release candidate) and audio labs v2 and v3
+
+Results of tests A–C on 12.20 (2026-10-17) are in
+[PS5_HARDWARE_RESULTS_FW12.20.md](PS5_HARDWARE_RESULTS_FW12.20.md). **Next: [test D](#test-d--audio-lab-v3-read-only-port-state-and-browser-audio-home-screen-only)**
+(audio lab v3).
 
 For **your PS5 with firmware 12.20 (kstuff)**. Firmware 13.60 is not part of this test.
 Nothing here is hardware-verified until you run it. Please note the result of every step
@@ -9,10 +13,13 @@ Nothing here is hardware-verified until you run it. Please note the result of ev
 1. Download the artifact **akeno-network-ps5-alpha-0.5-rc** from the "PS5 console build" run of the
    commit you approved (see README.md in the artifact). Check the checksums: `sha256sum -c SHA256SUMS`.
 2. Files you need:
-   - `akeno-network-ps5.elf` — the release candidate (tests A and B)
-   - `akeno-network-ps5-audiolab-v2.elf` — experimental audio lab (test C only)
-   - `fallback/akeno-network-ps5-previous-ae94851.elf` and `fallback/akeno-network-ps5-audiolab-v1-ae94851.elf`
-     — byte-identical rebuilds of the builds you already used; `fallback/akeno-network-ps5-alpha-0.1.elf`
+   - `akeno-network-ps5.elf` — the release candidate (tests A and B); the same file as the one you
+     tested (7e28255) apart from its build ID, which CI checks
+   - `akeno-network-ps5-audiolab-v3.elf` — experimental audio lab v3 (test D only)
+   - `fallback/akeno-network-ps5-audiolab-v2-7e28255.elf` — the audio lab v2 you tested (test C)
+   - `fallback/akeno-network-ps5-alpha-0.5-rc-7e28255.elf`, `fallback/akeno-network-ps5-previous-ae94851.elf`,
+     `fallback/akeno-network-ps5-audiolab-v1-ae94851.elf`, `fallback/akeno-network-ps5-alpha-0.1.elf`
+     — byte-identical rebuilds of builds you already used
 3. All builds use `/data/akeno` — your pairing and settings are kept when you switch between them.
    Only one AKENO runs at a time: **Exit AKENO** (top right) before starting another build.
 4. If anything misbehaves: Exit AKENO (or restart the console) and send the previous ELF from
@@ -70,7 +77,7 @@ both need a separate approval.
 
 | # | Step | Expected / what to report |
 | --- | --- | --- |
-| C1 | Exit AKENO; send `akeno-network-ps5-audiolab-v2.elf` | Badge "Alpha 0.5 · Audio lab v2"; AKENO works as in test A |
+| C1 | Exit AKENO; send `fallback/akeno-network-ps5-audiolab-v2-7e28255.elf` | Badge "Alpha 0.5 · Audio lab v2"; AKENO works as in test A |
 | C2 | Diagnostics → Audio lab v2 → **Check audio libraries** | Libraries and functions with ✓/✗, including the "looked up only" names 📷 |
 | C3 | **Play a test tone…** → keep "S16 stereo, 1024" and "Moderate" → **Play** (TV volume normal) | A 1.5 s, 440 Hz tone. Then answer "Did you hear the tone?" honestly 📷 |
 | C4 | Look at the result table: *sceAudioOutOutput*, *Timing* ("consumed at playback speed" or "returned faster than real time") | Photograph the table 📷 |
@@ -83,7 +90,27 @@ both need a separate approval.
 The most useful single result is C4 + C5 + C6 together: whether the system paced the samples, and
 whether the browser (the app in front) or the home-screen context is audible.
 
+## Test D — Audio lab v3: read-only port state and browser audio (home screen only)
+
+Same rules as test C: home screen, no game running, no microphone. Nothing in test D changes
+volume, routing, focus, HDMI output or any setting.
+
+| # | Step | Expected / what to report |
+| --- | --- | --- |
+| D1 | Exit AKENO; send `akeno-network-ps5-audiolab-v3.elf` | Badge **"Alpha 0.5 · Audio lab v3"**; AKENO works as in test A |
+| D2 | Diagnostics → Audio lab v3 → **Check audio libraries** | A row `sceAudioOutGetPortState` ✓/✗ (read-only, on the output test's own port) 📷 |
+| D3 | **Play a test tone…** → keep "S16 stereo, 1024" and "Moderate" → **Play**; answer the question | As in C3. Then the **Port state** row: three entries (before playback, during the tone, before closing) 📷 |
+| D4 | **Play in 10 s…** → **Start**, go to the home screen with the PS button, come back and answer | As in C5; the port state of that test is recorded too |
+| D5 | **Browser `<audio>` test…** → **Play with `<audio>`** (TV volume normal) → answer honestly | The page shows the `play()` result and whether it played to the end; report whether you heard it and where 📷 |
+| D6 | **Show report** 📷, and/or copy `/data/akeno/audiolab-report.txt` | Contains the port-state lines, the `<audio>` result and the browser feature line; no tokens or account data |
+| D7 | Exit AKENO; send `akeno-network-ps5.elf` again | Normal AKENO |
+
+If AKENO stops responding during D3 (not expected): restart the console and send
+`akeno-network-ps5.elf`; report it — the port-state call is then the cause.
+
 ## What to send back
 
-Photos 📷, and for each step ✅/❌ with a short note. For B and C the Diagnostics sections and the
-audio report contain everything needed; none of them contains tokens or passwords.
+Photos 📷, and for each step ✅/❌ with a short note. For B, C and D the Diagnostics sections and the
+audio report contain everything needed; none of them contains tokens or passwords. For test D,
+the report file from D6 is enough on its own: it contains, per test, the raw port-state return
+codes and bytes, the `<audio>` result and the browser feature line.

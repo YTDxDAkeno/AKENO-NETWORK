@@ -20,10 +20,11 @@ list, parties, voice chat or Game Base (no documented interface exists for that;
 >   conversation, game detection with titles, session duration and recently played, friends' live
 >   game activity, local game artwork and custom pictures (builds up to `ae94851`, including the
 >   audio lab v1 ELF).
-> - **Alpha 0.5 has not run on a PS5 yet**: profiles, Quick Access, the controller shortcut and
->   audio lab v2 are tested on Linux/Chromium only. Follow
->   [HARDWARE_TEST_PLAN_PS5_ALPHA_0.5.md](HARDWARE_TEST_PLAN_PS5_ALPHA_0.5.md).
-> - PS5 audio from AKENO: accepted but **not audible** (v1); see [PS5_AUDIO_RESEARCH.md](PS5_AUDIO_RESEARCH.md).
+> - **Alpha 0.5 on 12.20** ([results](PS5_HARDWARE_RESULTS_FW12.20.md)): profiles **work**; the
+>   controller shortcut **does not** (`scePadOpen` 0x809B0081, off by default); audio lab v2 tones
+>   were accepted and paced but **not audible**; the browser has no Web Audio API. Audio lab v3 is
+>   not tested yet ([test plan](HARDWARE_TEST_PLAN_PS5_ALPHA_0.5.md), test D).
+> - PS5 audio from AKENO: **not audible** (v1, v2); see [PS5_AUDIO_RESEARCH.md](PS5_AUDIO_RESEARCH.md).
 > - Firmware 13.60: nothing tested.
 
 ## What is tested where
@@ -36,10 +37,11 @@ list, parties, voice chat or Game Base (no documented interface exists for that;
 | Native notifications, also during a game | Printed by the host build | **Works** |
 | Notifications with an "Open in AKENO" button | Tested (one-time links, fallback) | **Works** (opens the conversation) |
 | Game detection, playtime, recently played, friends' activity, artwork | Tested (simulated process list) | **Works** |
-| **Profiles** (own and friends', privacy, images, actions) — Alpha 0.5 | Tested (API, Chromium 1920×1080) | Not tested |
+| **Profiles** (own and friends', privacy, images, actions) — Alpha 0.5 | Tested (API, Chromium 1920×1080) | **Works** (avatar, banner, badges, game covers, gaming activity) |
 | **Quick Access settings, page memory** — Alpha 0.5 | Tested in Chromium | Not tested |
-| **Controller shortcut** (experimental, off by default) — Alpha 0.5 | Tested with a simulated controller | **Not tested** (may not receive input in the background) |
-| **Audio lab v2** (separate ELF) | Tested with simulated audio | Not tested; v1 tone was accepted but not heard |
+| **Controller shortcut** (experimental, off by default) — Alpha 0.5 | Tested with a simulated controller | **Does not work**: `scePadOpen` returns 0x809B0081 |
+| **Audio lab v2** (separate ELF) | Tested with simulated audio | Accepted and paced, **not audible**; no Web Audio in the browser |
+| **Audio lab v3** (separate ELF: port state, `<audio>` test) | Tested with simulated audio and Chromium | Not tested |
 | Controller navigation in the page | Keyboard navigation in Chromium | Works (your reports); new profile screens not tested |
 | Firmware 13.60 | n/a | Not tested at all |
 
@@ -57,7 +59,7 @@ list, parties, voice chat or Game Base (no documented interface exists for that;
 
 1. Download the artifact **akeno-network-ps5-alpha-0.5-rc** from the "PS5 console build"
    GitHub Actions run of the commit you approved (see [PS5_ARTIFACT_README.md](PS5_ARTIFACT_README.md)).
-   It contains `akeno-network-ps5.elf` (release candidate), `akeno-network-ps5-audiolab-v2.elf`
+   It contains `akeno-network-ps5.elf` (release candidate), `akeno-network-ps5-audiolab-v3.elf`
    (experimental), `fallback/` (the builds you already ran, rebuilt and verified byte-identical),
    `SHA256SUMS`, `BUILDINFO.txt`, a README, the release notes and the hardware test plan.
 2. Check the checksum: `sha256sum -c SHA256SUMS` (Linux/macOS) or

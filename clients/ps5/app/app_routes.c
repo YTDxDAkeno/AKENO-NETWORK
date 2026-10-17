@@ -89,13 +89,17 @@ static void route_state(akeno_app *app, ui_response *r) {
     pthread_mutex_lock(&app->lock);
     akeno_buf_append_str(b, "{\"ok\":true,\"app\":{");
     json_kv_str(b, "version", AKENO_APP_VERSION, 0);
+#ifdef AKENO_EXPERIMENTAL_AUDIO
+    /* The lab names itself here (app.js is shared with the release and only appends "Audio lab v2"
+     * for the old audioLab flag, which this build no longer sends). */
+    json_kv_str(b, "release", AKENO_APP_RELEASE " \xc2\xb7 Audio lab v3", 1);
+    json_kv_int(b, "audioLabVersion", 3, 1);
+#else
     json_kv_str(b, "release", AKENO_APP_RELEASE, 1);
+#endif
     json_kv_str(b, "build", AKENO_BUILD_ID, 1);
     json_kv_str(b, "platform", app->platform.name, 1);
     json_kv_str(b, "firmware", app->platform.firmware, 1);
-#ifdef AKENO_EXPERIMENTAL_AUDIO
-    json_kv_bool(b, "audioLab", 1, 1);
-#endif
     akeno_buf_append_str(b, "}");
     json_kv_bool(b, "configured", app->server[0] != '\0', 1);
     json_kv_str(b, "server", app->server, 1);
@@ -694,6 +698,52 @@ static void route_audio_browser(akeno_app *app, const akeno_json *root, ui_respo
             result.state, result.heard);
     respond_audio_status(r);
 }
+
+static void printable(char *s) {
+    for (char *c = s; *c; c++)
+        if ((unsigned char)*c < 0x20) *c = ' ';
+}
+
+static double json_seconds(const akeno_json *root, const char *key) {
+    const akeno_json *v = akeno_json_get(root, key);
+    return v && v->type == AKENO_JSON_NUMBER && v->number >= 0 && v->number < 3600 ? v->number : -1;
+}
+
+/* POST /api/diagnostics/audio/media: the page's HTML <audio> element test (v3), for comparison. */
+static void route_audio_media(akeno_app *app, const akeno_json *root, ui_response *r) {
+    if (!root || root->type != AKENO_JSON_OBJECT) {
+        respond_error(r, 400, "INVALID_BODY", "Expected a JSON object.");
+        return;
+    }
+    audio_lab_media_result result;
+    memset(&result, 0, sizeof(result));
+    const char *source = akeno_json_get_string(root, "source", "");
+    app_copy_str(result.source, sizeof(result.source), strcmp(source, "blob") == 0 || strcmp(source, "data") == 0 ? source : "");
+    app_copy_str(result.play_result, sizeof(result.play_result), akeno_json_get_string(root, "playResult", ""));
+    result.loaded_metadata = akeno_json_get_bool(root, "loadedMetadata", 0);
+    result.can_play = akeno_json_get_bool(root, "canPlay", 0);
+    result.playing = akeno_json_get_bool(root, "playing", 0);
+    result.ended = akeno_json_get_bool(root, "ended", 0);
+    int64_t code = 0;
+    if (akeno_json_int64(akeno_json_get(root, "errorCode"), &code) == 0 && code >= 0 && code <= 4) result.error_code = (int)code;
+    result.duration = json_seconds(root, "duration");
+    result.current_time = json_seconds(root, "currentTime");
+    const akeno_json *heard = akeno_json_get(root, "heard");
+    result.heard = heard && heard->type == AKENO_JSON_BOOL ? (heard->boolean ? 1 : 0) : -1;
+    const char *route = akeno_json_get_string(root, "route", "");
+    app_copy_str(result.route, sizeof(result.route),
+                 strcmp(route, "tv") == 0 || strcmp(route, "controller-headset") == 0 || strcmp(route, "usb-headset") == 0 ||
+                         strcmp(route, "other") == 0
+                     ? route
+                     : "");
+    app_copy_str(result.features, sizeof(result.features), akeno_json_get_string(root, "features", ""));
+    printable(result.play_result);
+    printable(result.features);
+    audio_lab_media_report(&result);
+    app_log(app, AKENO_LOG_INFO, "audio.media", "Browser audio element test: %s URL, play() %s, ended %d, error %d, heard %d.",
+            result.source[0] ? result.source : "unknown", result.play_result, result.ended, result.error_code, result.heard);
+    respond_audio_status(r);
+}
 #endif
 
 /* ---- /t/<ticket>: one-time links from notification buttons ------------------------------- */
@@ -870,6 +920,9 @@ void app_route(akeno_app *app, const ui_request *req, const char *body, size_t b
     } else if (is(req, "POST", "/api/diagnostics/audio/feedback")) {
         doc = akeno_json_parse(body ? body : "", body_len, NULL, 0);
         route_audio_feedback(app, akeno_json_root(doc), r);
+    } else if (is(req, "POST", "/api/diagnostics/audio/media")) {
+        doc = akeno_json_parse(body ? body : "", body_len, NULL, 0);
+        route_audio_media(app, akeno_json_root(doc), r);
     } else if (is(req, "POST", "/api/diagnostics/audio/browser")) {
         doc = akeno_json_parse(body ? body : "", body_len, NULL, 0);
         route_audio_browser(app, akeno_json_root(doc), r);
