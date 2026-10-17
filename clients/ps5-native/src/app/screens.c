@@ -203,7 +203,7 @@ static void top_bar(akn_app *app, const akn_account_view *acc) {
     tracked(g, 177, 74, 14, AKN_FONT_REGULAR, C_MUTED, "NETWORK", 6);
     akn_rect pill = { 360, 46, 210, 36 };
     akn_gfx_rrect(g, pill, 18, C_ACCENT_SOFT);
-    akn_gfx_text_center(g, pill.x, pill.w, 52, 18, AKN_FONT_BOLD, 0xFFB7C8FFu, "NATIVE PREVIEW");
+    akn_gfx_text_center(g, pill.x, pill.w, 52, 18, AKN_FONT_BOLD, 0xFFB7C8FFu, "BETA \xC2\xB7 1.0");
 
     int x = AKN_SCREEN_W - AKN_MARGIN_X;
     char text[120];

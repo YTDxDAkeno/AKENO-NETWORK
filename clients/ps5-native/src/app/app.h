@@ -22,7 +22,7 @@
 #include "images.h"
 #include "ui.h"
 
-#define AKN_NATIVE_VERSION "0.2.0-preview"
+#define AKN_NATIVE_VERSION "1.0.0-beta.1"
 #ifndef AKN_BUILD_ID
 #define AKN_BUILD_ID "dev"
 #endif
