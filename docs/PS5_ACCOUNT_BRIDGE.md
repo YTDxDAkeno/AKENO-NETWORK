@@ -148,11 +148,13 @@ it never asserts that pairing or streaming works, because neither has been obser
 *prerequisites* are now checkable but **nothing about pairing on 12.20 has been observed**, so the
 justified next step is diagnosis, not a pairing attempt.
 
-1. **Run the opt-in check once on the real console** (owner-approved build, by hand). This is the
+1. **Run the opt-in check once on the real console** (owner-approved build, by hand), following
+   [HARDWARE_TEST_PLAN_ACCOUNT_BRIDGE.md](HARDWARE_TEST_PLAN_ACCOUNT_BRIDGE.md). This is the
    first time any `platform_ps5_account.c` call runs on hardware. It answers three unknowns at
    once, read-only: do the registry/Remote Play libraries and reads work on 12.20; does the current
    local user already have an account ID; is Remote Play enabled. Record the result (and the import
-   set staying unchanged) in [FIRMWARE_COMPATIBILITY.md](FIRMWARE_COMPATIBILITY.md).
+   set staying unchanged) in [FIRMWARE_COMPATIBILITY.md](FIRMWARE_COMPATIBILITY.md). The owner runs
+   it from the console's Diagnostics page (the "Account Bridge (read-only)" section).
 
    - If the check returns `prerequisites-present`, there is a justified, still read-only follow-up:
      a Remote Play **status** probe (e.g. `sceRemoteplayGetRemoteplayStatus`/`GetConnectionStatus`
