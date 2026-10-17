@@ -118,6 +118,8 @@ typedef struct {
     char realtime[24];
     char realtime_detail[160];
     int activity_enabled;
+    int notify_messages, notify_social; /* the daemon's system notification settings */
+    int settings_known;                 /* the three settings above came from the daemon */
     char activity_state[24];  /* idle, playing, off, ... (the daemon's game detection) */
     akn_game console_game;    /* the game running on this console */
     long long console_game_seconds;
@@ -158,7 +160,8 @@ enum {
     AKN_EVF_PARTY = 1 << 6,       /* party.changed (Phase 2.3) */
     AKN_EVF_INVITATIONS = 1 << 7, /* invitations.changed, notification.created */
     AKN_EVF_GAP = 1 << 8,         /* events were lost (ring overflow): reload everything shown */
-    AKN_EVF_REVOKED = 1 << 9      /* session.revoked */
+    AKN_EVF_REVOKED = 1 << 9,     /* session.revoked */
+    AKN_EVF_GROUPS = 1 << 10      /* group.changed: the conversation list changes */
 };
 
 typedef struct {

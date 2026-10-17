@@ -36,6 +36,9 @@ int akn_gfx_text_fit(akn_gfx *g, int x, int y, int px, akn_font_weight weight, u
 /* Word-wrapped text; returns the number of lines drawn. */
 int akn_gfx_text_wrap(akn_gfx *g, int x, int y, int px, akn_font_weight weight, uint32_t argb, const char *s,
                       int max_width, int line_height, int max_lines);
+/* Measures word-wrapped text without drawing: the lines it takes (at most max_lines) and, in *widest,
+ * the width of its widest line. */
+int akn_gfx_text_block(akn_gfx *g, int px, akn_font_weight weight, const char *s, int max_width, int max_lines, int *widest);
 /* Text centred horizontally in [x, x + width). */
 void akn_gfx_text_center(akn_gfx *g, int x, int width, int y, int px, akn_font_weight weight, uint32_t argb, const char *s);
 

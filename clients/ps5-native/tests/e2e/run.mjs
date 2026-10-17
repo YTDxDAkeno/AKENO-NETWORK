@@ -17,6 +17,7 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
@@ -444,7 +445,7 @@ await step('AKENO Native: friends, live presence, a friend request and a profile
     'expect notext NOW PLAYING', 'expect text RECENTLY PLAYED', 'expect text No games played recently.', `shot ${shots}/e2e-profile.png`, 'pad circle', 'pad circle', 'expect screen home',
     'expect text 1 ONLINE',
     // your own profile
-    'pad right', 'pad right', 'pad right', 'expect focus profile', 'pad cross', 'until profile 15000', 'wait 300', 'expect text @it_alice',
+    'pad right', 'pad right', 'pad right', 'pad right', 'expect focus profile', 'pad cross', 'until profile 15000', 'wait 300', 'expect text @it_alice',
     'expect text You', 'expect notext Friend request sent', 'pad circle',
     // activity
     'pad right', 'pad cross', 'expect screen activity', 'until activity 15000', 'wait 300', 'expect text YOUR RECENT GAMES',
@@ -467,7 +468,8 @@ await step('AKENO Native: friends, live presence, a friend request and a profile
   const report = readFileSync(join(nativeDir, 'native-report.txt'), 'utf8');
   assert.match(report, /State:\s+Connected to the AKENO daemon: protocol 2, daemon 0\.5\.0-alpha \([0-9a-f]+-linux-native-ipc\)/);
   assert.match(report, /Friends:\s+1 \(1 online, 0 playing\), 1 incoming and 0 outgoing requests/);
-  assert.match(report, /Requests:\s+\d+ \(GET only\), 0 errors, \d+ event polls, [1-9]\d* events, 1 connects/);
+  // Browsing friends, profiles and activity writes nothing.
+  assert.match(report, /Requests:\s+\d+ \(0 writes, 0 failed\), 0 errors, \d+ event polls, [1-9]\d* events, 1 connects/);
   assert.match(report, /Signed in as:\s+it_alice \(@it_alice\)/);
   const nativeLog = readFileSync(join(nativeDir, 'native.log'), 'utf8');
   for (const text of [report, nativeLog]) {
@@ -476,6 +478,129 @@ await step('AKENO Native: friends, live presence, a friend request and a profile
   }
   assert.ok(readdirSync(akenoDir).every((f) => ['akeno.log', 'ca.pem', 'device.json', 'instance.key', 'native.key', 'settings.json'].includes(f)),
     `daemon folder: ${readdirSync(akenoDir)}`);
+});
+
+await step('AKENO Native: messages, the controller keyboard, party, requests and settings through the write list', async () => {
+  // bob wrote to alice on the website before she opened AKENO Native
+  const conv = await bob.request('POST', '/conversations', { userId: alice.user.id });
+  assert.equal(conv.status, 200, JSON.stringify(conv.body));
+  const convId = conv.body.id;
+  const say = async (who, body) => {
+    const r = await who.request('POST', `/conversations/${convId}/messages`, { body, clientMessageId: randomUUID() });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+  };
+  await say(bob, 'Hi from the website');
+  const daemonOutAt = () => daemon.stdout.length;
+  const checks = {};
+  let leftAt = 0;
+  let partyId = null;
+  const run = await runNative({ AKENO_NATIVE_AKENO_DIR: akenoDir, AKENO_NATIVE_DIR: nativeDir, AKENO_NATIVE_DAEMON_PORT: String(daemon.port),
+    AKENO_NATIVE_SYNC_DIR: syncDir }, [
+    'until ipc 15000', 'until friends 15000', 'wait 500',
+    // Messages: the conversation with its unread message, then the thread
+    'pad right', 'expect focus messages', 'pad cross', 'expect screen messages', 'until text 15000 Hi from the website',
+    'expect text 1 unread message', `shot ${shots}/e2e-messages.png`,
+    'pad cross', 'expect screen chat', 'until text 15000 Hi from the website', 'expect text Press Cross to write a message',
+    // alice answers with the controller keyboard: H (Shift is on for the first letter), i, space, 8, 8
+    'pad cross', 'expect dialog keyboard', 'pad down', 'pad right', 'pad right', 'pad right', 'pad right', 'pad right', 'pad cross',
+    'pad up', 'pad right', 'pad right', 'pad cross', 'pad triangle', 'pad up', 'pad cross', 'pad cross', 'expect text Hi 88',
+    `shot ${shots}/e2e-keyboard.png`, 'pad options', 'expect dialog none', 'sync check-sent',
+    // bob answers while the conversation is open: it appears live, and the daemon shows no system notification for it
+    'sync bob-reply', 'until text 20000 Reply while open', `shot ${shots}/e2e-chat.png`, 'wait 1500', 'sync check-quiet',
+    // leaving the conversation: the next message is a system notification again
+    'pad circle', 'expect screen messages', 'pad circle', 'expect screen home', 'wait 800', 'sync bob-after',
+    // Party: an invitation arrives live; accept it, open the party chat, leave
+    'pad right', 'expect focus parties', 'pad cross', 'expect screen party', 'until text 15000 Create a party', 'sync bob-party',
+    'until text 20000 invited you', 'pad down', 'pad cross', 'until text 20000 YOUR PARTY', 'until text 20000 Party chat', 'sync check-joined',
+    `shot ${shots}/e2e-party.png`,
+    'pad up', 'expect text Leave the party', 'pad cross', 'expect screen chat', 'expect text Party chat', 'pad circle', 'expect screen party',
+    'pad down', 'pad down', 'pad cross', 'expect dialog confirm', 'pad left', 'pad cross', 'until text 20000 Create a party', 'sync check-left',
+    // Inbox: carol's friend request, accepted here
+    'pad circle', 'expect screen home', 'pad right', 'expect focus inbox', 'pad cross', 'expect screen inbox',
+    'until text 15000 wants to be your friend', `shot ${shots}/e2e-inbox.png`, 'pad cross', 'until text 20000 are now friends', 'sync check-carol',
+    // Settings: a daemon setting and your status
+    'pad circle', 'pad right', 'pad right', 'pad right', 'expect focus settings', 'pad cross', 'expect screen settings',
+    'until text 10000 Message notifications', 'wait 500', 'pad cross', 'until text 10000 Message notifications off.', 'sync check-setting-off',
+    'pad cross', 'until text 10000 Message notifications on.', 'pad down', 'pad down', 'pad down', 'pad cross', 'until text 10000 Your status is now Away',
+    'sync check-away', `shot ${shots}/e2e-settings.png`, 'pad square', 'until text 10000 Your status is now Online',
+    'pad circle', 'pad circle', 'expect dialog exit', 'pad left', 'pad cross',
+  ], {
+    'check-sent': async () => {
+      await waitFor(async () => {
+        const page = await bob.request('GET', `/conversations/${convId}/messages`);
+        return page.body.messages.some((m) => m.body === 'Hi 88');
+      }, 'the message on the server', 15_000);
+      const page = await bob.request('GET', `/conversations/${convId}/messages`);
+      checks.sent = page.body.messages.filter((m) => m.body === 'Hi 88');
+      // read on the server: alice's unread count is 0
+      await waitFor(async () => (await alice.request('GET', '/conversations')).body.conversations.find((c) => c.id === convId).unreadCount === 0,
+        'the conversation marked read', 10_000);
+      checks.read = true;
+    },
+    'bob-reply': async () => {
+      checks.quietFrom = daemonOutAt();
+      await say(bob, 'Reply while open');
+    },
+    'check-quiet': async () => {
+      checks.quietOut = daemon.stdout.slice(checks.quietFrom);
+    },
+    'bob-after': async () => {
+      leftAt = daemonOutAt();
+      await say(bob, 'Reply after leaving');
+      await waitFor(() => daemon.stdout.slice(leftAt).includes('Reply after leaving'), 'a system notification after leaving', 10_000);
+      checks.notifiedAfter = true;
+    },
+    'bob-party': async () => {
+      const party = await bob.request('POST', '/parties', { name: 'E2E party', privacy: 'invite_only' });
+      assert.equal(party.status, 201, JSON.stringify(party.body));
+      partyId = party.body.id;
+      const inv = await bob.request('POST', `/parties/${partyId}/invitations`, { userId: alice.user.id });
+      assert.equal(inv.status, 201, JSON.stringify(inv.body));
+    },
+    'check-joined': async () => {
+      const p = await bob.request('GET', `/parties/${partyId}`);
+      checks.joined = p.body.memberCount;
+    },
+    'check-left': async () => {
+      await waitFor(async () => (await bob.request('GET', `/parties/${partyId}`)).body.memberCount === 1, 'alice left the party', 10_000);
+      checks.left = true;
+    },
+    'check-carol': async () => {
+      await waitFor(async () => (await carol.request('GET', '/friends')).body.friends.some((f) => f.id === alice.user.id), 'carol and alice friends', 10_000);
+      checks.carol = true;
+    },
+    'check-setting-off': async () => {
+      checks.notifyOff = (await local(daemon.port, 'GET', '/api/state', { 'X-Akeno-Token': daemon.token })).body.notifications.messages;
+    },
+    'check-away': async () => {
+      await waitFor(async () => (await bob.request('GET', '/friends')).body.friends.find((f) => f.id === alice.user.id)?.presence.status === 'away',
+        'alice away for bob', 10_000);
+      checks.away = true;
+    },
+  });
+  assert.equal(run.code, 0, `native exit ${run.code} ${run.signal}\n${run.output.slice(-4000)}`);
+  assert.equal(checks.sent?.length, 1, 'the message reached the server exactly once');
+  assert.equal(checks.sent[0].sender.id, alice.user.id);
+  assert.ok(checks.read, 'the open conversation was marked read on the server');
+  assert.ok(checks.quietOut !== undefined && !checks.quietOut.includes('Reply while open'),
+    'no system notification for a message in the conversation open in AKENO Native');
+  assert.ok(checks.notifiedAfter, 'a system notification once the conversation is closed');
+  assert.equal(checks.joined, 2, 'accepting the invitation joined the party');
+  assert.ok(checks.left, 'leaving the party reached the server');
+  assert.ok(checks.carol, 'accepting the friend request reached the server');
+  assert.equal(checks.notifyOff, false, 'the daemon setting changed through the native interface');
+  assert.ok(checks.away, 'the status change reached friends');
+  // still one realtime session for the console: AKENO Native opened none
+  assert.equal(tlsRequests.filter((r) => r.upgrade).length, 1);
+  const report = readFileSync(join(nativeDir, 'native-report.txt'), 'utf8');
+  assert.match(report, /Requests:\s+\d+ \([1-9]\d* writes, 0 failed\)/);
+  const nativeLog = readFileSync(join(nativeDir, 'native.log'), 'utf8');
+  for (const text of [report, nativeLog])
+    for (const secret of [key, 'Hi 88', 'Reply while open', 'Hi from the website', 'E2E party', convId]) assert.ok(!text.includes(secret), `not logged: ${secret}`);
+  const daemonLog = readFileSync(join(akenoDir, 'akeno.log'), 'utf8');
+  for (const route of ['POST /conversations/:id/messages', 'POST /conversations/:id/read', 'POST /invitations/:id/accept', 'POST /parties/:id/leave',
+    'POST /friends/requests/:id/accept', 'PUT /presence'])
+    assert.ok(daemonLog.includes(`native.write ${route}`), route);
 });
 
 await step('native-IPC daemon: stopping removes the key; the release daemon ignores it', async () => {

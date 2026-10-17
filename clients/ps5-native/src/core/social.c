@@ -291,6 +291,10 @@ int akn_parse_daemon_state(const char *json, size_t len, akn_daemon_info *out) {
         copy_str(out->realtime_detail, sizeof(out->realtime_detail), str_or_empty(rt, "detail"));
         const akeno_json *act = akeno_json_get(root, "activity");
         out->activity_enabled = akeno_json_get_bool(act, "enabled", 0);
+        const akeno_json *notify = akeno_json_get(root, "notifications");
+        out->notify_messages = akeno_json_get_bool(notify, "messages", 1);
+        out->notify_social = akeno_json_get_bool(notify, "social", 1);
+        out->settings_known = notify && notify->type == AKENO_JSON_OBJECT && act && act->type == AKENO_JSON_OBJECT;
         copy_str(out->activity_state, sizeof(out->activity_state), str_or_empty(act, "state"));
         memset(&out->console_game, 0, sizeof(out->console_game));
         copy_str(out->console_game.title_id, sizeof(out->console_game.title_id), str_or_empty(act, "titleId"));
@@ -358,6 +362,8 @@ int akn_apply_events(const char *json, size_t len, akn_friend_list *friends, akn
             out->flags |= AKN_EVF_MESSAGES | AKN_EVF_STATE;
         } else if (strcmp(type, "party.changed") == 0) {
             out->flags |= AKN_EVF_PARTY;
+        } else if (strcmp(type, "group.changed") == 0) {
+            out->flags |= AKN_EVF_GROUPS;
         } else if (strcmp(type, "invitations.changed") == 0 || strcmp(type, "notification.created") == 0) {
             out->flags |= AKN_EVF_INVITATIONS;
         } else if (strcmp(type, "session.revoked") == 0) {

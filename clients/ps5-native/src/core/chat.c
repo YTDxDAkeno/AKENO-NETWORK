@@ -111,6 +111,31 @@ static void set_preview(akn_conversation *c, const akeno_json *last, const char 
     if (id > c->last_message_id) c->last_message_id = id;
 }
 
+int akn_parse_direct_conversation(const akeno_json *c, akn_conversation *v) {
+    memset(v, 0, sizeof(*v));
+    const akeno_json *other = akeno_json_get(c, "otherUser");
+    const char *id = str_of(c, "id");
+    if (!id[0] || !other || other->type != AKENO_JSON_OBJECT || !str_of(other, "onlineId")[0]) return -1;
+    v->kind = AKN_CONV_DIRECT;
+    copy_str(v->id, sizeof(v->id), id);
+    copy_str(v->target_id, sizeof(v->target_id), str_of(other, "id"));
+    copy_str(v->handle, sizeof(v->handle), str_of(other, "onlineId"));
+    const char *dn = str_of(other, "displayName");
+    copy_utf8(v->title, sizeof(v->title), dn[0] ? dn : v->handle);
+    copy_media(v->avatar, str_of(other, "avatarImage"));
+    akn_fill_presence(akeno_json_get(other, "presence"), &v->presence);
+    v->last_at = time_of(c, "lastMessageAt");
+    v->unread = (int)int_of(c, "unreadCount", 0);
+    if (v->unread < 0) v->unread = 0;
+    v->can_send = akeno_json_get_bool(c, "canSend", 0);
+    v->members = 2;
+    const akeno_json *last = akeno_json_get(c, "lastMessage");
+    set_preview(v, last, NULL);
+    /* the last message is yours unless the other user sent it */
+    if (last && last->type == AKENO_JSON_OBJECT) v->preview_mine = strcmp(str_of(akeno_json_get(last, "sender"), "id"), v->target_id) != 0;
+    return 0;
+}
+
 int akn_fill_direct_conversations(const akeno_json *data, akn_conv_list *out) {
     memset(out, 0, sizeof(*out));
     const akeno_json *arr = akeno_json_get(data, "conversations");
@@ -120,29 +145,7 @@ int akn_fill_direct_conversations(const akeno_json *data, akn_conv_list *out) {
             out->truncated = 1;
             break;
         }
-        const akeno_json *other = akeno_json_get(c, "otherUser");
-        const char *id = str_of(c, "id");
-        if (!id[0] || !other || other->type != AKENO_JSON_OBJECT) continue;
-        akn_conversation *v = &out->items[out->count];
-        memset(v, 0, sizeof(*v));
-        v->kind = AKN_CONV_DIRECT;
-        copy_str(v->id, sizeof(v->id), id);
-        copy_str(v->target_id, sizeof(v->target_id), str_of(other, "id"));
-        copy_str(v->handle, sizeof(v->handle), str_of(other, "onlineId"));
-        const char *dn = str_of(other, "displayName");
-        copy_utf8(v->title, sizeof(v->title), dn[0] ? dn : v->handle);
-        copy_media(v->avatar, str_of(other, "avatarImage"));
-        akn_fill_presence(akeno_json_get(other, "presence"), &v->presence);
-        v->last_at = time_of(c, "lastMessageAt");
-        v->unread = (int)int_of(c, "unreadCount", 0);
-        if (v->unread < 0) v->unread = 0;
-        v->can_send = akeno_json_get_bool(c, "canSend", 0);
-        v->members = 2;
-        set_preview(v, akeno_json_get(c, "lastMessage"), NULL);
-        /* "mine" needs your ID: the sender is the other user unless it is not */
-        const akeno_json *last = akeno_json_get(c, "lastMessage");
-        if (last && last->type == AKENO_JSON_OBJECT) v->preview_mine = strcmp(str_of(akeno_json_get(last, "sender"), "id"), v->target_id) != 0;
-        out->count++;
+        if (akn_parse_direct_conversation(c, &out->items[out->count]) == 0) out->count++;
     }
     akn_conversations_sort(out);
     return 0;

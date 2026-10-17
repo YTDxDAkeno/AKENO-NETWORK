@@ -120,8 +120,15 @@ void akn_report_build(akn_app *app, char *out, size_t out_len) {
     else add(&b, "Friends:          not loaded%s%s\n", s->friends_error[0] ? ": " : "", s->friends_error);
     add(&b, "Profile:          %s\n", s->profile_load == AKN_LOAD_OK ? (s->profile_own ? "own profile loaded" : "a friend's profile loaded")
                                       : s->profile_load == AKN_LOAD_ERROR ? s->profile_error : "not opened");
-    add(&b, "Requests:         %lu (GET only), %lu errors, %lu event polls, %lu events, %lu connects\n", s->requests, s->errors,
-        s->event_polls, s->events, s->reconnects);
+    /* Counts only: no conversation, party or person is named. */
+    if (s->convs) add(&b, "Messages:         %d conversations, %d unread messages\n", s->convs->count, s->convs->unread_total);
+    else add(&b, "Messages:         not loaded\n");
+    add(&b, "Party:            %s\n", s->party_load != AKN_LOAD_OK ? "not loaded" : s->party.present ? "in a party" : "not in a party");
+    if (s->inbox)
+        add(&b, "Inbox:            %d friend requests, %d invitations, %d unread notifications\n", s->inbox->incoming_count,
+            s->inbox->invitation_count, s->inbox->notifications_unread);
+    add(&b, "Requests:         %lu (%lu writes, %lu failed), %lu errors, %lu event polls, %lu events, %lu connects\n", s->requests, s->writes,
+        s->write_errors, s->errors, s->event_polls, s->events, s->reconnects);
     SDL_UnlockMutex(app->lock);
 
     /* Counts only: never which pictures (media IDs or titles). */

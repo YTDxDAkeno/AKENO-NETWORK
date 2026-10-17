@@ -72,6 +72,8 @@ typedef struct {
     long long newest_id;     /* the newest confirmed message */
 } akn_thread;
 
+/* One DirectConversationDto (also the answer of POST /conversations). 0, or -1. */
+int akn_parse_direct_conversation(const struct akeno_json *node, akn_conversation *out);
 /* GET /conversations (direct conversations): replaces the list. 0, or -1 on an unexpected shape. */
 int akn_fill_direct_conversations(const struct akeno_json *data, akn_conv_list *out);
 /* GET /groups: adds a conversation for every group you are a member of. */
