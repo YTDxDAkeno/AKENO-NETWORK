@@ -36,6 +36,13 @@
       "when": 1791952584176,
       "tag": "0004_alpha03_profiles_media_games",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792196234191,
+      "tag": "0005_account_bridge",
+      "breakpoints": true
     }
   ]
 }

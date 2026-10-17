@@ -116,7 +116,12 @@ static void route_state(akeno_app *app, ui_response *r) {
     json_kv_bool(b, "messages", app->notify_messages, 0);
     json_kv_bool(b, "social", app->notify_social, 1);
     json_kv_bool(b, "actionable", app->actionable_notifications, 1);
-    akeno_buf_append_str(b, "},\"activity\":");
+    akeno_buf_append_str(b, "}");
+    pthread_mutex_unlock(&app->lock);
+    akeno_buf_append_str(b, ",\"accountBridge\":");
+    app_bridge_json(app, b);
+    pthread_mutex_lock(&app->lock);
+    akeno_buf_append_str(b, ",\"activity\":");
     app_activity_json(app, b, 0);
     akeno_buf_append_str(b, ",\"inbox\":");
     inbox_summary_json(app, b);
@@ -618,6 +623,33 @@ static void route_ticket(akeno_app *app, const char *id, ui_response *r) {
     app_log(app, AKENO_LOG_INFO, "ui.ticket_redeemed", "Opened the page from a notification (%s).", open[0] ? open : "home");
 }
 
+/* ---- Account Bridge (read-only) ------------------------------------------------------------ */
+
+static void route_bridge_link(akeno_app *app, const akeno_json *root, ui_response *r) {
+    int with_check = root && root->type == AKENO_JSON_OBJECT ? akeno_json_get_bool(root, "check", 0) : 0;
+    akeno_status status = app_bridge_link(app, with_check);
+    respond_json(r, 200);
+    akeno_buf_printf(&r->body, "{\"ok\":%s,\"data\":", status == AKENO_OK ? "true" : "false");
+    app_bridge_json(app, &r->body);
+    akeno_buf_append_str(&r->body, "}");
+}
+
+static void route_bridge_check(akeno_app *app, ui_response *r) {
+    app_bridge_run_check(app);
+    respond_json(r, 200);
+    akeno_buf_append_str(&r->body, "{\"ok\":true,\"data\":");
+    app_bridge_json(app, &r->body);
+    akeno_buf_append_str(&r->body, "}");
+}
+
+static void route_bridge_unlink(akeno_app *app, ui_response *r) {
+    app_bridge_unlink(app);
+    respond_json(r, 200);
+    akeno_buf_append_str(&r->body, "{\"ok\":true,\"data\":");
+    app_bridge_json(app, &r->body);
+    akeno_buf_append_str(&r->body, "}");
+}
+
 /* ---- Dispatcher --------------------------------------------------------------------------- */
 
 static int is(const ui_request *req, const char *method, const char *path) {
@@ -712,6 +744,13 @@ void app_route(akeno_app *app, const ui_request *req, const char *body, size_t b
         route_local_art(app, req, r);
     } else if (is(req, "GET", "/api/shareplay")) {
         route_shareplay(app, r);
+    } else if (is(req, "POST", "/api/account-bridge/link")) {
+        doc = akeno_json_parse(body ? body : "", body_len, NULL, 0);
+        route_bridge_link(app, akeno_json_root(doc), r);
+    } else if (is(req, "POST", "/api/account-bridge/check")) {
+        route_bridge_check(app, r);
+    } else if (is(req, "POST", "/api/account-bridge/unlink")) {
+        route_bridge_unlink(app, r);
     } else if (is(req, "GET", "/api/state")) {
         route_state(app, r);
     } else if (is(req, "GET", "/api/events")) {

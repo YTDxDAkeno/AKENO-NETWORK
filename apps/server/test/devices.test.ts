@@ -9,7 +9,7 @@ import {
   type DeviceScope,
   type DeviceTokenResponse,
 } from '@akeno/shared';
-import { devicePairings, deviceCredentials, users } from '../src/database/schema/index.js';
+import { auditEvents, devicePairings, deviceCredentials, users } from '../src/database/schema/index.js';
 import { deviceRouteKeys } from '../src/modules/devices/scopes.js';
 import {
   DEFAULT_PASSWORD,
@@ -402,5 +402,107 @@ describe('device route table', () => {
   it('never exposes sensitive route families', () => {
     const sensitive = /\/(auth|admin|blocks|profile\/privacy)\b|DELETE \/api\/v1\/users\/me|^(GET|DELETE) \/api\/v1\/devices(\/:id)?$|\/devices\/pairings/;
     expect(deviceRouteKeys().filter((key) => sensitive.test(key))).toEqual([]);
+  });
+});
+
+describe('account bridge (local console user link)', () => {
+  it('links the local console user to the account without granting anything', async () => {
+    const owner = await registerUser(server, 'bridge_owner');
+    // A device with a single, unrelated permission can still describe itself.
+    const { device } = await pairDevice(owner, ['realtime']);
+
+    const linked = await device.request('PUT', '/devices/current/console-user', { localUserId: 268435457, userName: 'Justin PS5' });
+    expect(linked.status).toBe(200);
+    expect(linked.body.device.current).toBe(true);
+    expect(linked.body.device.scopes).toEqual(['realtime']);
+    expect(linked.body.device.consoleUser).toMatchObject({
+      localUserId: 268435457,
+      userName: 'Justin PS5',
+      accountState: 'not_checked',
+      accountCheckedAt: null,
+    });
+    const linkedAt = linked.body.device.consoleUser.linkedAt;
+
+    // The website sees the same link on the paired device.
+    const listed = await owner.get('/devices');
+    expect(listed.body.devices[0].consoleUser).toMatchObject({ userName: 'Justin PS5', accountState: 'not_checked' });
+    expect((await device.request('GET', '/devices/current')).body.device.consoleUser.localUserId).toBe(268435457);
+
+    // A check result for the same user keeps the link time and records when it was checked.
+    const checked = await device.request('PUT', '/devices/current/console-user', {
+      localUserId: 268435457,
+      userName: 'Justin PS5',
+      accountState: 'no_account_id',
+    });
+    expect(checked.body.device.consoleUser.linkedAt).toBe(linkedAt);
+    expect(checked.body.device.consoleUser.accountState).toBe('no_account_id');
+    expect(checked.body.device.consoleUser.accountCheckedAt).not.toBeNull();
+
+    // Re-reporting without a check keeps the previous result for the same user...
+    const again = await device.request('PUT', '/devices/current/console-user', { localUserId: 268435457, userName: 'Justin PS5' });
+    expect(again.body.device.consoleUser.accountState).toBe('no_account_id');
+
+    // ...and a different local user replaces the link and starts unchecked.
+    const other = await device.request('PUT', '/devices/current/console-user', { localUserId: 268435458, userName: 'Guest' });
+    expect(other.body.device.consoleUser).toMatchObject({ localUserId: 268435458, userName: 'Guest', accountState: 'not_checked' });
+
+    const audit = await server.database.db.select().from(auditEvents).where(eq(auditEvents.actorId, owner.id));
+    expect(audit.filter((event) => event.action === 'device.console_user_linked')).toHaveLength(2);
+  });
+
+  it('validates what the console reports', async () => {
+    const owner = await registerUser(server, 'bridge_validate');
+    const { device } = await pairDevice(owner);
+    for (const body of [
+      { localUserId: 1.5, userName: 'Name' },
+      { localUserId: 2 ** 31, userName: 'Name' },
+      { localUserId: 1, userName: '' },
+      { localUserId: 1, userName: 'a'.repeat(33) },
+      { localUserId: 1, userName: '<script>' },
+      { localUserId: 1, userName: 'Name', accountState: 'psn_verified' },
+    ]) {
+      const response = await device.request('PUT', '/devices/current/console-user', body);
+      expect({ body, status: response.status }).toEqual({ body, status: 400 });
+    }
+    // Local names in other scripts are fine.
+    expect((await device.request('PUT', '/devices/current/console-user', { localUserId: 7, userName: 'ゆうき 2' })).status).toBe(200);
+  });
+
+  it('can be unlinked from the website or the console, and disappears with the device', async () => {
+    const owner = await registerUser(server, 'bridge_unlink');
+    const stranger = await registerUser(server, 'bridge_stranger');
+    const { device, token } = await pairDevice(owner);
+    await device.request('PUT', '/devices/current/console-user', { localUserId: 1, userName: 'Main' });
+
+    // Only the owner's website session can remove it; a device cannot reach the website route.
+    expect((await stranger.delete(`/devices/${token.device.id}/console-user`)).status).toBe(404);
+    const fromDevice = await device.request('DELETE', `/devices/${token.device.id}/console-user`);
+    expect(fromDevice.status).toBe(403);
+    expect((await owner.request('DELETE', `/devices/${token.device.id}/console-user`, undefined, { csrf: false })).status).toBe(403);
+
+    const unlinked = await owner.delete(`/devices/${token.device.id}/console-user`);
+    expect(unlinked.status).toBe(200);
+    expect(unlinked.body.device.consoleUser).toBeNull();
+
+    await device.request('PUT', '/devices/current/console-user', { localUserId: 1, userName: 'Main' });
+    const selfUnlinked = await device.request('DELETE', '/devices/current/console-user');
+    expect(selfUnlinked.status).toBe(200);
+    expect(selfUnlinked.body.device).toMatchObject({ current: true, consoleUser: null });
+
+    // Unpairing deletes the credential, and with it the link.
+    await device.request('PUT', '/devices/current/console-user', { localUserId: 1, userName: 'Main' });
+    expect((await owner.delete(`/devices/${token.device.id}`)).status).toBe(204);
+    const rows = await server.database.db.select().from(deviceCredentials).where(eq(deviceCredentials.userId, owner.id));
+    expect(rows).toHaveLength(0);
+    expect((await device.request('PUT', '/devices/current/console-user', { localUserId: 1, userName: 'Main' })).status).toBe(401);
+  });
+
+  it('is refused without a device token', async () => {
+    // Without a bearer token the request is a browser request without Origin and is refused.
+    const anonymous = await new DeviceClient().request('PUT', '/devices/current/console-user', { localUserId: 1, userName: 'Main' });
+    expect([401, 403]).toContain(anonymous.status);
+    const owner = await registerUser(server, 'bridge_browser');
+    // A browser session is not a device: there is no "current device" to describe.
+    expect((await owner.put('/devices/current/console-user', { localUserId: 1, userName: 'Main' })).status).toBeGreaterThanOrEqual(400);
   });
 });

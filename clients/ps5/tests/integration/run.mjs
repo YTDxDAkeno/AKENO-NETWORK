@@ -715,7 +715,16 @@ if (appBinary) {
   let app = null;
 
   await step('console app: serves its page and refuses requests without the session secret', async () => {
-    app = await startApp(appData, ['--port', '0', '--server', server, '--ca-file', caFile], { AKENO_BACKOFF_BASE_MS: '300' });
+    app = await startApp(appData, ['--port', '0', '--server', server, '--ca-file', caFile], {
+      AKENO_BACKOFF_BASE_MS: '300',
+      // Account Bridge simulation: a selected local user, readable registry, no account ID, Remote Play on.
+      AKENO_SIM_CONSOLE_USER: '268435457:Justin PS5',
+      AKENO_SIM_REGMGR: 'present',
+      AKENO_SIM_REMOTEPLAY: 'present',
+      AKENO_SIM_USER_SLOT: '1',
+      AKENO_SIM_ACCOUNT_ID: '0',
+      AKENO_SIM_RP_GLOBAL: '1',
+    });
     assert.equal(app.exit, null, app.stderr);
     const page = await appApi(app, 'GET', '/');
     assert.equal(page.status, 200);
@@ -921,6 +930,50 @@ if (appBinary) {
     assert.equal((await alice.request('POST', `/parties/${partyId}/shareplay/stop`)).status, 204);
   });
 
+
+  await step('console app: links the local console user and runs the opt-in read-only account check', async () => {
+    // The selected local user is reported, nothing is linked or checked yet.
+    let bridge = (await appState(app)).accountBridge;
+    assert.equal(bridge.haveUser, true, JSON.stringify(bridge));
+    assert.equal(bridge.userName, 'Justin PS5');
+    assert.equal(bridge.linkState, '');
+    assert.equal(bridge.checked, false);
+
+    // Linking reuses the paired device credential; the website sees a local, unverified user.
+    const linked = await appApi(app, 'POST', '/api/account-bridge/link', {});
+    assert.equal(linked.body.ok, true, linked.text);
+    assert.equal(linked.body.data.linkState, 'linked');
+    const devices = await alice.request('GET', '/devices');
+    const consoleUser = devices.body.devices[0].consoleUser;
+    assert.ok(consoleUser, JSON.stringify(devices.body.devices[0]));
+    assert.equal(consoleUser.userName, 'Justin PS5');
+    assert.equal(consoleUser.accountState, 'not_checked');
+
+    // The opt-in read-only check: functions found, no account ID, so pairing is blocked. Nothing written.
+    const checked = await appApi(app, 'POST', '/api/account-bridge/check', {});
+    assert.equal(checked.body.data.checked, true, checked.text);
+    assert.equal(checked.body.data.accountState, 'no_account_id');
+    assert.equal(checked.body.data.assessment.code, 'blocked-no-account-id');
+    assert.ok(checked.body.data.presence.remoteplayLoaded);
+    // The account ID value itself is never exposed, only its presence.
+    assert.equal(/\baccountId"\s*:/.test(checked.text), false, checked.text);
+
+    // Linking again with the check result records the state on the server.
+    const relinked = await appApi(app, 'POST', '/api/account-bridge/link', { check: true });
+    assert.equal(relinked.body.data.accountState, 'no_account_id');
+    const after = await alice.request('GET', '/devices');
+    assert.equal(after.body.devices[0].consoleUser.accountState, 'no_account_id');
+
+    // Unlinking from the console removes it; the device stays paired.
+    const unlinked = await appApi(app, 'POST', '/api/account-bridge/unlink', {});
+    assert.equal(unlinked.body.ok, true);
+    assert.equal(unlinked.body.data.linkState, '');
+    assert.equal((await alice.request('GET', '/devices')).body.devices[0].consoleUser, null);
+
+    // The read-only steps are logged step by step so a crash would name the exact operation.
+    const diagnostics = await appApi(app, 'GET', '/api/diagnostics');
+    assert.ok(diagnostics.body.log.some((line) => line.includes('bridge.read.begin')), diagnostics.text);
+  });
 
   await step('console app: the page works in a browser with keyboard-only navigation', async () => {
     let chromium;

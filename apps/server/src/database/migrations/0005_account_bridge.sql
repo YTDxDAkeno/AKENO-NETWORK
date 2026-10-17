@@ -1,0 +1,7 @@
+ALTER TABLE "device_credentials" ADD COLUMN "console_user_id" integer;--> statement-breakpoint
+ALTER TABLE "device_credentials" ADD COLUMN "console_user_name" varchar(32);--> statement-breakpoint
+ALTER TABLE "device_credentials" ADD COLUMN "console_user_linked_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "device_credentials" ADD COLUMN "console_account_state" varchar(24);--> statement-breakpoint
+ALTER TABLE "device_credentials" ADD COLUMN "console_account_checked_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "device_credentials" ADD CONSTRAINT "device_credentials_console_user_check" CHECK (("device_credentials"."console_user_id" IS NULL) = ("device_credentials"."console_user_name" IS NULL) AND ("device_credentials"."console_user_id" IS NULL) = ("device_credentials"."console_user_linked_at" IS NULL) AND ("device_credentials"."console_user_id" IS NULL) = ("device_credentials"."console_account_state" IS NULL));--> statement-breakpoint
+ALTER TABLE "device_credentials" ADD CONSTRAINT "device_credentials_console_account_state_check" CHECK ("device_credentials"."console_account_state" IS NULL OR "device_credentials"."console_account_state" IN ('not_checked', 'no_account_id', 'account_id_present', 'check_failed'));

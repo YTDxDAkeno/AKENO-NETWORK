@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Gamepad2, Link2 } from 'lucide-react';
-import { DEVICE_SCOPE_LABELS, type DeviceDto, type DeviceScope } from '@akeno/shared';
+import { DEVICE_SCOPE_LABELS, type ConsoleAccountState, type DeviceDto, type DeviceScope } from '@akeno/shared';
 import { Badge } from '../../components/Badge';
 import { Button, ButtonLink } from '../../components/Button';
 import { Card, CardHeader } from '../../components/Card';
@@ -12,6 +12,14 @@ import { useToast } from '../../components/Toast';
 import { api, errorMessage } from '../../lib/api';
 import { useDevices } from '../../lib/queries';
 import { queryKeys } from '../../lib/query-keys';
+
+/** What the console's optional read-only account check found (never a PSN verification). */
+const CONSOLE_ACCOUNT_LABELS: Record<ConsoleAccountState, string> = {
+  not_checked: 'account check not run',
+  no_account_id: 'offline user, no account ID',
+  account_id_present: 'has an account ID (PSN or local, not distinguished)',
+  check_failed: 'account check failed',
+};
 
 /** Lists devices paired with a code (console and companion clients) and lets the user unpair them. */
 export function PairedDevicesCard() {
@@ -48,6 +56,16 @@ export function PairedDevicesCard() {
     });
     if (ok) grant.mutate({ device, scope: 'activity:write' });
   };
+
+  // Account Bridge: removes the local console-user link; the device stays paired.
+  const unlinkUser = useMutation({
+    mutationFn: (id: string) => api.delete<{ device: DeviceDto }>(`/devices/${id}/console-user`),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.devices });
+      toast.success('PS5 user unlinked.', 'The console stays paired.');
+    },
+    onError: (error) => toast.error('Could not unlink the PS5 user', errorMessage(error)),
+  });
 
   const confirmUnpair = async (id: string, name: string) => {
     const ok = await confirm({
@@ -92,6 +110,21 @@ export function PairedDevicesCard() {
                   {device.ipAddress ? ` · ${device.ipAddress}` : ''} · {device.scopes.length} permission
                   {device.scopes.length === 1 ? '' : 's'}
                 </p>
+                {device.consoleUser ? (
+                  <p className="text-xs text-muted" data-testid="console-user">
+                    Linked PS5 user: <span className="font-medium text-ink">{device.consoleUser.userName}</span> (local,
+                    not verified by Sony) · {CONSOLE_ACCOUNT_LABELS[device.consoleUser.accountState]}
+                    {' · '}
+                    <button
+                      type="button"
+                      className="font-medium text-accent hover:underline"
+                      disabled={unlinkUser.isPending}
+                      onClick={() => unlinkUser.mutate(device.id)}
+                    >
+                      Unlink
+                    </button>
+                  </p>
+                ) : null}
               </div>
               {!device.scopes.includes('activity:write') ? (
                 <Button size="sm" variant="secondary" loading={grant.isPending} onClick={() => void confirmGrantActivity(device)}>

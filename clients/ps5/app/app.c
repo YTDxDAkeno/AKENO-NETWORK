@@ -73,6 +73,13 @@ void app_log(akeno_app *app, akeno_log_level level, const char *event, const cha
     log_write(app, level, event, message);
 }
 
+/* Flushes the log file to stable storage so the last line survives a crash of the next call. */
+void app_log_sync(akeno_app *app) {
+    pthread_mutex_lock(&app->log_lock);
+    if (app->log) fflush(app->log);
+    pthread_mutex_unlock(&app->log_lock);
+}
+
 /* Library diagnostics arrive already redacted. */
 static void library_log(void *user, akeno_log_level level, const char *event, const char *message) {
     log_write(user, level, event, message);
@@ -889,6 +896,7 @@ int akeno_app_main(const akeno_app_options *options) {
         app_save_settings(app);
     }
     reload_ui_client(app);
+    app_bridge_init(app);
 
     int in_use = 0;
     listen_fd = ui_server_listen(options->ui_port, &app->port, &in_use);

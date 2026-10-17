@@ -919,6 +919,7 @@
           } })), testResult));
     }
     if (d.experimentalAudio) wrap.appendChild(audioLabSection());
+    wrap.appendChild(accountBridgeSection(S.app && S.app.accountBridge));
     wrap.appendChild(h('section', { className: 'panel' }, h('h2', { text: 'Features' }),
       h('dl', { className: 'kv' }, d.capabilities.map(function (c) {
         return [h('dt', { text: c.feature }), h('dd', {}, h('span', { className: 'state-' + c.state, text: c.state }), ' — ' + c.reason)];
@@ -969,6 +970,48 @@
         } }),
         h('button', { className: 'btn secondary', type: 'button', id: 'audio-tone', text: 'Play a test tone', onclick: function () { confirmRow.hidden = false; } })),
       confirmRow, out);
+  }
+  // Account Bridge (docs/PS5_ACCOUNT_BRIDGE.md): links the selected local user to this AKENO
+  // account via the already-paired device, and an opt-in, read-only account/Remote Play check.
+  // Nothing is written to the console; the account ID value is never stored or shown.
+  function accountBridgeSection(ab) {
+    var out = h('div', { id: 'bridge-result' });
+    function renderBridge(b) {
+      clear(out);
+      b = b || {};
+      var rows = [['Local user', b.haveUser ? (b.userName + ' (id ' + b.localUserId + ')') : 'none selected on this console'],
+        ['Note', 'Local label only — not verified by Sony, not a PSN sign-in'],
+        ['Link', b.linkState ? (b.linkState + (b.linkError ? ' — ' + b.linkError : '')) : 'not linked']];
+      if (b.checked) {
+        rows.push(['Account ID', b.accountState || 'unknown']);
+        if (b.assessment) rows.push(['Remote Play', b.assessment.code + ' — ' + b.assessment.summary]);
+      }
+      out.appendChild(kv(rows));
+    }
+    function post(path, body, btn, pending) {
+      if (btn) { btn.disabled = true; }
+      clear(out);
+      out.appendChild(h('p', { className: 'muted', text: pending }));
+      api('POST', path, body).then(function (res) {
+        if (btn) { btn.disabled = false; }
+        if (res && res.data) { if (S.app) { S.app.accountBridge = res.data; } renderBridge(res.data); }
+        else { renderBridge(ab); out.appendChild(h('p', { className: 'error', text: (res && res.error && res.error.message) || 'The console app did not answer.' })); }
+      });
+    }
+    renderBridge(ab);
+    return h('section', { className: 'panel', id: 'account-bridge' }, h('h2', { text: 'Account Bridge (read-only)' }),
+      h('p', { className: 'muted small', text: 'Links the selected local user to this AKENO account using the device you already paired. The account check runs only when you start it, reads only, and never stores or shows the account ID value. See docs/PS5_ACCOUNT_BRIDGE.md.' }),
+      h('div', { className: 'row' },
+        h('button', { className: 'btn secondary', type: 'button', id: 'bridge-link', text: 'Link this local user', onclick: function (ev) {
+          post('/api/account-bridge/link', { check: false }, ev.target, 'Linking...');
+        } }),
+        h('button', { className: 'btn secondary', type: 'button', id: 'bridge-check', text: 'Run read-only account check', onclick: function (ev) {
+          post('/api/account-bridge/check', undefined, ev.target, 'Checking (read-only)...');
+        } }),
+        h('button', { className: 'btn ghost', type: 'button', id: 'bridge-unlink', text: 'Unlink', onclick: function (ev) {
+          post('/api/account-bridge/unlink', undefined, ev.target, 'Removing the link...');
+        } })),
+      out);
   }
   function loadDiagnostics() {
     api('GET', '/api/diagnostics').then(function (d) {

@@ -73,10 +73,24 @@ test('pair a device with a code, limit its permissions and unpair it', async ({ 
   expect(denied.status()).toBe(403);
   expect(((await denied.json()) as { error: { code: string } }).error.code).toBe('DEVICE_SCOPE_DENIED');
 
+  // Account Bridge: the console links its local user; the website labels it local and unverified.
+  const linked = await device.put('/api/v1/devices/current/console-user', {
+    headers: auth,
+    data: { localUserId: 268435457, userName: 'Local Player', accountState: 'no_account_id' },
+  });
+  expect(linked.status()).toBe(200);
+
   // Unpair from Settings → Account & security.
   await page.goto('/settings?tab=security');
   const card = page.locator('section', { has: page.getByRole('heading', { name: 'Paired devices' }) });
   await expect(card.getByText('Test console')).toBeVisible();
+  const consoleUser = card.getByTestId('console-user');
+  await expect(consoleUser).toContainText('Local Player');
+  await expect(consoleUser).toContainText('not verified by Sony');
+  await expect(consoleUser).toContainText('offline user, no account ID');
+  await consoleUser.getByRole('button', { name: 'Unlink' }).click();
+  await expect(card.getByTestId('console-user')).toHaveCount(0);
+  expect(((await (await device.get('/api/v1/devices/current', { headers: auth })).json()) as { device: { consoleUser: unknown } }).device.consoleUser).toBeNull();
   await card.getByRole('button', { name: 'Unpair' }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Unpair' }).click();
   await expect(card.getByText('No devices are paired with your account.')).toBeVisible();

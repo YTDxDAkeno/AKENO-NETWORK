@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { check, index, pgTable, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
+import { check, index, integer, pgTable, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
 import { users } from './users.js';
 
 /**
@@ -62,10 +62,28 @@ export const deviceCredentials = pgTable(
     lastUsedAt: timestamp('last_used_at', { withTimezone: true }).notNull().defaultNow(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     ipAddress: varchar('ip_address', { length: 64 }),
+    /**
+     * AKENO Account Bridge: the local console user this device linked to the account, as the
+     * device reported it. A local, unverified label; deleted with the credential when unpaired.
+     */
+    consoleUserId: integer('console_user_id'),
+    consoleUserName: varchar('console_user_name', { length: 32 }),
+    consoleUserLinkedAt: timestamp('console_user_linked_at', { withTimezone: true }),
+    /** Outcome of the console's optional read-only account check (CONSOLE_ACCOUNT_STATES). */
+    consoleAccountState: varchar('console_account_state', { length: 24 }),
+    consoleAccountCheckedAt: timestamp('console_account_checked_at', { withTimezone: true }),
   },
   (t) => [
     uniqueIndex('device_credentials_token_hash_key').on(t.tokenHash),
     index('device_credentials_user_id_idx').on(t.userId),
     index('device_credentials_expires_at_idx').on(t.expiresAt),
+    check(
+      'device_credentials_console_user_check',
+      sql`(${t.consoleUserId} IS NULL) = (${t.consoleUserName} IS NULL) AND (${t.consoleUserId} IS NULL) = (${t.consoleUserLinkedAt} IS NULL) AND (${t.consoleUserId} IS NULL) = (${t.consoleAccountState} IS NULL)`,
+    ),
+    check(
+      'device_credentials_console_account_state_check',
+      sql`${t.consoleAccountState} IS NULL OR ${t.consoleAccountState} IN ('not_checked', 'no_account_id', 'account_id_present', 'check_failed')`,
+    ),
   ],
 );

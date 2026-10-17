@@ -298,3 +298,22 @@ export const DEVICE_LIMITS = {
 export const DEVICE_TOKEN_PREFIX = 'akd_';
 /** Prefix of the secret device code used only to poll for pairing completion. */
 export const DEVICE_CODE_PREFIX = 'akp_';
+
+/**
+ * AKENO Account Bridge (docs/PS5_ACCOUNT_BRIDGE.md): a paired console may say which local user is
+ * selected on it, so the website can show "this PS5 user is linked to this AKENO account". The
+ * paired device token is the only proof; the reported user is a local, unverified label. It is
+ * never PSN identity, never Sony-verified and never used to sign anyone in.
+ */
+export const CONSOLE_USER_LIMITS = {
+  /** Local user names are short on the console; the limit leaves room for multibyte names. */
+  userNameMax: 32,
+} as const;
+
+/**
+ * Result of the console's optional, read-only account check (opt-in on the console; nothing is
+ * written). "account_id_present" cannot tell a PSN-registered user from a locally activated one,
+ * and the console does not read the data that would tell them apart.
+ */
+export const CONSOLE_ACCOUNT_STATES = ['not_checked', 'no_account_id', 'account_id_present', 'check_failed'] as const;
+export type ConsoleAccountState = (typeof CONSOLE_ACCOUNT_STATES)[number];

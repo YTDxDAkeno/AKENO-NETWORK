@@ -47,6 +47,10 @@ all on some firmware. Rules, enforced by `clients/ps5/console/check-imports.sh` 
   `libSceAudioOut.sprx`/`libSceAudioIn.sprx` with `dlopen` only when the user starts a check,
   never captures audio, and uses declarations from a working PS5 homebrew driver only. No
   microphone, controller-ownership or PSN voice access. See PS5_AUDIO_RESEARCH.md.
+- **Account Bridge** (Alpha 0.5) adds no import either. Its read-only account and Remote Play
+  checks (`platform_ps5_account.c`) load `libSceUserService.sprx`, `libSceRegMgr.sprx` and
+  `libSceRemoteplay.sprx` with `dlopen`/`dlsym`, only after the user starts the check, and resolve
+  no writing or Remote Play function. See the read-only rules below and PS5_ACCOUNT_BRIDGE.md.
 
 ## Game detection is read-only
 
@@ -56,6 +60,25 @@ injects into, hooks, signals or writes to another process, reads no other proces
 uses no offsets. Where the SDK samples disagree on a structure layout, the console's own answers
 decide and a conflict reports nothing (see GAME_ACTIVITY.md). Title metadata is read from files,
 read-only and size-limited, with title IDs validated before they become part of a path.
+
+## The Account Bridge is read-only
+
+The Account Bridge links the selected local console user to the paired AKENO account and offers an
+opt-in account/Remote Play check. It is read-only and adds no new credential (PS5_ACCOUNT_BRIDGE.md):
+
+- The link proves ownership only with the existing paired-device token; the local user name is an
+  unverified label, never a PSN identity or a password. It is stored additively on the existing
+  device record and is removed when the device is unpaired.
+- The account check runs only when the user starts it. It resolves `sceUserServiceGetForegroundUser`,
+  `sceUserServiceGetUserName`, `sceRegMgrGetInt` and `sceRegMgrGetBin`, and reads only: the per-slot
+  user ID (to find the user's slot), the account-ID entry, the console-wide and per-user Remote Play
+  settings. It resolves **no** `sceRegMgrSet*` and calls **no** `sceRemoteplay*` function; for Remote
+  Play it only looks up names to report that the library and pairing functions exist.
+- The account ID is reduced to present/absent inside the read and never stored, logged or sent; the
+  value itself never leaves the function.
+- It never activates a user, never creates an account ID, and never claims pairing or streaming
+  works — at most that the readable prerequisites are present. Registry writes (activation) stay on
+  the "Never" list and would need a separate written decision and their own experimental ELF.
 
 ## Always
 
