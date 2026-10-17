@@ -17,6 +17,7 @@ void run_script_tests(void);
 void run_account_tests(void);
 void run_social_tests(void);
 void run_picture_tests(void);
+void run_artwork_tests(void);
 
 int main(void) {
     run_nav_tests();
@@ -31,6 +32,7 @@ int main(void) {
     run_account_tests();
     run_social_tests();
     run_picture_tests();
+    run_artwork_tests();
     printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

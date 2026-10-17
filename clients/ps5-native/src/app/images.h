@@ -18,6 +18,7 @@
 #include <SDL.h>
 #include <stddef.h>
 
+#include "artwork.h"
 #include "image.h"
 #include "log.h"
 
@@ -44,6 +45,9 @@ int akn_images_destroy(akn_images *im);
  * what keeps a picture wanted: call it every frame the picture is on screen. id: a media ID
  * (AKN_IMG_MEDIA) or a title ID (AKN_IMG_LOCAL_ART); anything else is ignored. */
 SDL_Texture *akn_images_get(akn_images *im, akn_img_source source, const char *id, int w, int h, akn_fit fit);
+/* The same, and the picture's state (artwork.h): AKN_PIC_NONE for an invalid ID, AKN_PIC_MISSING
+ * once it failed (also while a later retry runs, so a fallback does not flicker). */
+SDL_Texture *akn_images_lookup(akn_images *im, akn_img_source source, const char *id, int w, int h, akn_fit fit, akn_pic_state *state);
 /* Once per frame on the main thread: uploads finished pictures, evicts over the budget. */
 void akn_images_pump(akn_images *im, SDL_Renderer *renderer);
 void akn_images_get_stats(akn_images *im, akn_images_stats *out);

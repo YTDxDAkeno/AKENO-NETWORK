@@ -59,7 +59,7 @@ jobs:
       - name: Install build requirements
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake libsdl2-dev valgrind clang-18 clang-tidy-18
+          sudo apt-get install -y --no-install-recommends cmake libsdl2-dev valgrind clang-18 clang-tidy-18 libclang-rt-18-dev
 
       - name: Fetch pinned third-party inputs (checksums verified)
         run: clients/ps5-native/scripts/fetch-deps.sh
@@ -90,6 +90,18 @@ jobs:
           clang-tidy-18 -p build-clang --quiet --warnings-as-errors='*' --checks="$checks" \
             src/core/*.c src/app/app.c src/app/screens.c src/app/gfx.c src/app/net.c src/app/report.c src/app/main.c \
             src/app/ipc.c src/app/social.c src/platform/platform_host.c tools/make_icon.c
+
+      - name: Fuzz the picture decoder and the badge paths (libFuzzer, ASan + UBSan, committed regression seeds)
+        run: AKN_FUZZ_OUT="$RUNNER_TEMP/fuzz" clients/ps5-native/tests/fuzz/run.sh 90 clang-18
+
+      - name: Upload fuzzer findings
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: akeno-native-fuzz-findings
+          path: ${{ runner.temp }}/fuzz/crash-*
+          retention-days: 30
+          if-no-files-found: ignore
 
       - name: Upload the UI screenshots and report of the integration test (PC, not PS5 evidence)
         if: always()

@@ -33,8 +33,9 @@ if(AKN_WERROR)
 endif()
 set(AKN_HARDENING -fstack-protector-strong -D_FORTIFY_SOURCE=2)
 if(AKN_SANITIZE)
-  add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all)
-  add_link_options(-fsanitize=address,undefined)
+  # float-cast-overflow is not part of GCC's "undefined" group (found by tests/fuzz/fuzz_path.c).
+  add_compile_options(-fsanitize=address,undefined,float-cast-overflow -fno-omit-frame-pointer -fno-sanitize-recover=all)
+  add_link_options(-fsanitize=address,undefined,float-cast-overflow)
   set(AKN_HARDENING -fstack-protector-strong)
 endif()
 
@@ -77,7 +78,7 @@ target_compile_options(akn_stbimage PRIVATE -w)
 add_library(akn_core STATIC
   src/core/nav.c src/core/input.c src/core/audio_test.c src/core/redact.c src/core/log.c src/core/context.c
   src/core/logo.c src/core/png.c src/core/text.c src/core/ui.c src/core/script.c src/core/account.c src/core/social.c
-  src/core/image.c src/core/vector.c src/core/badges.c
+  src/core/image.c src/core/vector.c src/core/badges.c src/core/artwork.c
   "${PS5_DIR}/app/audio_lab_pcm.c" "${PS5_DIR}/app/game_detect.c")
 target_include_directories(akn_core PUBLIC src/core "${PS5_DIR}/app")
 target_compile_options(akn_core PRIVATE ${AKN_WARNINGS} ${AKN_HARDENING})
@@ -122,7 +123,7 @@ target_link_libraries(make-icon PRIVATE akn_core)
 enable_testing()
 add_executable(akn_unit_tests tests/unit/test_main.c tests/unit/test_nav_input.c tests/unit/test_audio.c
   tests/unit/test_redact_context.c tests/unit/test_image_text.c tests/unit/test_ui_script.c tests/unit/test_account.c
-  tests/unit/test_social.c tests/unit/test_pictures.c src/app/net.c src/app/ipc.c)
+  tests/unit/test_social.c tests/unit/test_pictures.c tests/unit/test_artwork.c src/app/net.c src/app/ipc.c)
 target_include_directories(akn_unit_tests PRIVATE tests/unit src/app src/platform)
 target_compile_options(akn_unit_tests PRIVATE ${AKN_WARNINGS})
 target_link_libraries(akn_unit_tests PRIVATE akn_core)

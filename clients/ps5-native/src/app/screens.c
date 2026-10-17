@@ -432,8 +432,7 @@ static void centered_note(akn_app *app, akn_rect p, const char *title, const cha
     if (text) akn_gfx_text_center(app->gfx, p.x, p.w, p.y + p.h / 2 + 4, 24, AKN_FONT_REGULAR, C_MUTED, text);
 }
 
-typedef enum { ART_COVER = 0, ART_WIDE, ART_ICON } art_shape;
-static void game_art(akn_app *app, akn_rect r, const akn_art *art, const char *title_id, const char *name, art_shape shape);
+static void game_art(akn_app *app, akn_rect r, const akn_art *art, const char *title_id, const char *name, akn_art_shape shape);
 
 static void friend_row(akn_app *app, akn_rect r, const akn_friend *f, int focused, long long now) {
     akn_gfx *g = app->gfx;
@@ -443,7 +442,7 @@ static void friend_row(akn_app *app, akn_rect r, const akn_friend *f, int focuse
     int x = r.x + 100, w = r.w - 130;
     if (f->presence.game.present) { /* the game's icon at the right end of the row */
         const akn_game *gm = &f->presence.game;
-        game_art(app, (akn_rect){ r.x + r.w - 76, r.y + (r.h - 60) / 2, 60, 60 }, &gm->art, gm->title_id, gm->name, ART_ICON);
+        game_art(app, (akn_rect){ r.x + r.w - 76, r.y + (r.h - 60) / 2, 60, 60 }, &gm->art, gm->title_id, gm->name, AKN_ART_ICON);
         w -= 76;
     }
     int nw = akn_gfx_text_fit(g, x, r.y + 10, 27, AKN_FONT_BOLD, f->deleted ? C_SUBTLE : C_INK, f->display_name, w - 220);
@@ -551,20 +550,30 @@ static void draw_friends(akn_app *app, const akn_social *s, uint64_t now) {
 
 /* Game artwork as on the website: the server's artwork of the verified game (cover, wide banner
  * or icon, falling back between them), else this console's own icon of the title, else initials. */
-static void game_art(akn_app *app, akn_rect r, const akn_art *art, const char *title_id, const char *name, art_shape shape) {
+static void game_art(akn_app *app, akn_rect r, const akn_art *art, const char *title_id, const char *name, akn_art_shape shape) {
     akn_gfx *g = app->gfx;
     int radius = AKN_FIT_RADIUS(r.w, r.h);
-    akn_gfx_rrect(g, r, radius, 0xFF1E2A4Au);
-    char ini[8];
-    akn_initials(name && name[0] ? name : title_id, title_id, ini);
-    int px = (r.w < r.h ? r.w : r.h) / 3;
-    if (px > 12) akn_gfx_text_center(g, r.x, r.w, r.y + r.h / 2 - px * 6 / 10, px, AKN_FONT_BOLD, 0xFF9AA5C4u, ini);
-    const char *media = !art ? NULL
-                        : shape == ART_COVER ? (art->cover[0] ? art->cover : art->icon)
-                        : shape == ART_WIDE  ? (art->banner[0] ? art->banner : art->cover[0] ? art->cover : art->icon)
-                                             : (art->icon[0] ? art->icon : art->cover);
-    if (!(media && media[0] && picture(app, AKN_IMG_MEDIA, media, r, AKN_FIT_ROUNDED)) && title_id && title_id[0])
-        picture(app, AKN_IMG_LOCAL_ART, title_id, r, AKN_FIT_ROUNDED);
+    /* The verified server picture first; the console's icon only when the server has none or it
+     * failed; else the initials (core/artwork.h). */
+    const char *media = akn_art_media_for(art, shape);
+    akn_pic_state server = AKN_PIC_NONE, local = AKN_PIC_NONE;
+    SDL_Texture *st = media[0] ? akn_images_lookup(app->images, AKN_IMG_MEDIA, media, r.w, r.h, AKN_FIT_ROUNDED, &server) : NULL;
+    SDL_Texture *lt = NULL;
+    if (akn_art_want_local(media, server, title_id))
+        lt = akn_images_lookup(app->images, AKN_IMG_LOCAL_ART, title_id, r.w, r.h, AKN_FIT_ROUNDED, &local);
+    SDL_Rect d = { r.x, r.y, r.w, r.h };
+    switch (akn_art_choose(media, server, title_id, local)) {
+    case AKN_ART_SHOW_SERVER: SDL_RenderCopy(app->renderer, st, NULL, &d); break;
+    case AKN_ART_SHOW_LOCAL: SDL_RenderCopy(app->renderer, lt, NULL, &d); break;
+    case AKN_ART_SHOW_PLACEHOLDER: {
+        akn_gfx_rrect(g, r, radius, 0xFF1E2A4Au);
+        char ini[8];
+        akn_initials(name && name[0] ? name : title_id, title_id, ini);
+        int px = (r.w < r.h ? r.w : r.h) / 3;
+        if (px > 12) akn_gfx_text_center(g, r.x, r.w, r.y + r.h / 2 - px * 6 / 10, px, AKN_FONT_BOLD, 0xFF9AA5C4u, ini);
+        break;
+    }
+    }
     akn_gfx_rrect_outline(g, r, radius, 1, C_LINE_STRONG);
 }
 
@@ -611,7 +620,7 @@ static void game_card(akn_app *app, int x, int y, int w, const akn_art *art, con
                       const char *l2) {
     akn_gfx *g = app->gfx;
     int h = w * 3 / 2;
-    game_art(app, (akn_rect){ x, y, w, h }, art, title_id, name, ART_COVER);
+    game_art(app, (akn_rect){ x, y, w, h }, art, title_id, name, AKN_ART_COVER);
     akn_gfx_text_fit(g, x, y + h + 10, 22, AKN_FONT_BOLD, C_INK, name && name[0] ? name : title_id, w);
     if (l1 && l1[0]) akn_gfx_text_fit(g, x, y + h + 40, 19, AKN_FONT_REGULAR, C_MUTED, l1, w);
     if (l2 && l2[0]) akn_gfx_text_fit(g, x, y + h + 66, 19, AKN_FONT_REGULAR, C_SUBTLE, l2, w);
@@ -730,7 +739,7 @@ static void draw_profile(akn_app *app, const akn_social *s, uint64_t now) {
         ly = section_title(app, lx, ly, "NOW PLAYING");
         akn_rect card = { lx, ly, lw, 210 };
         panel(app, card);
-        game_art(app, (akn_rect){ card.x + 18, card.y + 18, 309, 174 }, &gm->art, gm->title_id, gm->name, ART_WIDE);
+        game_art(app, (akn_rect){ card.x + 18, card.y + 18, 309, 174 }, &gm->art, gm->title_id, gm->name, AKN_ART_WIDE);
         akn_gfx_text_fit(g, card.x + 360, card.y + 40, 34, AKN_FONT_BOLD, C_INK, akn_game_label(gm), card.w - 400);
         char dur[40] = "";
         if (gm->started_at > 0) akn_format_duration(unix_now - gm->started_at, dur, sizeof(dur));
@@ -859,7 +868,10 @@ static void draw_activity(akn_app *app, const akn_social *s, uint64_t now) {
     akn_gfx_text(g, x, c.y + 28, 20, AKN_FONT_BOLD, C_SUBTLE, "THIS CONSOLE");
     const akn_daemon_info *d = &s->daemon;
     if (d->console_game.present) {
-        game_art(app, (akn_rect){ x, c.y + 66, 140, 140 }, &d->console_game.art, d->console_game.title_id, d->console_game.name, ART_ICON);
+        /* The daemon knows the title ID; the verified artwork comes from your own activity answer. */
+        akn_art art = d->console_game.art;
+        if (!art.icon[0] && !art.cover[0] && s->own_activity_load == AKN_LOAD_OK) akn_art_for_title(&s->own_activity, d->console_game.title_id, &art);
+        game_art(app, (akn_rect){ x, c.y + 66, 140, 140 }, &art, d->console_game.title_id, d->console_game.name, AKN_ART_ICON);
         x += 166;
         w -= 166;
         snprintf(text, sizeof(text), "Playing %s", akn_game_label(&d->console_game));
@@ -920,7 +932,7 @@ static void draw_activity(akn_app *app, const akn_social *s, uint64_t now) {
         if (!a->recent_count) akn_gfx_text(g, gx, gy, 24, AKN_FONT_REGULAR, C_SUBTLE, "No games tracked yet.");
         for (int i = 0; i < a->recent_count && i < 6; i++) {
             const akn_recent_game *r = &a->recent[i];
-            game_art(app, (akn_rect){ gx, gy - 4, 56, 84 }, &r->art, r->title_id, r->name, ART_COVER);
+            game_art(app, (akn_rect){ gx, gy - 4, 56, 84 }, &r->art, r->title_id, r->name, AKN_ART_COVER);
             int tx = gx + 76, tw = gw - 76;
             akn_gfx_text_fit(g, tx, gy + 8, 24, AKN_FONT_BOLD, C_INK, r->name[0] ? r->name : r->title_id, tw);
             char ago[40];

@@ -78,6 +78,46 @@ console's own page and are **never uploaded** to the AKENO server. Whether the p
 these files on firmware 12.20/13.60 is not yet verified on hardware (the same folders hold the
 `param.json` files whose titles were read successfully on 12.20).
 
+## AKENO Native (PS5 native app)
+
+AKENO Native applies one rule to every game tile it draws — profiles, Recently Played, Favorite
+Games, Activity, friends playing now, the friend list and party members
+(`clients/ps5-native/src/core/artwork.h`, unit-tested in `tests/unit/test_artwork.c`):
+
+1. **Verified server artwork.** The `art` the server attaches to the game in the answer itself
+   (`current`, `recentGames`, `recentSessions`, presence, `favoriteGameDetails`). It comes from the
+   administrator-verified title-ID mapping and **does not depend on the game being installed**: a
+   game played last week and uninstalled today keeps its cover, playtime and sessions.
+2. **Nothing else while that picture loads.** The console's own icon is not fetched in parallel,
+   so it can never flash up in place of a verified cover that is about to arrive.
+3. **The console's own icon** (`icon0.png` through the daemon's read-only `/api/local-art`), only
+   when the server has no artwork for that title ID or its picture failed (deleted, corrupt,
+   refused). It is the icon of the *same title ID*; a name is never used to find a picture.
+4. **The placeholder** with the game's initials.
+
+The running game on the Activity screen is known to the daemon only by its title ID; AKENO Native
+takes the verified artwork for exactly that title ID from your own activity answer
+(`akn_art_for_title`), never by name. Pictures are cached in memory only (48 MiB, least recently
+drawn first out) and never written to disk; a changed profile picture or game artwork gets a new
+media ID on the server, so a cached picture is never shown for the new one.
+
+## Resolving missing artwork (administrators)
+
+A game that shows initials everywhere has no verified artwork for its title ID. To fix it:
+
+1. **Administration → Games → Detected titles.** Find the title ID (`PPSA…`/`CUSA…`). The name
+   there is what a console reported — a suggestion only; check it against the game itself.
+2. **Create game** (or map the title ID onto an existing verified game when it is the same game in
+   another region or edition). Never map by a similar-looking name.
+3. **Add artwork**: upload icon (1:1), cover (2:3) and optionally banner (16:9) from a source you
+   may use (publisher press kit, licensed provider, own capture), and record **source, attribution
+   and licence** in the game editor. Every change is audited.
+4. Everyone's history, profiles and AKENO Native pick the artwork up on their next load (the
+   catalogue cache is rebuilt after every change); nothing has to be reinstalled on the console.
+
+AKENO never fetches artwork from Sony's authenticated services or by loose name matching, and
+never uploads a console's local icon.
+
 ## Providers reviewed (not integrated)
 
 AKENO does not download artwork from any external service in Alpha 0.3. Reviewed options:

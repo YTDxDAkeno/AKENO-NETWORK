@@ -96,7 +96,7 @@ licence review, because the combined ELF would then have to be distributed under
 facts needed for interoperability (function names, argument order, constants, observed return
 codes) are recorded, with their source.
 
-## AKENO NETWORK Native (`clients/ps5-native`, prototype 0.1)
+## AKENO NETWORK Native (`clients/ps5-native`)
 
 All AKENO Native sources (core, SDL layer, platform layer, logo rasteriser, PNG writer, tests,
 icon generator, launcher manifest) were written for this project (MIT). It reuses AKENO's own
@@ -110,13 +110,47 @@ Inputs of the PS5 build, pinned and checksummed by `clients/ps5-native/scripts/`
 | --- | --- | --- | --- |
 | ps5-payload-dev/SDL | `ee4c47d` (2.30.12, PS5 port) | zlib | Window, software renderer, PS5 video/audio/pad drivers; statically linked, unmodified |
 | stb_truetype (nothings/stb) | v1.26, `6e9f34d` | MIT or public domain (choice) | Glyph rasterisation |
+| stb_image (nothings/stb) | v2.29, `6e9f34d` | MIT or public domain (choice) | JPEG and PNG decoding of profile pictures, banners and game artwork (Native 0.2+); compiled with `STBI_ONLY_JPEG`/`STBI_ONLY_PNG`, size-capped and fuzzed (`tests/fuzz`) |
 | Inter | 4.1 (Regular, Bold) | SIL Open Font License 1.1 | UI font, embedded in the ELF; the OFL text ships in the artifact (`LICENSE-Inter-OFL.txt`) |
+| Lucide icons (path data of crown, shield-check, braces, badge-check, sprout, flask-conical, gamepad-2, ticket) | lucide-react 1.56.0 | ISC | Badge medallions (`src/core/badges.c`, Native 0.2+), the same eight icons as the console page; the ISC notice is in the source and ships in `LICENSES.md` of every release package |
 | mbedTLS, CA bundle, ps5-payload-sdk | as for the daemon (above) | Apache-2.0, MPL-2.0, GPLv3+ | TLS, trust roots, runtime and libc |
 
 As with the daemon, the distributed PS5 ELF links the SDK's GPLv3+ runtime, so the ELF is a
 combined work under the GPLv3; zlib, MIT/public-domain, Apache-2.0 and the OFL (for the embedded
 font, "bundled with software") are compatible with that. The complete corresponding source is this
 repository plus the pinned inputs named above.
+
+**What a release package must carry** (checked by the packaging step of `ps5-native.yml`): this
+file (`LICENSES.md`, with the Lucide ISC notice above), the Inter OFL text, the GPLv3 text and a
+pointer to the corresponding source (the tagged commit of this repository, the pinned SDK commit,
+SDL2 commit and the checksummed inputs), and the Apache-2.0 text for mbedTLS. stb_truetype and
+stb_image are used under their MIT option (notice in `LICENSES.md`); SDL2's zlib licence asks for
+no notice in binaries, which is given anyway. The MPL-2.0 CA bundle is unmodified; its source is
+named by version and checksum in `BUILDINFO.txt`.
+
+### stb_truetype and stb_image (used under the MIT alternative)
+
+```
+Copyright (c) 2017 Sean Barrett
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
 
 Read for the native architecture (2026-10-17), **no code copied**, nothing linked:
 
