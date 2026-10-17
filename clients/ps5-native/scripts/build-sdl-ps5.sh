@@ -10,7 +10,7 @@ set -euo pipefail
 
 SDL_REPO=https://github.com/ps5-payload-dev/SDL.git
 SDL_COMMIT=ee4c47dc0d617b3bc8f35108f9956baf228a1322 # release-2.30.x-ps5, 2026-09-24 (zlib licence)
-SDL_CONFIG_ID="$SDL_COMMIT"
+SDL_CONFIG_ID="$SDL_COMMIT file-prefix-map"
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 : "${PS5_PAYLOAD_SDK:?PS5_PAYLOAD_SDK must point to the installed ps5-payload-sdk}"
@@ -36,8 +36,10 @@ rm -rf "$build"
 # SDL's project() also enables C++; the SDK has no C++ runtime and SDL needs none, so the C++
 # compiler check is skipped. SDL's source is not modified (its dynamic API stays on, so every SDL
 # function is linked; console/check-native.sh shows which of them AKENO code uses).
+# -ffile-prefix-map keeps the build directory out of the library (SDL_assert records __FILE__), so
+# the result is the same on every machine.
 "$PS5_PAYLOAD_SDK/bin/prospero-cmake" -S "$work" -B "$build" \
-  -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER_WORKS=ON \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER_WORKS=ON -DCMAKE_C_FLAGS="-ffile-prefix-map=$work=SDL" \
   -DSDL_SHARED=OFF -DSDL_STATIC=ON -DSDL_TEST=OFF \
   -DSDL_OPENGL=OFF -DSDL_OPENGLES=OFF -DSDL_VULKAN=OFF -DSDL_LIBSAMPLERATE=OFF -DSDL_LOADSO=ON
 cmake --build "$build" -j"$(nproc)"

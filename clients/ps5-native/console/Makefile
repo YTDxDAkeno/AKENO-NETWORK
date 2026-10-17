@@ -11,6 +11,7 @@
 
 ROOT        := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 PS5_ROOT    := $(abspath $(ROOT)/../ps5)
+REPO_ROOT   := $(abspath $(ROOT)/../..)
 
 ifndef PS5_PAYLOAD_SDK
 $(error PS5_PAYLOAD_SDK must point to an installed ps5-payload-sdk)
@@ -56,8 +57,10 @@ APP_OBJ     := $(patsubst $(ROOT)/src/app/%.c,$(OBJ)/app/%.o,$(APP_SRC))
 PLAT_OBJ    := $(OBJ)/platform/platform_ps5.o
 STB_OBJ     := $(OBJ)/third_party/font_stb.o
 
+# Paths are mapped so the ELF (and the debug ELF) do not depend on where the repository is checked out.
 COMMON_FLAGS := -O2 -g -std=c11 -DMBEDTLS_CONFIG_FILE='"akeno_mbedtls_config.h"' -I$(PS5_ROOT)/config \
-                -isystem $(AKENO_TP)/mbedtls/include
+                -isystem $(AKENO_TP)/mbedtls/include -ffile-prefix-map=$(REPO_ROOT)=. \
+                -ffile-prefix-map=$(PS5_PAYLOAD_SDK)=ps5-payload-sdk
 WARNINGS     := -Wall -Wextra -Wshadow -Wformat=2 -Wstrict-prototypes -Wvla -Wundef -Wpointer-arith -Werror \
                 -Wno-unreachable-code-generic-assoc
 SDL_FLAGS    := -isystem $(SDL_PREFIX)/include/SDL2 -D_REENTRANT
@@ -107,7 +110,8 @@ $(PLAT_OBJ): $(PLAT_SRC) $(ROOT)/src/platform/akn_platform.h
 
 $(STB_OBJ): $(STB_SRC) $(THIRD_PARTY)/stb_truetype.h
 	@mkdir -p $(dir $@)
-	$(CC) -O2 -g -std=c11 -w $(SDL_FLAGS) -I$(THIRD_PARTY) -c $< -o $@
+	$(CC) -O2 -g -std=c11 -w -ffile-prefix-map=$(REPO_ROOT)=. -ffile-prefix-map=$(PS5_PAYLOAD_SDK)=ps5-payload-sdk \
+	      $(SDL_FLAGS) -I$(THIRD_PARTY) -c $< -o $@
 
 $(DEBUG_ELF): $(APP_OBJ) $(PLAT_OBJ) $(CORE_OBJ) $(SHARED_OBJ) $(STB_OBJ) $(CLIENT_OBJ) $(MBEDTLS_OBJ)
 	$(CC) -o $@ $^ $(LIBS)
