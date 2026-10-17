@@ -174,6 +174,12 @@ were applied.
 
 ## 7. Decisions needed before any prototype
 
+> **Update:** the owner approved decisions 1 and 2 and the read-only Remote Play assessment. They
+> are now built (read-only, no console writes) — see [PS5_ACCOUNT_BRIDGE.md](PS5_ACCOUNT_BRIDGE.md),
+> whose §5 holds the "technically justified next step toward native Remote Play pairing on 12.20"
+> answer. Decision 3 (registry writes / activation) remains **not approved**; decision 4's
+> PIN-generating part also remains separate.
+
 Nothing below is done. Each needs your explicit approval, separately.
 
 1. **Amend SAFETY.md** to allow registry *reads* of the account ID from the AKENO process

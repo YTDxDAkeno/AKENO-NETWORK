@@ -22,10 +22,13 @@ allowed_sce='^(sceKernelSendNotificationRequest|sceSystemServiceLaunchWebBrowser
 # only disables the feature (game detection) instead of preventing the app from starting.
 optional_sce='^(sceKernelGetAppInfo)$'
 
-# Functions resolved at run time with dlopen/dlsym by app/platform_ps5.c only (never imported):
-#   libSceNotification.sprx: sceNotificationSend (experimental button notifications, opt-in)
-#   audio lab build only: libSceAudioOut.sprx (sceAudioOutInit/Open/Output/Close, test tone) and
-#   symbol lookups in libSceAudioOut.sprx / libSceAudioIn.sprx (prototype A, nothing called)
+# Functions resolved at run time with dlopen/dlsym by the platform layer only (never imported):
+#   app/platform_ps5.c:
+#     libSceNotification.sprx: sceNotificationSend (experimental button notifications, opt-in)
+#     audio lab build only: libSceAudioOut.sprx (sceAudioOutInit/Open/Output/Close, test tone) and
+#     symbol lookups in libSceAudioOut.sprx / libSceAudioIn.sprx (prototype A, nothing called)
+#   app/platform_ps5_account.c (Account Bridge, opt-in, read-only; see docs/PS5_ACCOUNT_BRIDGE.md):
+#     libSceUserService.sprx, libSceRegMgr.sprx, libSceRemoteplay.sprx; no write or Remote Play call
 
 status=0
 imports="$("$nm" -D --undefined-only "$elf" | awk '{print $2}')"
@@ -54,9 +57,10 @@ while read -r symbol; do
   fi
 done <<< "$imports"
 
-# Run-time library loading is confined to the platform layer.
+# Run-time library loading is confined to the platform layer (platform_ps5.o and the read-only
+# Account Bridge reads in platform_ps5_account.o).
 for object in "$build"/obj/app/*.o "$build"/obj/client/*.o; do
-  [[ "$(basename "$object")" == platform_ps5.o ]] && continue
+  case "$(basename "$object")" in platform_ps5.o | platform_ps5_account.o) continue ;; esac
   loads="$("$nm" --undefined-only "$object" | awk '{print $2}' | grep -E '^(dlopen|dlsym)$' || true)"
   if [[ -n "$loads" ]]; then
     echo "$(basename "$object") loads libraries at run time: $loads" >&2
@@ -79,6 +83,7 @@ if [[ $status -eq 0 ]]; then
     if grep -qx "$symbol" <<< "$weak_imports"; then echo "  $symbol (weak, optional)"; else echo "  $symbol"; fi
   done
   echo "Loaded at run time by platform_ps5.o (opt-in): sceNotificationSend from libSceNotification.sprx"
+  echo "Loaded at run time by platform_ps5_account.o (opt-in, read-only): libSceUserService.sprx, libSceRegMgr.sprx, libSceRemoteplay.sprx"
   if [[ "$(basename "$elf")" == *audiolab* ]]; then
     echo "Audio lab build: libSceAudioOut.sprx / libSceAudioIn.sprx loaded at run time only when the user starts a check"
   fi

@@ -21,6 +21,7 @@
 #include "buf.h"
 #include "game_detect.h"
 #include "platform.h"
+#include "platform_account.h"
 #include "shareplay_rx.h"
 
 #define AKENO_APP_VERSION "0.2.0-alpha"
@@ -168,6 +169,21 @@ struct akeno_app {
     /* SharePlay Player 2 diagnostic receiver (lock). Display only; never injects input. */
     akeno_sp_rx shareplay;
 
+    /*
+     * AKENO Account Bridge (lock). The selected local console user, the result of the optional
+     * read-only account check, and whether the check has been run. Everything here is read-only;
+     * nothing is ever written to the console. The account ID value is never stored, only whether
+     * one exists (inside account_read).
+     */
+    int bridge_have_user;
+    akeno_console_user bridge_user;
+    int bridge_checked;
+    akeno_account_presence bridge_presence;
+    akeno_account_read bridge_read;
+    char bridge_link_state[16]; /* "", "linking", "linked", "error" */
+    char bridge_link_error[160];
+    long long bridge_linked_at;
+
     /* Events for the UI (lock). */
     app_event events[APP_EVENT_RING];
     unsigned long long next_seq;
@@ -193,6 +209,8 @@ void app_log(akeno_app *app, akeno_log_level level, const char *event, const cha
     __attribute__((format(printf, 4, 5)))
 #endif
     ;
+/* Flushes the diagnostics log to stable storage (see app_account.c's step-by-step reads). */
+void app_log_sync(akeno_app *app);
 akeno_status app_make_client(akeno_app *app, akeno_client **out);
 void app_tick(akeno_app *app);
 akeno_status app_save_settings(akeno_app *app);
@@ -212,6 +230,13 @@ int app_valid_open(const char *target);
 /* Sends a test button notification (Diagnostics). Returns the platform result (0, -1, -2). */
 int app_test_actionable(akeno_app *app);
 void app_copy_str(char *dst, size_t dst_len, const char *src);
+/* Account Bridge (app_account.c): read the selected local user and link it to the account. */
+void app_bridge_init(akeno_app *app);
+void app_bridge_refresh_user(akeno_app *app);
+void app_bridge_run_check(akeno_app *app);
+akeno_status app_bridge_link(akeno_app *app, int with_check);
+void app_bridge_unlink(akeno_app *app);
+void app_bridge_json(akeno_app *app, akeno_buf *b);
 /* Starts a worker thread with an explicit stack size. Returns 0 on success. */
 int app_start_worker(pthread_t *thread, void *(*fn)(void *), void *arg);
 int app_exit_requested(void);
