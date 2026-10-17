@@ -241,8 +241,11 @@ static void bottom_bar(akn_app *app) {
     } else if (app->ui.screen == AKN_SCREEN_AUDIO && app->ui.audio_busy) {
         prompt(app, &x, y, SYM_CIRCLE, "Stop the tone");
     } else if (app->ui.screen == AKN_SCREEN_PROFILE) {
+        SDL_LockMutex(app->lock);
+        int friend_profile = !app->social.profile_own && strcmp(app->social.profile.relationship, "friend") == 0;
+        SDL_UnlockMutex(app->lock);
         prompt(app, &x, y, SYM_CIRCLE, "Back");
-        prompt(app, &x, y, SYM_SQUARE, "Message");
+        if (friend_profile) prompt(app, &x, y, SYM_SQUARE, "Message");
         prompt(app, &x, y, SYM_TRIANGLE, "Reload");
     } else if (app->ui.screen == AKN_SCREEN_CHAT) {
         prompt(app, &x, y, SYM_CROSS, "Write");

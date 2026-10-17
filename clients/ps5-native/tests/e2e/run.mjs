@@ -22,6 +22,7 @@ import { createRequire } from 'node:module';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { inflateSync } from 'node:zlib';
 import tls from 'node:tls';
 import { fileURLToPath } from 'node:url';
 
@@ -601,6 +602,71 @@ await step('AKENO Native: messages, the controller keyboard, party, requests and
   for (const route of ['POST /conversations/:id/messages', 'POST /conversations/:id/read', 'POST /invitations/:id/accept', 'POST /parties/:id/leave',
     'POST /friends/requests/:id/accept', 'PUT /presence'])
     assert.ok(daemonLog.includes(`native.write ${route}`), route);
+});
+
+/** Counts the pixels of a screenshot (8-bit RGBA PNG as SDL writes it) close to a colour. */
+function countColour(path, rgb, tolerance) {
+  const buf = readFileSync(path);
+  let pos = 8;
+  let width = 0;
+  let height = 0;
+  const idat = [];
+  while (pos < buf.length) {
+    const len = buf.readUInt32BE(pos);
+    const type = buf.toString('ascii', pos + 4, pos + 8);
+    if (type === 'IHDR') {
+      width = buf.readUInt32BE(pos + 8);
+      height = buf.readUInt32BE(pos + 12);
+    } else if (type === 'IDAT') idat.push(buf.subarray(pos + 8, pos + 8 + len));
+    pos += 12 + len;
+  }
+  const raw = inflateSync(Buffer.concat(idat));
+  const stride = width * 4 + 1;
+  let n = 0;
+  for (let y = 0; y < height; y++) {
+    if (raw[y * stride] !== 0) throw new Error('unexpected PNG filter');
+    for (let x = 0; x < width; x++) {
+      const o = y * stride + 1 + x * 4;
+      if (Math.abs(raw[o] - rgb[0]) <= tolerance && Math.abs(raw[o + 1] - rgb[1]) <= tolerance && Math.abs(raw[o + 2] - rgb[2]) <= tolerance) n++;
+    }
+  }
+  return n;
+}
+
+await step('AKENO Native: an uninstalled game keeps its administrator-verified cover (no local icon)', async () => {
+  // An administrator verifies the title and uploads its cover (solid magenta, so the screenshot can find it).
+  const TITLE = 'PPSA09999';
+  const game = await admin.request('POST', '/admin/games', { name: 'Magenta Run', titleIds: [TITLE] });
+  assert.equal(game.status, 201, JSON.stringify(game.body));
+  const sharp = serverRequire('sharp');
+  const cover = await sharp({ create: { width: 600, height: 900, channels: 3, background: { r: 255, g: 0, b: 255 } } }).jpeg({ quality: 95 }).toBuffer();
+  const upload = await fetch(`http://127.0.0.1:${backendPort}/api/v1/admin/games/${game.body.id}/artwork/cover`, {
+    method: 'PUT', body: cover, headers: { 'Content-Type': 'image/jpeg', Origin: origin, Cookie: admin.cookie, 'X-CSRF-Token': admin.csrf },
+  });
+  assert.equal(upload.status, 200, await upload.text());
+  // This console played the game (its detection reports the title with the console's own credential), then it was closed.
+  const device = JSON.parse(readFileSync(join(akenoDir, 'device.json'), 'utf8'));
+  const asConsole = (path, body) => fetch(`http://127.0.0.1:${backendPort}/api/v1${path}`, {
+    method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${device.accessToken}` },
+  });
+  assert.equal((await asConsole('/activity/heartbeat', { titleId: TITLE, titleName: 'Console name of the game', platform: 'PS5' })).status, 200);
+  assert.equal((await asConsole('/activity/stop', { reason: 'closed' })).status, 200);
+  const history = await alice.request('GET', '/users/it_alice/activity');
+  const entry = history.body.recentGames.find((g) => g.titleId === TITLE);
+  assert.ok(entry?.art?.cover, 'the server attaches the verified cover to the history entry');
+  // The daemon has no metadata root here: the game is not installed, there is no local icon0.png.
+  const run = await runNative({ AKENO_NATIVE_AKENO_DIR: akenoDir, AKENO_NATIVE_DIR: nativeDir, AKENO_NATIVE_DAEMON_PORT: String(daemon.port),
+    AKENO_NATIVE_SYNC_DIR: syncDir }, [
+    'until ipc 15000', 'until friends 15000', 'wait 300', 'pad right', 'pad right', 'pad right', 'pad right', 'expect focus profile', 'pad cross',
+    'until profile 15000', 'wait 300', 'expect text RECENTLY PLAYED', 'expect text Magenta Run', 'wait 500', 'until pictures 15000', 'wait 300',
+    `shot ${shots}/e2e-artwork-uninstalled.png`, 'pad circle', 'pad circle', 'expect dialog exit', 'pad left', 'pad cross',
+  ], {});
+  assert.equal(run.code, 0, `native exit ${run.code} ${run.signal}\n${run.output.slice(-3000)}`);
+  // A 160 x 240 cover card is drawn in the server's magenta (a placeholder would be dark blue with initials).
+  const magenta = countColour(join(shots, 'e2e-artwork-uninstalled.png'), [255, 0, 255], 24);
+  assert.ok(magenta > 20000, `the verified cover is on screen (${magenta} magenta pixels)`);
+  const report = readFileSync(join(nativeDir, 'native-report.txt'), 'utf8');
+  assert.match(report, /Pictures:\s+\d+ asked for, [1-9]\d* shown/);
 });
 
 await step('native-IPC daemon: stopping removes the key; the release daemon ignores it', async () => {
