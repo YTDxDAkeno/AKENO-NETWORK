@@ -1,6 +1,7 @@
 import { randomInt } from 'node:crypto';
 import { and, desc, eq, lt, notInArray, or, sql } from 'drizzle-orm';
 import {
+  CONSOLE_ACCOUNT_STATES,
   DEVICE_CODE_PREFIX,
   DEVICE_LIMITS,
   DEVICE_SCOPES,
@@ -8,12 +9,14 @@ import {
   REALTIME_CLOSE_CODES,
   REALTIME_PROTOCOL_VERSION,
   type ApproveDevicePairingInput,
+  type ConsoleAccountState,
   type DeviceDto,
   type DevicePairingPreviewDto,
   type DevicePairingStartResponse,
   type DeviceScope,
   type DeviceSelfResponse,
   type DeviceTokenResponse,
+  type LinkConsoleUserInput,
   type StartDevicePairingInput,
 } from '@akeno/shared';
 import type { AppContext } from '../../app/context.js';
@@ -35,6 +38,8 @@ const POLL_TOLERANCE_MS = 1000;
 /** Finished or expired pairing rows are kept this long for auditing, then deleted. */
 const PAIRING_RETENTION_MS = 24 * 60 * 60 * 1000;
 const TOUCH_INTERVAL_MS = 5 * 60 * 1000;
+
+const CONSOLE_ACCOUNT_STATE_SET = new Set<string>(CONSOLE_ACCOUNT_STATES);
 
 const SCOPE_ORDER = new Map<string, number>(DEVICE_SCOPES.map((scope, index) => [scope, index]));
 
@@ -414,6 +419,87 @@ export class DevicesService {
     return this.toDto(row, null);
   }
 
+  /**
+   * AKENO Account Bridge: a paired console records which local user is selected on it. Nothing
+   * here is verified by anyone but the device token; the label is shown as local and unverified.
+   * A different local user replaces the link; the same user keeps its link time and, when the
+   * console sends no new check result, its previous one.
+   */
+  async linkConsoleUser(auth: AuthContextData, input: LinkConsoleUserInput, meta: RequestMeta): Promise<DeviceDto> {
+    const now = new Date();
+    const row = await this.ctx.db.transaction(async (tx) => {
+      const [before] = await tx
+        .select()
+        .from(deviceCredentials)
+        .where(and(eq(deviceCredentials.id, auth.sessionId), eq(deviceCredentials.userId, auth.userId)))
+        .for('update')
+        .limit(1);
+      if (!before) throw Errors.unauthenticated();
+      const sameUser = before.consoleUserId === input.localUserId;
+      const accountState = input.accountState ?? (sameUser ? (before.consoleAccountState ?? 'not_checked') : 'not_checked');
+      const accountCheckedAt =
+        input.accountState === undefined
+          ? sameUser
+            ? before.consoleAccountCheckedAt
+            : null
+          : input.accountState === 'not_checked'
+            ? null
+            : now;
+      const [updated] = await tx
+        .update(deviceCredentials)
+        .set({
+          consoleUserId: input.localUserId,
+          consoleUserName: input.userName,
+          consoleUserLinkedAt: sameUser && before.consoleUserLinkedAt ? before.consoleUserLinkedAt : now,
+          consoleAccountState: accountState,
+          consoleAccountCheckedAt: accountCheckedAt,
+        })
+        .where(eq(deviceCredentials.id, before.id))
+        .returning();
+      if (!updated) throw Errors.unauthenticated();
+      if (!sameUser) {
+        await this.ctx.audit.record(
+          {
+            actorId: auth.userId,
+            action: 'device.console_user_linked',
+            targetType: 'device',
+            targetId: before.id,
+            metadata: { deviceName: before.name, consoleUserName: input.userName, replaced: before.consoleUserId !== null },
+            ipAddress: meta.ip,
+          },
+          tx,
+        );
+      }
+      return updated;
+    });
+    return this.toDto(row, auth.sessionId);
+  }
+
+  /** Removes the console-user link of one of the user's devices (from the website or the device itself). */
+  async unlinkConsoleUser(userId: string, deviceId: string, meta: RequestMeta): Promise<DeviceDto> {
+    const [row] = await this.ctx.db
+      .update(deviceCredentials)
+      .set({
+        consoleUserId: null,
+        consoleUserName: null,
+        consoleUserLinkedAt: null,
+        consoleAccountState: null,
+        consoleAccountCheckedAt: null,
+      })
+      .where(and(eq(deviceCredentials.id, deviceId), eq(deviceCredentials.userId, userId)))
+      .returning();
+    if (!row) throw Errors.notFound('The device');
+    this.ctx.audit.recordInBackground({
+      actorId: userId,
+      action: 'device.console_user_unlinked',
+      targetType: 'device',
+      targetId: deviceId,
+      metadata: { deviceName: row.name },
+      ipAddress: meta.ip,
+    });
+    return this.toDto(row, null);
+  }
+
   async revoke(userId: string, deviceId: string, meta: RequestMeta, reason = 'This device was unpaired.'): Promise<void> {
     // A game reported by this device stops counting at its last heartbeat.
     await this.ctx.activity.endForDevice(userId, deviceId);
@@ -471,6 +557,18 @@ export class DevicesService {
       expiresAt: row.expiresAt.toISOString(),
       ipAddress: row.ipAddress,
       current: row.id === currentDeviceId,
+      consoleUser:
+        row.consoleUserId !== null && row.consoleUserName !== null && row.consoleUserLinkedAt !== null
+          ? {
+              localUserId: row.consoleUserId,
+              userName: row.consoleUserName,
+              linkedAt: row.consoleUserLinkedAt.toISOString(),
+              accountState: CONSOLE_ACCOUNT_STATE_SET.has(row.consoleAccountState ?? '')
+                ? (row.consoleAccountState as ConsoleAccountState)
+                : 'not_checked',
+              accountCheckedAt: row.consoleAccountCheckedAt?.toISOString() ?? null,
+            }
+          : null,
     };
   }
 

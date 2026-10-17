@@ -4,6 +4,7 @@ import {
   devicePairingCodeSchema,
   devicePairingTokenSchema,
   idParamsSchema,
+  linkConsoleUserSchema,
   startDevicePairingSchema,
   updateDeviceScopesSchema,
 } from '@akeno/shared';
@@ -18,6 +19,8 @@ import { parseInput } from '../../utils/validation.js';
  * Signed-in website endpoints:       POST /devices/pairings/lookup | approve | deny,
  *                                    GET /devices, PATCH /devices/:id (permissions), DELETE /devices/:id
  * Paired-device endpoints:           GET /devices/current, DELETE /devices/current
+ * Account Bridge (local console user): PUT|DELETE /devices/current/console-user (device),
+ *                                    DELETE /devices/:id/console-user (website)
  */
 export function devicesRoutes(ctx: AppContext): FastifyPluginAsync {
   return async (app) => {
@@ -89,7 +92,29 @@ export function devicesRoutes(ctx: AppContext): FastifyPluginAsync {
       return reply.status(204).send();
     });
 
+    // Account Bridge: the website owner removes a console-user link without unpairing the device.
+    app.delete('/devices/:id/console-user', { preHandler: session }, async (request) => {
+      const { id } = parseInput(idParamsSchema, request.params);
+      return { device: await ctx.devices.unlinkConsoleUser(authOf(request).userId, id, requestMeta(request)) };
+    });
+
     app.get('/devices/current', { preHandler: device }, async (request) => ctx.devices.describeSelf(authOf(request)));
+
+    // Account Bridge: the console describes the local user selected on it (a local, unverified label).
+    app.put(
+      '/devices/current/console-user',
+      { preHandler: device, config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
+      async (request) => {
+        const input = parseInput(linkConsoleUserSchema, request.body);
+        return { device: await ctx.devices.linkConsoleUser(authOf(request), input, requestMeta(request)) };
+      },
+    );
+
+    app.delete('/devices/current/console-user', { preHandler: device }, async (request) => {
+      const identity = authOf(request);
+      const updated = await ctx.devices.unlinkConsoleUser(identity.userId, identity.sessionId, requestMeta(request));
+      return { device: { ...updated, current: true } };
+    });
 
     app.delete('/devices/current', { preHandler: device }, async (request, reply) => {
       const identity = authOf(request);

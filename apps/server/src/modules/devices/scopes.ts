@@ -12,6 +12,9 @@ const API_ROUTES: Record<string, DeviceScope | null> = {
   // The device itself: discovery and sign-out.
   'GET /devices/current': null,
   'DELETE /devices/current': null,
+  // Account Bridge: the device describes the local user selected on it (its own row only).
+  'PUT /devices/current/console-user': null,
+  'DELETE /devices/current/console-user': null,
 
   'GET /users/me': 'profile:read',
   'GET /users/search': 'profile:read',

@@ -1,4 +1,4 @@
-import type { DeviceScope } from '../constants.js';
+import type { ConsoleAccountState, DeviceScope } from '../constants.js';
 
 export interface DevicePairingStartResponse {
   /** Secret used only by the device to poll the token endpoint. Never display it. */
@@ -25,6 +25,21 @@ export interface DevicePairingPreviewDto {
   requestIp: string | null;
 }
 
+/**
+ * The local console user a paired device linked to the account (AKENO Account Bridge). Reported by
+ * the device about itself and shown as "local, not verified": it proves nothing about PSN.
+ */
+export interface ConsoleUserLinkDto {
+  /** The console's own number for the local user; only meaningful on that console. */
+  localUserId: number;
+  /** The local user name as the console reported it. */
+  userName: string;
+  linkedAt: string;
+  /** Outcome of the console's optional read-only account check. */
+  accountState: ConsoleAccountState;
+  accountCheckedAt: string | null;
+}
+
 export interface DeviceDto {
   id: string;
   name: string;
@@ -37,6 +52,8 @@ export interface DeviceDto {
   ipAddress: string | null;
   /** True when this request was made with this device's token. */
   current: boolean;
+  /** The linked local console user, or null when none is linked. */
+  consoleUser: ConsoleUserLinkDto | null;
 }
 
 export interface DeviceTokenResponse {

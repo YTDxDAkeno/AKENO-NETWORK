@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { DEVICE_CODE_PREFIX, DEVICE_LIMITS, DEVICE_SCOPES } from '../constants.js';
+import { CONSOLE_ACCOUNT_STATES, CONSOLE_USER_LIMITS, DEVICE_CODE_PREFIX, DEVICE_LIMITS, DEVICE_SCOPES } from '../constants.js';
 
 const printable = (max: number) =>
   z
@@ -51,3 +51,19 @@ export const devicePairingTokenSchema = z.object({
     .regex(new RegExp(`^${DEVICE_CODE_PREFIX}[A-Za-z0-9_-]{43}$`), 'The device code is malformed.'),
 });
 export type DevicePairingTokenInput = z.infer<typeof devicePairingTokenSchema>;
+
+/**
+ * Sent by a paired console about itself: the local user selected on it (AKENO Account Bridge).
+ * Omitting accountState keeps the previous check result for the same local user.
+ */
+export const linkConsoleUserSchema = z.object({
+  localUserId: z.number().int().min(-2147483648).max(2147483647),
+  userName: z
+    .string()
+    .trim()
+    .min(1)
+    .max(CONSOLE_USER_LIMITS.userNameMax)
+    .regex(/^[\p{L}\p{M}\p{N} ._-]+$/u, 'Use letters, digits, spaces and . _ - only.'),
+  accountState: z.enum(CONSOLE_ACCOUNT_STATES).optional(),
+});
+export type LinkConsoleUserInput = z.infer<typeof linkConsoleUserSchema>;
