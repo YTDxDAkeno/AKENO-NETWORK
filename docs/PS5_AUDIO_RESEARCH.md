@@ -1,110 +1,148 @@
-# PS5 voice: audio research and the experimental audio lab
+# PS5 audio: research, the silent v1 tone, and audio lab v2
 
-Status 2026-10-14. **Nothing in this document has run on a PS5.** PS5 voice is experimental
-and capability-dependent; desktop and phone voice (see [VOICE.md](VOICE.md)) do not depend on it.
+Status 2026-10-14. **Audible output from AKENO on a PS5 is NOT confirmed.** Microphone capture is
+not attempted. Desktop and phone voice (see [VOICE.md](VOICE.md)) do not depend on any of this.
 
-## Report
+## What the hardware test of audio lab v1 showed
 
-| Question | Answer |
+Your test of `akeno-network-ps5-audiolab.elf` (CI run 38558019000, `ae94851`) on firmware 12.20:
+
+| Level | Result | What it proves |
+| --- | --- | --- |
+| 1. API calls succeed | `libSceAudioOut.sprx` loaded; `sceAudioOutInit/Open/Output/Close` resolved; `libSceAudioIn.sprx` exports `sceAudioInOpen/Input/Close` | The names exist in 12.20. Nothing about arguments, privileges or behaviour. |
+| 2. Samples accepted | "accepted (7 runs)": every `sceAudioOutOutput` returned success | The system took the buffers. |
+| 3. Samples played by the audio subsystem | **unknown** — v1 did not time the calls | — |
+| 4. Sound reaches TV/headset | **No** (nothing heard; games are audible) | Something between 2 and 4 drops the audio. |
+
+## Root-cause analysis
+
+### Comparison with the PS5 SDL audio driver (ps5-payload-dev/SDL `ee4c47d`, `src/audio/ps5`)
+
+| Aspect | SDL driver | AKENO audio lab v1 | Audio lab v2 |
+| --- | --- | --- | --- |
+| Initialization | `sceAudioOutInit()` once; non-zero = failure | same | same (result shown; called once per launch) |
+| User ID | `0xFF` (system) | `0xFF` | `0xFF` (only verified value) |
+| Port type | `0` main | `0` | `0` (only verified value) |
+| Index | `0` | `0` | `0` |
+| Format (`param`) | S16 mono 0 / stereo 1, float mono 3 / stereo 4; apps almost always ask for **stereo** | S16 **mono** | selectable within those four; **default S16 stereo** |
+| Rate | 48000 | 48000 | 48000 |
+| Frames per call | 256…2048 in steps of 256 (typically 1024/2048) | 256 | 256/1024/2048; **default 1024** |
+| Buffer | heap (`SDL_calloc`, ≥16-byte aligned) | stack array | **64-byte aligned static buffer** |
+| Output | blocking `sceAudioOutOutput` per block | same | same, **every call timed** |
+| Volume / routing / port state | not touched | not touched | not touched (no verified declaration) |
+| Close | `sceAudioOutClose` at device close | after the tone | after silence tail; result shown |
+| **Process context** | **runs inside a launched application (BigApp)** | **background payload** | background payload |
+
+The format, block size and buffer differences are plausible but weak explanations: the system
+accepted every block, so it understood the format. v2 still moves to the SDL driver's common
+configuration so they can be excluded.
+
+### The strongest lead: application audio focus
+
+- **How SDL homebrew actually runs.** The PS5 homebrew that plays audio with this SDL driver
+  (FFplay, RetroArch, ScummVM ports, …) is started by ps5-payload-dev/websrv's homebrew loader
+  (`src/ps5/hbldr.c`, commit `7748df9`): it **kills the running game**, launches a fake application
+  `FAKE00000` with `sceSystemServiceLaunchApp` for the foreground user, attaches with ptrace,
+  changes memory protection with kernel helpers and replaces that application's code with the
+  homebrew ELF. The homebrew therefore runs **as the foreground application**.
+- **How AKENO runs.** ps5-payload-dev/elfldr spawns payloads with `rfork` + `execve` of the
+  SceSpZeroConf system daemon (`/system/vsh/app/NPXS40112/eboot.bin`, `elfldr.c`). AKENO is a
+  background system process, not an application; the web browser (or a game) owns the focus.
+- **The firmware has a focus model for audio.** `libSceAudioOut` exports (names in the SDK stub,
+  generated from firmware exports) include `sceAudioOutGetFocusEnablePid`,
+  `sceAudioOutAttachToApplicationByPid`, `sceAudioOutDetachFromApplicationByPid` and
+  `sceAudioOutChangeAppModuleState`. Their existence indicates that audio output is enabled per
+  application process ("focus-enabled pid"). None has a public declaration.
+
+**Conclusion (hypothesis, consistent with every observation):** a port opened by a background
+payload is accepted and consumed but mixed silently, because the payload's process is not the
+focus-enabled application. This also explains why games are audible.
+
+What would *not* be acceptable as a "fix", and is not done: running AKENO as a fake application
+through process replacement (it kills the running game, uses ptrace and kernel memory helpers and
+writes to `/system_ex`), calling the attach/focus functions without declarations, or patching the
+audio service.
+
+### What audio lab v2 measures to confirm or refute it
+
+1. **Timing of every output call** (level 3). If calls 2…n block for about one block's duration
+   (1024 frames = 21.3 ms), the audio subsystem consumed the samples at playback speed. If they
+   return immediately, the samples were discarded without being played.
+2. **Delayed test.** Start the tone with a 10 s delay, press the PS button and wait on the home
+   screen: the browser is then no longer in front. Heard there but not with the browser in front
+   would show that focus decides.
+3. **Browser audio test.** The page's own Web Audio tone, played by the system browser, which *is*
+   the foreground application. If the browser is audible, the realistic path for PS5 voice is the
+   page (browser) and not the payload.
+4. **Formats and block sizes** of the SDL driver, to exclude a format problem.
+5. **Your report**, per test, of what you heard and where. Nothing is called "audible" otherwise.
+
+## Audio lab v2
+
+A separate ELF: `akeno-network-ps5-audiolab-v2.elf`. It is the complete AKENO app (profiles, quick
+access, messages, game activity) plus Diagnostics → **Audio lab v2**.
+
+| Feature | Details |
 | --- | --- |
-| **What compiles** | The release console app and a separate **audio lab** ELF (`make -C clients/ps5/console EXPERIMENTAL_AUDIO=1`), both with the pinned ps5-payload-sdk `f5d40f0`, `-Werror`. Both pass the import safety gate; the audio lab imports exactly the same 96 dynamic symbols as the release ELF. |
-| **What known SDK interfaces support** | Audio **output** only: the SDK has a `libSceAudioOut` stub (136 symbol names, no declarations), and the PS5 audio driver of [ps5-payload-dev/SDL](https://github.com/ps5-payload-dev/SDL) (commit `ee4c47d`) declares and uses `sceAudioOutInit/Open/Output/Close`. **Microphone capture has no SDK interface**: there is no `libSceAudioIn` stub and no PS5 homebrew implementation was found. |
-| **What is tested on Linux** | The audio lab's logic with a simulated platform: probe report, explicit confirmation, one tone at a time, failure isolation, the diagnostics-page section in Chromium, and that the release build has none of it (`clients/ps5/tests/integration/run.mjs --audiolab`, 5 scenarios, passing). |
-| **What is verified on PS5 hardware** | **Nothing.** The audio lab has never run on a console. |
-| **What remains unsupported** | Microphone capture (prototype B), device/headset enumeration, voice from a PS5 into an AKENO party (prototype D), audio while a game runs (prototype E), rest mode behaviour, firmware 13.60. |
+| States | Not supported · Failed to initialize · Failed to open · Failed to submit samples · Samples accepted (audible output NOT confirmed) · Samples accepted, but nothing was heard · **Audible output confirmed by you** (only after your report) |
+| Diagnostics per test | firmware, library and exported functions, `sceAudioOutInit` result, user ID, port type, rate, channels, format, frames per call, `sceAudioOutOpen` result and port handle, port state (not readable: no verified declaration), output results (calls ok / first error / last result), samples submitted, duration, nonzero PCM and peak, per-call timing (min/avg/max) and "paced" verdict, buffer alignment, close result, errors, routing |
+| Presets (all inside the SDL driver's configuration) | S16 stereo 1024 (default) · S16 mono 256 (v1, for comparison) · float stereo 1024 · S16 stereo 2048 |
+| Levels | Quiet −26 dBFS · **Moderate −20 dBFS (default)** · Clearer −14 dBFS; hard limit −6 dBFS in code |
+| Tone | 440 Hz, 1.5 s, 10 ms fades, 250 ms silence before and after |
+| Safety | Nothing plays at start-up or on its own; a confirmation is required; one test at a time; 3 s pause between tests; at most 30 tests per launch; a waiting or playing test can be cancelled; the port is always closed |
+| Browser comparison | read-only feature check (Web Audio, audio element, getUserMedia/WebRTC present — never called) and an optional Web Audio test tone with its own report |
+| Report | Diagnostics → *Show report* (plain text, screenshot it) and `/data/akeno/audiolab-report.txt`; no tokens, credentials or account data |
+| Probe (read-only) | library files in `/system/common/lib`; the four used functions; **looked up only**: `sceAudioOutGetPortState`, `SetVolume`, `GetLastOutputTime`, `GetHandleStatusInfo`, `GetSystemState`, `SetMainOutput`, `GetFocusEnablePid`, `AttachToApplicationByPid`, `DetachFromApplicationByPid`, `ChangeAppModuleState`; `libSceAudioIn` names (never called) |
 
-## Sources inspected
+### Output routing
 
-| Source | Finding |
+The main port of the system user is routed by the system (TV/HDMI, or a headset when the console's
+settings send all audio there). No verified interface lists or selects output devices, so none is
+offered. Your report records where you heard the tone: TV/HDMI, headset on the controller, USB
+headset or elsewhere.
+
+## Microphone research (read-only)
+
+| Question | Finding |
 | --- | --- |
-| ps5-payload-sdk `f5d40f02770e9b0001dd9e18056eca70b3da8b40` (`sce_stubs/`) | 32 stub libraries. `libSceAudioOut.c`: symbol names only, generated from firmware exports (`sceAudioOutInit`, `sceAudioOutOpen`, `sceAudioOutOutput`, `sceAudioOutClose`, `sceAudioOutSetVolume`, `sceAudioOut2…`, chat-related `sceAudioOut2EnableChat`, …). **No `libSceAudioIn`, no `libSceVoice`.** No audio headers, no audio sample. `libScePad` exports one microphone-related name (`scePadSetVibrationTriggerEffectWeakWhileEmbeddedMicInUse`), which says nothing about capture. |
-| ps5-payload-dev/SDL `ee4c47d` (`src/audio/ps5/`) | A working PS5 homebrew audio *output* driver: `sceAudioOutInit()`, `sceAudioOutOpen(userId=0xFF system, type=0 main, index=0, len 256–2048 in steps of 256, freq 48000, param=format)`, formats S16 mono 0 / stereo 1, float mono 3 / stereo 4, blocking `sceAudioOutOutput`, `sceAudioOutClose`. No capture (`OnlyHasDefaultOutputDevice`). |
-| ps5-payload-dev/pacbrew-repo (ports: SDL2, ffmpeg, games) | No `sceAudioIn` use anywhere. |
-| PS4 homebrew headers (for example the OpenOrbis toolchain) | Declare a PS4 capture API (`sceAudioInOpen`, `sceAudioInInput`, `sceAudioInClose`, …). **That is the PS4**; nothing shows the PS5's `libSceAudioIn` has the same functions, arguments or behaviour. The audio lab only looks these names up. |
+| PS5 SDK support | **None.** The pinned ps5-payload-sdk has no `libSceAudioIn` stub, header or sample. |
+| Credible PS5 implementations | **None found.** ps5-payload-dev/SDL is output-only (`OnlyHasDefaultOutputDevice`); websrv, elfldr and the pacbrew ports contain no capture code. |
+| Exported names on 12.20 | `sceAudioInOpen`, `sceAudioInInput`, `sceAudioInClose` exist (your v1 probe). |
+| PS4 declarations | PS4 homebrew headers declare a capture API with these names. **That is the PS4**; nothing shows the PS5 functions take the same arguments, and calling them would be guessing. |
+| User ID / permissions | Unknown. On the PS4, capture ports are opened for a logged-in user, not the system user; whether a background payload may open one at all is unknown. |
+| Controller / headset microphone ownership | The system and the running game own them (party chat, games). Taking them over is out of bounds. |
+| Focus | If output is focus-gated (above), capture very likely is too. |
 
-Not used, on purpose: Sony's PSN party/voice services (no unauthorized access), kernel patches,
-firmware offsets, process injection, controller ownership changes.
+**Not done:** no AudioIn function is called, no audio is recorded, stored or transmitted, and no
+build contains capture code (CI fails if the platform layer mentions `sceAudioIn`).
 
-## Research questions
+**Evidence required before a capture prototype:**
+1. A credible PS5 source (or documentation) declaring `sceAudioInOpen`/`Input`/`Close` with
+   argument types, and showing a successful capture from homebrew.
+2. Confirmed audible *output* first (this lab), from the same process context capture would use.
+3. Your separate approval of a hardware test with a printed checklist: microphone permission
+   expectations, a visible recording indicator, local-only level meter, nothing stored or sent.
 
-| Topic | What is known |
-| --- | --- |
-| `libSceAudioIn` | Not in the pinned SDK. No verified PS5 declaration. Whether the firmware exports PS4-like names can be checked read-only with the audio lab (prototype A); using them would require a verified declaration first. |
-| `libSceAudioOut` | Symbols in the SDK stub; declarations from the SDL driver, which plays audio from homebrew payloads. Whether a *background* companion like AKENO gets audible output has not been tested. |
-| Controller / headset microphone capture | Unknown. The controller microphone and the headset jack are managed by the system (and used by party chat and games). Taking them over is out of bounds. |
-| Headset output | The SDL driver opens the *main* port (TV/HDMI or whatever the system routes main audio to). The SDK stub also lists `sceAudioOutSetPadJackVolume`, `sceAudioOut2EnableChat`, … with no declarations; not used. |
-| Device enumeration | No declared interface for listing audio devices. `sceAudioOutGetPortState` / `sceAudioOut2GetSpeakerInfo` exist as names only. |
-| Permission and ownership | Unknown. Port limits and how the system arbitrates ports between a game and a payload are undocumented. |
-| Audio thread lifetimes | `sceAudioOutOutput` blocks per grain (256 samples at 48 kHz ≈ 5.3 ms), so output needs its own thread; the audio lab uses one worker thread per test and closes the port afterwards. |
-| Background audio while a game runs | Unknown (prototype E). Notifications working during games says nothing about audio. |
-| Rest mode | Unknown; not examined. |
-| Controller headset routing | Unknown. |
+## Hardware test plan
 
-## Prototypes
+See [HARDWARE_TEST_PLAN_PS5_ALPHA_0.5.md](HARDWARE_TEST_PLAN_PS5_ALPHA_0.5.md), test C. Run it from
+the home screen; **do not** run audio tests while a game runs and do not attempt microphone capture
+(both need a separate approval).
 
-| Prototype | Status |
-| --- | --- |
-| **A** — enumerate a microphone, show it in diagnostics | **Partially implemented in the audio lab, not run on hardware.** Real enumeration is not possible without a microphone API. The lab instead reports, read-only: which audio-related library files exist in `/system/common/lib`, whether `libSceAudioOut.sprx` and `libSceAudioIn.sprx` load, and whether they export the expected names (looked up, never called). |
-| **B** — local microphone capture with explicit permission | **Not implemented: blocked.** No SDK interface and no verified PS5 declaration; calling a PS4 signature on a PS5 would be guessing. Next step if A shows `libSceAudioIn` exports: find a credible PS5 implementation or documentation of its declarations before writing any capture code. |
-| **C** — local playback with a verified output API | **Implemented in the audio lab, not run on hardware.** After an explicit confirmation, a one-second 440 Hz tone at −20 dBFS through `sceAudioOut` (SDL driver declarations), resolved with `dlopen` only at that moment. |
-| **D** — compatibility with the voice architecture | **Not started** (needs B and C). See [Path to a PS5 party participant](#path-to-a-ps5-party-participant). |
-| **E** — capture/playback while a game runs | **Not started.** Only as a controlled experiment after A and C results and your explicit approval. |
+## Path to a PS5 party participant (unchanged)
 
-## The audio lab build
+If the browser plays audio but the payload cannot, voice on the PS5 has to go through the browser
+page, which would also need microphone access in the PS5 browser (not available as far as known).
+Options and their trade-offs are unchanged from Alpha 0.4: a native WebRTC client in the payload
+(needs working payload audio) or a server-side bridge (needs working capture). Neither is
+started; both need levels 3–4 above first.
 
-- **Separate ELF**: `akeno-network-ps5-audiolab.elf` (CI artifact folder
-  `experimental-audio-lab/`). The release ELF is built without `AKENO_EXPERIMENTAL_AUDIO` and
-  contains none of the audio code; rebuilt with the same build ID, it is byte-identical to the
-  previous commit except for the console page script, which carries the (dormant) diagnostics
-  section that only appears when the app reports the audio lab.
-- **Same start-up as the release**: identical dynamic imports (checked in CI); the audio
-  functions are resolved with `dlopen`/`dlsym` in `platform_ps5.c` only when the user starts a
-  check, as the experimental button notifications already do. A missing library or function is
-  reported as "unavailable" and nothing else changes.
-- **Nothing runs on its own**: no audio code runs at start-up; each check is a button on the
-  diagnostics page; the tone needs a second confirmation and plays once at a time.
-- **No capture, no storage**: nothing is recorded or sent anywhere.
-- Linux: `akeno-app-audiolab` (CMake) runs the same logic with simulated audio
-  (`AKENO_SIM_AUDIO`, `AKENO_SIM_AUDIO_LIBDIR`).
+## Code
 
-Code: `clients/ps5/app/audio_lab.c`, `audio_lab.h`, the `AKENO_EXPERIMENTAL_AUDIO` blocks in
-`platform.h`, `platform_ps5.c`, `platform_host.c`, `app_routes.c`, `app.c`, and `audioLabSection`
-in `app/web/app.js`.
-
-## Hardware test plan (needs your approval first)
-
-Only with an approved build (its SHA-256 from the CI `BUILDINFO.txt`), firmware 12.20, from the
-home screen. The audio lab is a full AKENO app using the same data folder, so pairing is kept.
-
-1. Close the regular AKENO app (Diagnostics → Exit, or reboot), then start
-   `akeno-network-ps5-audiolab.elf` the same way as the regular ELF.
-2. Check that AKENO works as usual (page opens, notifications, friends). If not, stop and
-   report; return to the release ELF.
-3. **Prototype A:** Diagnostics → *Check audio libraries*. Photograph the result (files found,
-   which libraries load, ✓/✗ per function).
-4. **Prototype C:** *Play a test tone* → *Play*. Report: the result line, whether a short tone
-   was heard, and where (TV speakers, headset on the controller, USB headset). Repeat once with
-   a headset plugged into the controller.
-5. Exit the audio lab and start the regular AKENO ELF again.
-
-Not part of this plan (each needs a separate approval): playing the tone while a game runs
-(prototype E), firmware 13.60, any microphone access.
-
-If anything behaves unexpectedly: exit AKENO and restart the console normally; the lab makes no
-persistent changes.
-
-## Path to a PS5 party participant
-
-Even with working capture and playback, a PS5 participant needs a media path into the LiveKit
-room. Options for later, none implemented:
-
-1. **Native WebRTC client in the payload** (ICE, DTLS-SRTP, Opus, LiveKit signalling): libopus
-   and libsrtp are BSD-licensed and mbedTLS is already used, but this is a large port with a
-   real-time thread per direction; highest effort, lowest latency.
-2. **Server-side bridge**: the console sends and receives Opus over the existing authenticated
-   WSS connection to the AKENO server, and a small bridge joins the LiveKit room as that user
-   (LiveKit server SDK). Much simpler on the console; adds one server component and a little
-   latency. This is the preferred first step once B and C work.
-
-Either way the AKENO server keeps authorizing (same party membership and token rules), and the
-PS5 stays an optional participant: "capability-dependent until proven".
+`clients/ps5/app/audio_lab.c` / `.h` (tests, states, report), `audio_lab_pcm.c` / `.h` (tone
+generation, unit-tested), the `AKENO_EXPERIMENTAL_AUDIO` sections of `platform_ps5.c` (the only
+place that calls `sceAudioOut*`, resolved with `dlopen` at the first test), `platform_host.c`
+(simulation with failure injection: `AKENO_SIM_AUDIO`, `AKENO_SIM_AUDIO_FAIL=init|open|output|close`,
+`AKENO_SIM_AUDIO_PACE=none`), `app_routes.c` (`/api/diagnostics/audio/*`) and `web/audiolab.js`
+(served only by the lab build; the release serves an empty script). The release ELF contains none
+of this, which CI checks (`console/check-imports.sh`, symbol and string checks).

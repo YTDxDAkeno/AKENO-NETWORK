@@ -17,11 +17,10 @@
       <circle cx="32" cy="44" r="4" fill="#e9edf8"/>
     </svg>
     <div class="wordmark">AKENO<span>NETWORK</span></div>
-    <span class="badge alpha">Alpha 0.2</span>
+    <span class="badge alpha" id="release-badge">Alpha 0.5</span>
   </div>
   <div class="who" id="who" hidden>
-    <span class="dot" id="self-dot"></span>
-    <span id="self-name"></span>
+    <button type="button" class="who-me" id="who-me" title="My profile"><span class="dot" id="self-dot"></span><span id="self-name"></span></button>
     <select id="presence" aria-label="Your status">
       <option value="online">Online</option>
       <option value="away">Away</option>
@@ -36,6 +35,7 @@
 <nav class="tabs" id="tabs" hidden>
   <button type="button" data-view="friends" class="tab">Friends <span class="count" id="count-friends"></span></button>
   <button type="button" data-view="messages" class="tab">Messages <span class="count" id="count-messages"></span></button>
+  <button type="button" data-view="profile" class="tab">Profile</button>
   <button type="button" data-view="games" class="tab">Games</button>
   <button type="button" data-view="invitations" class="tab">Invitations <span class="count" id="count-invitations"></span></button>
   <button type="button" data-view="party" class="tab">Party</button>
@@ -52,6 +52,7 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 <footer class="hint">D-pad or arrow keys: move &middot; <kbd>&#x2715;</kbd> select &middot; <kbd>&#x25EF;</kbd> back &middot; AKENO NETWORK is independent and not affiliated with Sony.</footer>
+<script src="/audiolab.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

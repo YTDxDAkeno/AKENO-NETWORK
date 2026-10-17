@@ -14,6 +14,13 @@
  *   kernel_get_fw_version             include/ps5/kernel.h  read-only query in the SDK runtime
  *   klog_puts                         include/ps5/klog.h    debug log channel of the SDK runtime
  *
+ * Experimental controller shortcut (off by default, Settings -> Quick Access), resolved at run
+ * time with dlopen/dlsym only after the user turns it on:
+ *   scePadInit/Open/GetHandle/ReadState/Close  ps5-payload-dev/SDL  read-only controller state
+ *                                              (src/joystick/ps5, commit ee4c47d)
+ *   sceUserServiceGetLoginUserIdList           ps5-payload-dev/SDL  which user's controller to read
+ *   sceUserServiceGetForegroundUser            ps5-payload-dev/websrv (src/ps5/hbldr.c)
+ *
  * Audio lab builds only (AKENO_EXPERIMENTAL_AUDIO, never the release ELF), user-started:
  *   dlopen / dlsym                    samples/hello_dlfcn   libSceAudioOut.sprx, libSceAudioIn.sprx:
  *                                                           symbol lookups (prototype A)
@@ -278,6 +285,195 @@ void akeno_platform_debug_line(const char *line) {
     klog_puts(line);
 }
 
+/* ---- Experimental controller shortcut (opt-in) -------------------------------------------- */
+
+/*
+ * Declarations and constants of the PS5 joystick driver of ps5-payload-dev/SDL
+ * (src/joystick/ps5/SDL_ps5joystick.h, commit ee4c47d), which reads the DualSense from homebrew;
+ * sceUserServiceGetForegroundUser as declared in ps5-payload-dev/websrv (src/ps5/hbldr.c). Only
+ * the read-only subset is used: no vibration, light bar, focus, privilege or remapping call.
+ * Resolved with dlopen()/dlsym() when the user turns the shortcut on, never linked.
+ */
+typedef int (*pad_init_fn)(void);
+typedef int (*pad_open_fn)(int user_id, int type, int index, void *param);
+typedef int (*pad_get_handle_fn)(int user_id, int type, int index);
+typedef int (*pad_read_state_fn)(int handle, void *data);
+typedef int (*pad_close_fn)(int handle);
+typedef int (*user_foreground_fn)(uint32_t *user_id);
+typedef int (*user_login_list_fn)(int user_ids[4]);
+#define PAD_PORT_TYPE_STANDARD 0
+#define PAD_ERROR_ALREADY_OPENED ((int)0x80920004u)
+#define PAD_MAX_USERS 4
+
+/* PS5_PadData of the SDL driver; read into a larger zeroed buffer in case the system writes more. */
+typedef struct {
+    uint32_t buttons;
+    uint8_t left_x, left_y, right_x, right_y, l2, r2;
+    uint16_t padding;
+    float quat[4];
+    float vel[3];
+    float accel[3];
+    struct {
+        uint8_t fingers;
+        uint8_t pad1[3];
+        uint32_t pad2;
+        struct {
+            uint16_t x, y;
+            uint8_t finger;
+            uint8_t pad[3];
+        } touch[2];
+    } touch;
+    uint8_t connected;
+    uint64_t timestamp;
+    uint8_t ext[16];
+    uint8_t count;
+    uint8_t unknown[15];
+} pad_data_t;
+
+static pthread_mutex_t g_pad_lock = PTHREAD_MUTEX_INITIALIZER;
+static void *g_pad_lib = NULL;          /* g_pad_lock; kept loaded once loaded */
+static pad_init_fn g_pad_init;
+static pad_open_fn g_pad_open;
+static pad_get_handle_fn g_pad_get_handle;
+static pad_read_state_fn g_pad_read_state;
+static pad_close_fn g_pad_close;
+static int g_pad_init_done = 0;         /* scePadInit succeeded (called once per process, as SDL does) */
+static int g_pad_init_rc = 0;
+static int g_pad_handle = -1;
+static int g_pad_handle_owned = 0;      /* Opened by scePadOpen here (closed again); 0 for scePadGetHandle. */
+
+static int pad_load_locked(char *err, size_t err_len) {
+    if (g_pad_lib) return 0;
+    void *lib = dlopen("libScePad.sprx", RTLD_LAZY);
+    if (!lib) {
+        const char *why = dlerror();
+        snprintf(err, err_len, "dlopen(libScePad.sprx) failed: %s", why ? why : "unknown error");
+        return -2;
+    }
+    g_pad_init = (pad_init_fn)dlsym(lib, "scePadInit");
+    g_pad_open = (pad_open_fn)dlsym(lib, "scePadOpen");
+    g_pad_get_handle = (pad_get_handle_fn)dlsym(lib, "scePadGetHandle");
+    g_pad_read_state = (pad_read_state_fn)dlsym(lib, "scePadReadState");
+    g_pad_close = (pad_close_fn)dlsym(lib, "scePadClose");
+    if (!g_pad_init || !g_pad_open || !g_pad_get_handle || !g_pad_read_state || !g_pad_close) {
+        snprintf(err, err_len, "libScePad.sprx does not export the expected functions");
+        dlclose(lib);
+        return -2;
+    }
+    g_pad_lib = lib;
+    return 0;
+}
+
+/* The user whose controller to read: the foreground user, else the first logged-in user. */
+static int pad_find_user(akeno_pad_info *info) {
+    void *lib = dlopen("libSceUserService.sprx", RTLD_LAZY); /* Already loaded by the app (linked). */
+    if (!lib) {
+        snprintf(info->user_source, sizeof(info->user_source), "user service not loadable");
+        return -1;
+    }
+    user_foreground_fn foreground = (user_foreground_fn)dlsym(lib, "sceUserServiceGetForegroundUser");
+    user_login_list_fn login_list = (user_login_list_fn)dlsym(lib, "sceUserServiceGetLoginUserIdList");
+    int user = -1;
+    uint32_t id = 0;
+    if (foreground && foreground(&id) == 0 && id != 0 && id != 0xFFFFFFFFu) {
+        user = (int)id;
+        snprintf(info->user_source, sizeof(info->user_source), "foreground user");
+    } else if (login_list) {
+        int ids[PAD_MAX_USERS] = { -1, -1, -1, -1 };
+        if (login_list(ids) == 0) {
+            for (int i = 0; i < PAD_MAX_USERS && user < 0; i++)
+                if (ids[i] != -1) user = ids[i];
+        }
+        snprintf(info->user_source, sizeof(info->user_source), user >= 0 ? "first logged-in user" : "no logged-in user");
+    } else {
+        snprintf(info->user_source, sizeof(info->user_source), "user functions not found");
+    }
+    dlclose(lib); /* Drops only this reference; the linked library stays loaded. */
+    return user;
+}
+
+int akeno_platform_pad_open(akeno_pad_info *info, char *err, size_t err_len) {
+    memset(info, 0, sizeof(*info));
+    info->user_id = -1;
+    info->handle = -1;
+    snprintf(info->method, sizeof(info->method),
+             "scePadReadState via dlopen(libScePad.sprx), read-only (declarations of ps5-payload-dev/SDL)");
+    pthread_mutex_lock(&g_pad_lock);
+    int rc = pad_load_locked(err, err_len);
+    if (rc != 0) {
+        pthread_mutex_unlock(&g_pad_lock);
+        return rc;
+    }
+    info->library_loaded = 1;
+    if (!g_pad_init_done) {
+        g_pad_init_rc = g_pad_init();
+        g_pad_init_done = g_pad_init_rc == 0;
+        info->init_called = 1;
+    }
+    info->init_rc = g_pad_init_rc;
+    if (!g_pad_init_done) {
+        snprintf(err, err_len, "scePadInit returned 0x%08x", (unsigned)g_pad_init_rc);
+        pthread_mutex_unlock(&g_pad_lock);
+        return -1;
+    }
+    if (g_pad_handle >= 0 && g_pad_handle_owned) g_pad_close(g_pad_handle);
+    g_pad_handle = -1;
+    g_pad_handle_owned = 0;
+    info->user_id = pad_find_user(info);
+    if (info->user_id < 0) {
+        snprintf(err, err_len, "No signed-in user was found (%s)", info->user_source);
+        pthread_mutex_unlock(&g_pad_lock);
+        return -1;
+    }
+    int handle = g_pad_open(info->user_id, PAD_PORT_TYPE_STANDARD, 0, NULL);
+    info->open_rc = handle;
+    if (handle == PAD_ERROR_ALREADY_OPENED) {
+        handle = g_pad_get_handle(info->user_id, PAD_PORT_TYPE_STANDARD, 0);
+        info->shared_handle = 1;
+    }
+    if (handle < 0) {
+        snprintf(err, err_len, "%s returned 0x%08x", info->shared_handle ? "scePadGetHandle" : "scePadOpen", (unsigned)handle);
+        pthread_mutex_unlock(&g_pad_lock);
+        return -1;
+    }
+    g_pad_handle = handle;
+    g_pad_handle_owned = !info->shared_handle;
+    info->handle = handle;
+    pthread_mutex_unlock(&g_pad_lock);
+    return 0;
+}
+
+int akeno_platform_pad_read(unsigned *buttons, int *connected, int *rc) {
+    union {
+        pad_data_t data;
+        unsigned char raw[512];
+    } u;
+    memset(&u, 0, sizeof(u));
+    *buttons = 0;
+    *connected = 0;
+    pthread_mutex_lock(&g_pad_lock);
+    if (g_pad_handle < 0 || !g_pad_read_state) {
+        pthread_mutex_unlock(&g_pad_lock);
+        *rc = -1;
+        return -1;
+    }
+    *rc = g_pad_read_state(g_pad_handle, &u.data);
+    pthread_mutex_unlock(&g_pad_lock);
+    if (*rc != 0) return -1;
+    *buttons = u.data.buttons;
+    *connected = u.data.connected != 0;
+    return 0;
+}
+
+void akeno_platform_pad_close(void) {
+    pthread_mutex_lock(&g_pad_lock);
+    /* Only a handle opened here with scePadOpen is closed; one from scePadGetHandle is left alone. */
+    if (g_pad_handle >= 0 && g_pad_handle_owned && g_pad_close) g_pad_close(g_pad_handle);
+    g_pad_handle = -1;
+    g_pad_handle_owned = 0;
+    pthread_mutex_unlock(&g_pad_lock);
+}
+
 #ifdef AKENO_EXPERIMENTAL_AUDIO
 /* ---- Experimental audio (audio lab builds only) ------------------------------------------- */
 
@@ -286,16 +482,21 @@ void akeno_platform_debug_line(const char *line) {
  * (src/audio/ps5/SDL_ps5audio.h, commit ee4c47d), which plays audio from homebrew payloads.
  * They are not linked: like sceNotificationSend they are resolved with dlopen() only when the
  * user starts the test, so a failure cannot affect the start of the app.
+ *
+ * Differences to audio lab v1 (whose tone was accepted but not heard on a PS5 with 12.20):
+ * the block handed to the system is a 64-byte aligned static buffer instead of a stack array, the
+ * format and frames per call follow the SDL driver's common path (S16 stereo, 1024) unless the
+ * user picks another verified combination, silence is written before and after the tone, and
+ * every call is timed so the report shows whether the system consumed the samples in real time.
+ * Nothing else is called: no volume, routing, port state or focus function (no verified PS5
+ * declaration exists for those; audio_lab.c only looks their names up).
  */
+#include "audio_lab_pcm.h"
+
 typedef int32_t (*audio_out_init_fn)(void);
 typedef int32_t (*audio_out_open_fn)(int32_t user_id, int32_t type, int32_t index, uint32_t len, uint32_t freq, uint32_t param);
 typedef int32_t (*audio_out_output_fn)(int32_t handle, const void *samples);
 typedef int32_t (*audio_out_close_fn)(int32_t handle);
-#define AUDIO_OUT_USER_ID_SYSTEM 0xFF
-#define AUDIO_OUT_PORT_TYPE_MAIN 0
-#define AUDIO_OUT_FORMAT_S16_MONO 0
-#define AUDIO_OUT_FREQUENCY 48000u
-#define AUDIO_OUT_GRAIN 256u /* samples per output call; the SDL driver uses 256..2048 in steps of 256 */
 
 const char *akeno_platform_audio_library_dir(void) { return "/system/common/lib"; }
 
@@ -307,6 +508,7 @@ int akeno_platform_audio_lookup(const char *library, const char *const *names, i
         snprintf(err, err_len, "dlopen failed: %s", why ? why : "unknown error");
         return -1;
     }
+    /* Looked up only: the addresses are compared with NULL and never called. */
     for (size_t i = 0; i < count; i++) found[i] = dlsym(lib, names[i]) != NULL;
     dlclose(lib);
     return 0;
@@ -318,78 +520,119 @@ static void *g_audio_out_lib = NULL;
 static audio_out_open_fn g_audio_out_open;
 static audio_out_output_fn g_audio_out_output;
 static audio_out_close_fn g_audio_out_close;
+static int g_audio_init_done = 0;
+static int g_audio_init_rc = 0;
+static unsigned char g_audio_block[AUDIO_LAB_MAX_BLOCK_BYTES] __attribute__((aligned(64)));
+/* Own lock (not g_lock): a test blocks for seconds and must not hold up notifications or the browser. */
+static pthread_mutex_t g_audio_lock = PTHREAD_MUTEX_INITIALIZER;
 
-static int audio_out_load(char *err, size_t err_len) {
-    if (g_audio_out_lib) return 0;
-    void *lib = dlopen("libSceAudioOut.sprx", RTLD_LAZY);
-    if (!lib) {
-        const char *why = dlerror();
-        snprintf(err, err_len, "dlopen(libSceAudioOut.sprx) failed: %s", why ? why : "unknown error");
-        return -2;
+static long long monotonic_us(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000000LL + ts.tv_nsec / 1000;
+}
+
+/* g_audio_lock held. Returns 0, -1 (init failed) or -2 (not available). */
+static int audio_out_load(akeno_audio_result *r) {
+    if (!g_audio_out_lib) {
+        void *lib = dlopen("libSceAudioOut.sprx", RTLD_LAZY);
+        if (!lib) {
+            const char *why = dlerror();
+            snprintf(r->error, sizeof(r->error), "dlopen(libSceAudioOut.sprx) failed: %s", why ? why : "unknown error");
+            return -2;
+        }
+        audio_out_init_fn init = (audio_out_init_fn)dlsym(lib, "sceAudioOutInit");
+        audio_out_open_fn open_fn = (audio_out_open_fn)dlsym(lib, "sceAudioOutOpen");
+        audio_out_output_fn output = (audio_out_output_fn)dlsym(lib, "sceAudioOutOutput");
+        audio_out_close_fn close_fn = (audio_out_close_fn)dlsym(lib, "sceAudioOutClose");
+        if (!init || !open_fn || !output || !close_fn) {
+            snprintf(r->error, sizeof(r->error), "libSceAudioOut.sprx does not export the expected functions");
+            dlclose(lib);
+            return -2;
+        }
+        g_audio_out_lib = lib;
+        g_audio_out_open = open_fn;
+        g_audio_out_output = output;
+        g_audio_out_close = close_fn;
+        r->init_called = 1;
+        g_audio_init_rc = init();
+        g_audio_init_done = g_audio_init_rc == 0;
     }
-    audio_out_init_fn init = (audio_out_init_fn)dlsym(lib, "sceAudioOutInit");
-    g_audio_out_open = (audio_out_open_fn)dlsym(lib, "sceAudioOutOpen");
-    g_audio_out_output = (audio_out_output_fn)dlsym(lib, "sceAudioOutOutput");
-    g_audio_out_close = (audio_out_close_fn)dlsym(lib, "sceAudioOutClose");
-    if (!init || !g_audio_out_open || !g_audio_out_output || !g_audio_out_close) {
-        snprintf(err, err_len, "libSceAudioOut.sprx does not export the expected functions");
-        dlclose(lib);
-        return -2;
-    }
-    int32_t rc = init();
-    if (rc != 0) {
-        snprintf(err, err_len, "sceAudioOutInit returned 0x%08x", (unsigned)rc);
-        dlclose(lib);
+    r->library_loaded = 1;
+    r->init_rc = g_audio_init_rc;
+    if (!g_audio_init_done) {
+        snprintf(r->error, sizeof(r->error), "sceAudioOutInit returned 0x%08x", (unsigned)g_audio_init_rc);
         return -1;
     }
-    g_audio_out_lib = lib;
     return 0;
 }
 
-int akeno_platform_audio_tone(unsigned frequency_hz, unsigned duration_ms, double amplitude, char *err, size_t err_len) {
-    pthread_mutex_lock(&g_lock);
-    int loaded = audio_out_load(err, err_len);
-    pthread_mutex_unlock(&g_lock);
-    if (loaded != 0) return loaded;
-    int32_t handle = g_audio_out_open(AUDIO_OUT_USER_ID_SYSTEM, AUDIO_OUT_PORT_TYPE_MAIN, 0, AUDIO_OUT_GRAIN, AUDIO_OUT_FREQUENCY,
-                                      AUDIO_OUT_FORMAT_S16_MONO);
-    if (handle < 1) {
-        snprintf(err, err_len, "sceAudioOutOpen returned 0x%08x", (unsigned)handle);
+int akeno_platform_audio_run(const akeno_audio_params *p, akeno_audio_result *r) {
+    memset(r, 0, sizeof(*r));
+    r->call_min_us = -1;
+    unsigned frame_bytes = audio_lab_format_frame_bytes(p->format);
+    if (!frame_bytes || !audio_lab_grain_valid(p->grain) || p->rate != AUDIO_LAB_RATE || p->user_id != 0xFF || p->port_type != 0) {
+        snprintf(r->error, sizeof(r->error), "Parameters outside the verified SDL driver configuration");
         return -1;
     }
-    int16_t block[AUDIO_OUT_GRAIN];
-    const unsigned long total = (unsigned long)duration_ms * AUDIO_OUT_FREQUENCY / 1000u;
-    const unsigned long ramp = AUDIO_OUT_FREQUENCY / 100u; /* 10 ms fade in and out: no clicks */
-    /*
-     * Sine by recurrence, s[n] = 2cos(w)s[n-1] - s[n-2], with cos(w) and sin(w) from short Taylor
-     * series (w is about 0.06 rad): no libm import, which a console has not been shown to resolve.
-     */
-    const double w = 2.0 * 3.14159265358979323846 * frequency_hz / AUDIO_OUT_FREQUENCY, w2 = w * w;
-    const double cos_w = 1.0 - w2 / 2.0 + w2 * w2 / 24.0 - w2 * w2 * w2 / 720.0;
-    const double sin_w = w - w * w2 / 6.0 + w * w2 * w2 / 120.0;
-    double s_prev = -sin_w, s_cur = 0.0; /* s[-1] = sin(-w), s[0] = sin(0) */
+    r->buffer_aligned = ((uintptr_t)g_audio_block & 63u) == 0;
+    pthread_mutex_lock(&g_audio_lock); /* Also keeps two tests from ever sharing the static block. */
+    int loaded = audio_out_load(r);
+    if (loaded != 0) {
+        pthread_mutex_unlock(&g_audio_lock);
+        return loaded;
+    }
+    r->open_called = 1;
+    int32_t handle = g_audio_out_open(p->user_id, p->port_type, 0, p->grain, p->rate, (uint32_t)p->format);
+    r->open_rc = handle;
+    if (handle < 1) {
+        snprintf(r->error, sizeof(r->error), "sceAudioOutOpen returned 0x%08x", (unsigned)handle);
+        pthread_mutex_unlock(&g_audio_lock);
+        return -1;
+    }
     int result = 0;
-    for (unsigned long done = 0; done < total; done += AUDIO_OUT_GRAIN) {
-        for (unsigned i = 0; i < AUDIO_OUT_GRAIN; i++) {
-            unsigned long n = done + i;
-            double gain = 0.0;
-            if (n < total) {
-                unsigned long left = total - n;
-                gain = amplitude * (n < ramp ? (double)n / ramp : left < ramp ? (double)left / ramp : 1.0);
-            }
-            block[i] = (int16_t)(32767.0 * gain * s_cur);
-            double s_next = 2.0 * cos_w * s_cur - s_prev;
-            s_prev = s_cur;
-            s_cur = s_next;
+    long long first_start = 0, last_end = 0;
+    for (unsigned long done = 0; done < p->frames; done += p->grain) {
+        if (p->cancel && *p->cancel) {
+            r->cancelled = 1;
+            break;
         }
-        int32_t rc = g_audio_out_output(handle, block); /* blocks until the device takes the samples */
+        double peak = 0.0;
+        unsigned long nonzero = p->fill(p->fill_user, g_audio_block, p->grain, &peak);
+        long long t0 = monotonic_us();
+        if (!first_start) first_start = t0;
+        int32_t rc = g_audio_out_output(handle, g_audio_block); /* blocks until the system takes the samples */
+        long long t1 = monotonic_us();
+        last_end = t1;
+        r->calls++;
+        r->last_output_rc = rc;
         if (rc < 0) {
-            snprintf(err, err_len, "sceAudioOutOutput returned 0x%08x", (unsigned)rc);
+            r->first_error_rc = rc;
+            r->first_error_call = r->calls;
+            snprintf(r->error, sizeof(r->error), "sceAudioOutOutput returned 0x%08x on call %lu", (unsigned)rc, r->calls);
             result = -1;
             break;
         }
+        r->calls_ok++;
+        r->frames_submitted += p->grain;
+        r->nonzero_frames += nonzero;
+        if (peak > r->peak) r->peak = peak;
+        if (r->calls > 1) { /* The first call returns at once (empty queue); it says nothing about pacing. */
+            long long us = t1 - t0;
+            r->call_total_us += us;
+            if (r->call_min_us < 0 || us < r->call_min_us) r->call_min_us = us;
+            if (us > r->call_max_us) r->call_max_us = us;
+        }
     }
-    g_audio_out_close(handle);
+    r->wall_us = first_start ? last_end - first_start : 0;
+    r->close_called = 1;
+    r->close_rc = g_audio_out_close(handle);
+    if (r->close_rc != 0 && result == 0) {
+        snprintf(r->error, sizeof(r->error), "sceAudioOutClose returned 0x%08x", (unsigned)r->close_rc);
+        result = -1;
+    }
+    if (r->call_min_us < 0) r->call_min_us = 0;
+    pthread_mutex_unlock(&g_audio_lock);
     return result;
 }
 #endif

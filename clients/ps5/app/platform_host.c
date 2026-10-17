@@ -17,8 +17,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#ifdef AKENO_EXPERIMENTAL_AUDIO
 #include <time.h>
+#ifdef AKENO_EXPERIMENTAL_AUDIO
+#include <stdint.h>
 #endif
 
 static pthread_mutex_t g_out = PTHREAD_MUTEX_INITIALIZER;
@@ -163,6 +164,71 @@ void akeno_platform_debug_line(const char *line) {
     fprintf(stderr, "%s\n", line);
 }
 
+/*
+ * Simulated controller for the shortcut tests: AKENO_SIM_PAD names a file holding the pressed
+ * buttons as a number ("0x0c08"), re-read on every read; "fail" simulates a read error and
+ * "disconnected" a controller that is not connected; a missing file means nothing is pressed.
+ * AKENO_SIM_PAD_OPEN=fail makes opening fail. Without AKENO_SIM_PAD the function is unavailable,
+ * as on a console where libScePad.sprx cannot be loaded.
+ */
+static int g_sim_pad_open = 0;
+
+int akeno_platform_pad_open(akeno_pad_info *info, char *err, size_t err_len) {
+    memset(info, 0, sizeof(*info));
+    info->user_id = -1;
+    info->handle = -1;
+    snprintf(info->method, sizeof(info->method), "simulated controller (AKENO_SIM_PAD, host build)");
+    const char *path = getenv("AKENO_SIM_PAD");
+    if (!path || !path[0]) {
+        snprintf(err, err_len, "Controller input is only available on the PS5 (host build).");
+        return -2;
+    }
+    info->library_loaded = 1;
+    info->init_called = 1;
+    const char *mode = getenv("AKENO_SIM_PAD_OPEN");
+    if (mode && strcmp(mode, "fail") == 0) {
+        info->user_id = 0x10000001;
+        snprintf(info->user_source, sizeof(info->user_source), "foreground user");
+        info->open_rc = (int)0x80920001u;
+        snprintf(err, err_len, "scePadOpen returned 0x%08x (simulated)", (unsigned)info->open_rc);
+        return -1;
+    }
+    info->user_id = 0x10000001;
+    snprintf(info->user_source, sizeof(info->user_source), "foreground user");
+    info->open_rc = info->handle = 1;
+    g_sim_pad_open = 1;
+    return 0;
+}
+
+int akeno_platform_pad_read(unsigned *buttons, int *connected, int *rc) {
+    *buttons = 0;
+    *connected = 0;
+    *rc = 0;
+    const char *path = getenv("AKENO_SIM_PAD");
+    if (!g_sim_pad_open || !path) {
+        *rc = -1;
+        return -1;
+    }
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        *connected = 1;
+        return 0;
+    }
+    char line[64] = "";
+    if (!fgets(line, sizeof(line), f)) line[0] = '\0';
+    fclose(f);
+    if (strncmp(line, "fail", 4) == 0) {
+        *rc = (int)0x80920003u;
+        return -1;
+    }
+    if (strncmp(line, "disconnected", 12) == 0) return 0;
+    *connected = 1;
+    *buttons = (unsigned)strtoul(line, NULL, 0);
+    return 0;
+}
+
+void akeno_platform_pad_close(void) { g_sim_pad_open = 0; }
+
 #ifdef AKENO_EXPERIMENTAL_AUDIO
 /*
  * Simulated audio for testing the audio lab on a PC: AKENO_SIM_AUDIO_LIBDIR stands in for the
@@ -191,17 +257,111 @@ int akeno_platform_audio_lookup(const char *library, const char *const *names, i
     return 0;
 }
 
-int akeno_platform_audio_tone(unsigned frequency_hz, unsigned duration_ms, double amplitude, char *err, size_t err_len) {
+/*
+ * AKENO_SIM_AUDIO_FAIL=init|open|output|close makes that step fail with a PS4-style error code;
+ * AKENO_SIM_AUDIO_PACE=none makes output calls return at once (samples "accepted" faster than
+ * real time) instead of blocking for one block's duration as the real function does.
+ */
+#include "audio_lab_pcm.h"
+
+static int sim_audio_fail(const char *step) {
+    const char *fail = getenv("AKENO_SIM_AUDIO_FAIL");
+    return fail && strcmp(fail, step) == 0;
+}
+
+static long long sim_now_us(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000000LL + ts.tv_nsec / 1000;
+}
+
+static int g_sim_audio_init_done = 0;
+
+int akeno_platform_audio_run(const akeno_audio_params *p, akeno_audio_result *r) {
+    static unsigned char block[AUDIO_LAB_MAX_BLOCK_BYTES] __attribute__((aligned(64)));
+    memset(r, 0, sizeof(*r));
+    unsigned frame_bytes = audio_lab_format_frame_bytes(p->format);
+    if (!frame_bytes || !audio_lab_grain_valid(p->grain) || p->rate != AUDIO_LAB_RATE || p->user_id != 0xFF || p->port_type != 0) {
+        snprintf(r->error, sizeof(r->error), "Parameters outside the verified SDL driver configuration");
+        return -1;
+    }
+    r->buffer_aligned = ((uintptr_t)block & 63u) == 0;
     if (!sim_audio_has("out")) {
-        snprintf(err, err_len, "dlopen(libSceAudioOut.sprx) failed: not available (host build)");
+        snprintf(r->error, sizeof(r->error), "dlopen(libSceAudioOut.sprx) failed: not available (host build)");
         return -2;
     }
-    struct timespec ts = { (time_t)(duration_ms / 1000), (long)(duration_ms % 1000) * 1000000L };
-    nanosleep(&ts, NULL);
+    r->library_loaded = 1;
+    if (!g_sim_audio_init_done || sim_audio_fail("init")) {
+        r->init_called = 1;
+        r->init_rc = sim_audio_fail("init") ? (int)0x80260001u : 0;
+        g_sim_audio_init_done = r->init_rc == 0;
+    }
+    if (sim_audio_fail("init")) {
+        snprintf(r->error, sizeof(r->error), "sceAudioOutInit returned 0x%08x", (unsigned)r->init_rc);
+        return -1;
+    }
+    r->open_called = 1;
+    r->open_rc = sim_audio_fail("open") ? (int)0x80260005u : 17;
+    if (r->open_rc < 1) {
+        snprintf(r->error, sizeof(r->error), "sceAudioOutOpen returned 0x%08x", (unsigned)r->open_rc);
+        return -1;
+    }
+    const char *pace = getenv("AKENO_SIM_AUDIO_PACE");
+    int realtime = !pace || strcmp(pace, "none") != 0;
+    long long block_us = (long long)p->grain * 1000000LL / (long long)p->rate;
+    long long first = 0, last = 0;
+    int result = 0;
+    r->call_min_us = -1;
+    for (unsigned long done = 0; done < p->frames; done += p->grain) {
+        if (p->cancel && *p->cancel) {
+            r->cancelled = 1;
+            break;
+        }
+        double peak = 0.0;
+        unsigned long nonzero = p->fill(p->fill_user, block, p->grain, &peak);
+        long long t0 = sim_now_us();
+        if (!first) first = t0;
+        /* Like the real function: the first block is queued at once, later ones wait for room. */
+        if (realtime && r->calls > 0) {
+            struct timespec ts = { (time_t)(block_us / 1000000LL), (long)(block_us % 1000000LL) * 1000L };
+            nanosleep(&ts, NULL);
+        }
+        long long t1 = sim_now_us();
+        last = t1;
+        r->calls++;
+        int rc = sim_audio_fail("output") && r->calls == 3 ? (int)0x80260007u : 0;
+        r->last_output_rc = rc;
+        if (rc < 0) {
+            r->first_error_rc = rc;
+            r->first_error_call = r->calls;
+            snprintf(r->error, sizeof(r->error), "sceAudioOutOutput returned 0x%08x on call %lu", (unsigned)rc, r->calls);
+            result = -1;
+            break;
+        }
+        r->calls_ok++;
+        r->frames_submitted += p->grain;
+        r->nonzero_frames += nonzero;
+        if (peak > r->peak) r->peak = peak;
+        if (r->calls > 1) {
+            long long us = t1 - t0;
+            r->call_total_us += us;
+            if (r->call_min_us < 0 || us < r->call_min_us) r->call_min_us = us;
+            if (us > r->call_max_us) r->call_max_us = us;
+        }
+    }
+    r->wall_us = first ? last - first : 0;
+    r->close_called = 1;
+    r->close_rc = sim_audio_fail("close") ? (int)0x80260006u : 0;
+    if (r->close_rc != 0 && result == 0) {
+        snprintf(r->error, sizeof(r->error), "sceAudioOutClose returned 0x%08x", (unsigned)r->close_rc);
+        result = -1;
+    }
+    if (r->call_min_us < 0) r->call_min_us = 0;
     pthread_mutex_lock(&g_out);
-    fprintf(stdout, "{\"event\":\"audio-tone\",\"frequency\":%u,\"durationMs\":%u,\"amplitude\":%.3f}\n", frequency_hz, duration_ms, amplitude);
+    fprintf(stdout, "{\"event\":\"audio-run\",\"format\":%d,\"grain\":%u,\"frames\":%lu,\"calls\":%lu,\"nonzero\":%lu,\"peak\":%.4f,\"cancelled\":%s}\n",
+            p->format, p->grain, r->frames_submitted, r->calls, r->nonzero_frames, r->peak, r->cancelled ? "true" : "false");
     fflush(stdout);
     pthread_mutex_unlock(&g_out);
-    return 0;
+    return result;
 }
 #endif

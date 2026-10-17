@@ -23,6 +23,13 @@ env:
   # fallback.
   ALPHA_01_COMMIT: 592c23a7b64f11c1b43ca6d5cc8d9153106f256d
   ALPHA_01_SHA256: 35f393c64213410585b40262ce203423ec5c1ad66dda97e5919b9b31948b6b65
+  # The previous builds (CI run 38558019000 of ae94851): the audio lab v1 ELF ran on a PS5 with
+  # 12.20 (user report: AKENO worked, the tone was accepted but not heard); the release ELF of the
+  # same commit has the same code without the lab. Rebuilt and verified byte-identical.
+  PREVIOUS_COMMIT: ae948512475a6752fb4cebd70234893e037044e1
+  PREVIOUS_RELEASE_SHA256: 1770ad349c93a067161ea68ed3d35bbc53ba480fea208c6f251cce33452ceeb5
+  PREVIOUS_AUDIOLAB_SHA256: e3a5c5f111d9526740b4216355ee2db71c2f57ac72adad9a91a9a1b00a1b09ef
+  RELEASE_NAME: akeno-network-ps5-alpha-0.5-rc
 
 jobs:
   ps5:
@@ -68,6 +75,17 @@ jobs:
           make -C "$RUNNER_TEMP/alpha-0.1/clients/ps5/console" -j"$(nproc)" GIT_COMMIT="${ALPHA_01_COMMIT:0:12}"
           echo "$ALPHA_01_SHA256  $RUNNER_TEMP/alpha-0.1/clients/ps5/build-ps5/akeno-network-ps5.elf" | sha256sum -c -
 
+      - name: Rebuild the previous builds (ae94851, audio lab v1 ran on a PS5) and verify them byte-identical
+        shell: bash
+        run: |
+          export PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk"
+          git worktree add --detach "$RUNNER_TEMP/previous" "$PREVIOUS_COMMIT"
+          cp -r clients/ps5/third_party "$RUNNER_TEMP/previous/clients/ps5/"
+          make -C "$RUNNER_TEMP/previous/clients/ps5/console" -j"$(nproc)" GIT_COMMIT="${PREVIOUS_COMMIT:0:12}"
+          make -C "$RUNNER_TEMP/previous/clients/ps5/console" -j"$(nproc)" EXPERIMENTAL_AUDIO=1 GIT_COMMIT="${PREVIOUS_COMMIT:0:12}"
+          echo "$PREVIOUS_RELEASE_SHA256  $RUNNER_TEMP/previous/clients/ps5/build-ps5/akeno-network-ps5.elf" | sha256sum -c -
+          echo "$PREVIOUS_AUDIOLAB_SHA256  $RUNNER_TEMP/previous/clients/ps5/build-ps5-audiolab/akeno-network-ps5-audiolab.elf" | sha256sum -c -
+
       - name: Build the toolchain diagnostic
         run: |
           export PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk"
@@ -78,45 +96,53 @@ jobs:
           export PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk"
           clients/ps5/console/check-imports.sh clients/ps5/build-ps5 | tee imports.txt
 
-      # Experimental PS5 voice research (docs/PS5_AUDIO_RESEARCH.md): a separate ELF, never the
-      # release one. It must pass the same gate and import exactly what the release ELF imports.
-      - name: Build the experimental audio lab and check its imports
+      # Experimental PS5 audio research (docs/PS5_AUDIO_RESEARCH.md): a separate ELF, never the
+      # release one. It must pass the same gate and import exactly what the release ELF imports,
+      # and both must import exactly what the build that ran on a PS5 (ae94851) imports.
+      - name: Build the experimental audio lab v2 and check its imports
+        shell: bash
         run: |
           export PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk"
           make -C clients/ps5/console -j"$(nproc)" EXPERIMENTAL_AUDIO=1 GIT_COMMIT="$(git rev-parse --short=12 HEAD)"
           clients/ps5/console/check-imports.sh clients/ps5/build-ps5-audiolab | tee imports-audiolab.txt
           nm="$PS5_PAYLOAD_SDK/bin/prospero-nm"
-          diff <("$nm" -D --undefined-only clients/ps5/build-ps5/akeno-network-ps5.elf | awk '{print $2}' | sort) \
-               <("$nm" -D --undefined-only clients/ps5/build-ps5-audiolab/akeno-network-ps5-audiolab.elf | awk '{print $2}' | sort)
-          if "$nm" clients/ps5/build-ps5/akeno-network-ps5.debug.elf | grep -qE 'audio_lab|akeno_platform_audio'; then
+          imports() { "$nm" -D --undefined-only "$1" | awk '{print $2}' | sort; }
+          diff <(imports clients/ps5/build-ps5/akeno-network-ps5.elf) <(imports clients/ps5/build-ps5-audiolab/akeno-network-ps5-audiolab-v2.elf)
+          diff <(imports "$RUNNER_TEMP/previous/clients/ps5/build-ps5/akeno-network-ps5.elf") <(imports clients/ps5/build-ps5/akeno-network-ps5.elf)
+          diff <(readelf -d "$RUNNER_TEMP/previous/clients/ps5/build-ps5/akeno-network-ps5.elf" | grep NEEDED) \
+               <(readelf -d clients/ps5/build-ps5/akeno-network-ps5.elf | grep NEEDED)
+          if "$nm" clients/ps5/build-ps5/akeno-network-ps5.debug.elf | grep -qE 'audio_lab|akeno_platform_audio|akeno_ui_audiolab'; then
             echo "The release ELF contains audio lab code" >&2; exit 1
           fi
+          echo "Release and audio lab v2 import exactly the same symbols as the hardware-tested ae94851 build."
 
       - name: Inspect, checksum and describe the build
         shell: bash
         run: |
           version="$(sed -n 's/^#define AKENO_APP_VERSION "\(.*\)"$/\1/p' clients/ps5/app/app_internal.h)"
           test -n "$version"
-          out=dist/akeno-network-ps5-alpha-0.2-rc
-          mkdir -p "$out/fallback-alpha-0.1"
+          out="dist/$RELEASE_NAME"
+          mkdir -p "$out/fallback" "$out/debug"
           cp clients/ps5/build-ps5/akeno-network-ps5.elf "$out/"
-          cp clients/ps5/build-ps5/akeno-network-ps5.debug.elf "$out/"
-          cp clients/ps5/ps5-smoke/akeno-ps5-diagnostic.elf "$out/"
-          cp "$RUNNER_TEMP/alpha-0.1/clients/ps5/build-ps5/akeno-network-ps5.elf" "$out/fallback-alpha-0.1/akeno-network-ps5-alpha-0.1.elf"
-          cp docs/PS5_CLIENT.md "$out/README.md"
-          cp docs/RELEASE_NOTES_ALPHA_0.2.md "$out/RELEASE_NOTES.md"
-          cp docs/HARDWARE_TEST_PLAN_ALPHA_0.2.md "$out/HARDWARE_TEST_PLAN.md"
-          mkdir -p "$out/experimental-audio-lab"
-          cp clients/ps5/build-ps5-audiolab/akeno-network-ps5-audiolab.elf "$out/experimental-audio-lab/"
-          cp docs/PS5_AUDIO_RESEARCH.md "$out/experimental-audio-lab/README.md"
-          for elf in "$out"/*.elf "$out"/fallback-alpha-0.1/*.elf "$out"/experimental-audio-lab/*.elf; do
+          cp clients/ps5/build-ps5-audiolab/akeno-network-ps5-audiolab-v2.elf "$out/"
+          cp clients/ps5/build-ps5/akeno-network-ps5.debug.elf "$out/debug/"
+          cp clients/ps5/build-ps5-audiolab/akeno-network-ps5-audiolab-v2.debug.elf "$out/debug/"
+          cp clients/ps5/ps5-smoke/akeno-ps5-diagnostic.elf "$out/debug/"
+          cp "$RUNNER_TEMP/previous/clients/ps5/build-ps5/akeno-network-ps5.elf" "$out/fallback/akeno-network-ps5-previous-ae94851.elf"
+          cp "$RUNNER_TEMP/previous/clients/ps5/build-ps5-audiolab/akeno-network-ps5-audiolab.elf" "$out/fallback/akeno-network-ps5-audiolab-v1-ae94851.elf"
+          cp "$RUNNER_TEMP/alpha-0.1/clients/ps5/build-ps5/akeno-network-ps5.elf" "$out/fallback/akeno-network-ps5-alpha-0.1.elf"
+          cp docs/PS5_ARTIFACT_README.md "$out/README.md"
+          cp docs/HARDWARE_TEST_PLAN_PS5_ALPHA_0.5.md "$out/HARDWARE_TEST_PLAN.md"
+          cp docs/RELEASE_NOTES_PS5_ALPHA_0.5.md "$out/RELEASE_NOTES.md"
+          cp docs/PS5_AUDIO_RESEARCH.md "$out/AUDIO_RESEARCH.md"
+          for elf in "$out"/*.elf "$out"/fallback/*.elf "$out"/debug/*.elf; do
             readelf -h "$elf" | grep -q 'ELF64'
             readelf -h "$elf" | grep -q 'Advanced Micro Devices X86-64'
             readelf -h "$elf" | grep -q 'DYN (Position-Independent Executable file)'
           done
-          (cd "$out" && sha256sum *.elf fallback-alpha-0.1/*.elf experimental-audio-lab/*.elf > SHA256SUMS)
+          (cd "$out" && sha256sum *.elf fallback/*.elf debug/*.elf > SHA256SUMS)
           {
-            echo "AKENO NETWORK console app $version (Alpha 0.2 release candidate)"
+            echo "AKENO NETWORK console app $version (PS5 Alpha 0.5 release candidate)"
             echo "Source commit:   $(git rev-parse HEAD)"
             echo "Workflow run:    $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             echo "ps5-payload-sdk: $PS5_SDK_COMMIT"
@@ -127,26 +153,43 @@ jobs:
             echo "SHA-256:"
             sed 's/^/  /' "$out/SHA256SUMS"
             echo
-            echo "Shared libraries required:"
+            echo "Shared libraries required (identical to the hardware-tested ae94851 build):"
             readelf -d "$out/akeno-network-ps5.elf" | grep NEEDED | sed 's/^.*\[/  /; s/\]$//'
             echo
             cat imports.txt
             echo
-            echo "Hardware status:"
-            echo "  akeno-network-ps5.elf ($version) has NOT been run on a PS5 yet. Test it only with the"
-            echo "  checklist in HARDWARE_TEST_PLAN.md, after approving this exact SHA-256."
-            echo "  fallback-alpha-0.1/akeno-network-ps5-alpha-0.1.elf is Alpha 0.1, rebuilt from"
-            echo "  $ALPHA_01_COMMIT and verified byte-identical to the build that ran on a PS5"
-            echo "  with firmware 12.20 (user report: browser, pairing, HTTPS/WSS, notifications)."
-            echo "  experimental-audio-lab/akeno-network-ps5-audiolab.elf is an EXPERIMENTAL research build"
-            echo "  (PS5 voice prototypes A and C). It has never run on a PS5. Use it only for the audio"
-            echo "  test plan in its README, after approval; it is not a release and not needed for AKENO."
+            echo "Hardware status (nothing in this build is hardware-verified until you test it):"
+            echo "  akeno-network-ps5.elf ($version): NOT run on a PS5 yet. Profiles, Quick Access settings and"
+            echo "    the experimental controller shortcut (off by default) are tested on Linux/Chromium only."
+            echo "    Its dynamic imports are identical to the ae94851 build that ran on a PS5 with 12.20."
+            echo "  akeno-network-ps5-audiolab-v2.elf: EXPERIMENTAL audio research build, NOT run on a PS5 yet."
+            echo "    Audible output is NOT confirmed. Use only with HARDWARE_TEST_PLAN.md, test C."
+            echo "  fallback/akeno-network-ps5-audiolab-v1-ae94851.elf and fallback/akeno-network-ps5-previous-ae94851.elf:"
+            echo "    rebuilt from $PREVIOUS_COMMIT, byte-identical to CI run 38558019000 (the audio lab v1 ELF ran"
+            echo "    on a PS5 with 12.20, user report; the release ELF is the same code without the lab)."
+            echo "  fallback/akeno-network-ps5-alpha-0.1.elf: Alpha 0.1, rebuilt from $ALPHA_01_COMMIT and"
+            echo "    byte-identical to the build that ran on a PS5 with 12.20 (user report)."
           } > "$out/BUILDINFO.txt"
           cat "$out/BUILDINFO.txt"
 
-      - name: Upload build
+      - name: Upload the complete build (ELF files, checksums, build info, README, test plan)
         uses: actions/upload-artifact@v4
         with:
-          name: akeno-network-ps5-alpha-0.2-rc
-          path: dist/akeno-network-ps5-alpha-0.2-rc
+          name: ${{ env.RELEASE_NAME }}
+          path: dist/${{ env.RELEASE_NAME }}
+          retention-days: 90
+
+      # Single-file downloads for convenience (GitHub still wraps each in a ZIP).
+      - name: Upload the release ELF on its own
+        uses: actions/upload-artifact@v4
+        with:
+          name: akeno-network-ps5-elf
+          path: dist/${{ env.RELEASE_NAME }}/akeno-network-ps5.elf
+          retention-days: 90
+
+      - name: Upload the audio lab v2 ELF on its own
+        uses: actions/upload-artifact@v4
+        with:
+          name: akeno-network-ps5-audiolab-v2-elf
+          path: dist/${{ env.RELEASE_NAME }}/akeno-network-ps5-audiolab-v2.elf
           retention-days: 90

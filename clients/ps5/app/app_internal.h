@@ -7,6 +7,7 @@
  *   realtime thread  akeno_realtime_run() with its own akeno_client
  *   pairing thread   akeno_pairing_wait() with its own akeno_client
  *   activity thread  game detection and activity heartbeats with its own akeno_client
+ *   shortcut thread  experimental controller shortcut (quick_access.c), only while turned on
  * Worker threads never touch another thread's client. They report through fields guarded by
  * app->lock and the main thread applies the consequences in app_tick().
  */
@@ -21,8 +22,10 @@
 #include "buf.h"
 #include "game_detect.h"
 #include "platform.h"
+#include "shortcut.h"
 
-#define AKENO_APP_VERSION "0.2.0-alpha"
+#define AKENO_APP_VERSION "0.5.0-alpha"
+#define AKENO_APP_RELEASE "Alpha 0.5"
 #ifndef AKENO_BUILD_ID
 #define AKENO_BUILD_ID "dev"
 #endif
@@ -72,6 +75,31 @@ typedef struct {
     long long expires_at;
 } app_ticket;
 
+/* Experimental controller shortcut (quick_access.c); app->lock. */
+typedef struct {
+    char state[16];   /* off, starting, reading, unavailable, failed, stopped */
+    char detail[200];
+    akeno_pad_info pad;
+    long long reads;
+    long long read_errors;
+    int last_read_rc;
+    int connected;
+    long long samples_with_buttons; /* Samples in which any known button was pressed. */
+    long long other_bits_samples;   /* Samples with bits outside AKENO_PAD_KNOWN_BUTTONS. */
+    unsigned last_buttons;
+    long long last_buttons_at;      /* Local time a known button was last seen pressed (ms). */
+    long long detections;
+    long long last_detection_at;
+    long long activations;          /* Detections that opened the page. */
+    long long last_activation_at;
+    int last_browser_rc;
+    long long test_until;           /* Test mode: detections are only reported, nothing is opened. */
+    long long test_detections;
+    int trigger_pending;            /* The worker saw the shortcut; the main thread opens the page. */
+    unsigned config_gen;            /* Bumped when the settings change or a test starts. */
+    unsigned failed_gen;            /* config_gen when the reader last failed (no automatic retry). */
+} app_quick_access;
+
 /* Recent messages from other people, newest last, for the page's quick-access list (app->lock). */
 #define APP_RECENT_MESSAGES 12
 typedef struct {
@@ -107,6 +135,9 @@ struct akeno_app {
     int notify_social;
     int activity_enabled;          /* Detect and share the game being played (default on). */
     int actionable_notifications;  /* Experimental button notifications (default off). */
+    int qa_shortcut;               /* Experimental controller shortcut (default off). */
+    char qa_combo[24];             /* akeno_shortcut_combo id. */
+    int qa_hold_ms;
 
     /* Local UI (immutable after start). */
     int port;
@@ -154,6 +185,13 @@ struct akeno_app {
     volatile int act_stop;
     int act_wanted;
     app_activity act;
+
+    /* Controller shortcut (lock, except the thread fields owned by the main thread). */
+    pthread_t qa_thread;
+    int qa_thread_running; /* main thread only */
+    int qa_thread_done;
+    volatile int qa_stop;
+    app_quick_access qa;
 
     /* Quick access to recent messages (lock). */
     app_recent_message recent[APP_RECENT_MESSAGES];
@@ -225,6 +263,14 @@ void app_activity_shutdown(akeno_app *app);
 /* Appends the activity state as JSON; caller holds app->lock. */
 void app_activity_json(const akeno_app *app, akeno_buf *b, int diagnostics);
 
+/* quick_access.c (main thread) */
+void app_quick_access_tick(akeno_app *app);
+void app_quick_access_shutdown(akeno_app *app);
+/* Starts a test window of `seconds`: detections are reported but open nothing. */
+void app_quick_access_test(akeno_app *app, int seconds);
+/* Appends the shortcut state as JSON; caller holds app->lock. */
+void app_quick_access_json(const akeno_app *app, akeno_buf *b);
+
 /* app_routes.c */
 typedef struct {
     int status;
@@ -249,5 +295,8 @@ int ui_server_signal_existing(int port, const char *instance_key);
 extern const char akeno_ui_index[], akeno_ui_index_end[];
 extern const char akeno_ui_js[], akeno_ui_js_end[];
 extern const char akeno_ui_css[], akeno_ui_css_end[];
+#ifdef AKENO_EXPERIMENTAL_AUDIO
+extern const char akeno_ui_audiolab_js[], akeno_ui_audiolab_js_end[];
+#endif
 
 #endif
