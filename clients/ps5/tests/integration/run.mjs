@@ -839,7 +839,7 @@ if (appBinary) {
       // Selecting a friend opens their profile; its first action (Message) takes the focus.
       await page.keyboard.press('Enter');
       await page.locator('#profile-name', { hasText: 'it_bob' }).waitFor();
-      await page.waitForFunction('document.activeElement && document.activeElement.id === "profile-message"');
+      await page.locator('#profile-message:focus').waitFor();
       if (shots) await page.screenshot({ path: join(shots, '1b-friend-profile.png') });
       await page.keyboard.press('Enter');
       await page.locator('#composer-input').waitFor();
@@ -1348,7 +1348,7 @@ if (appBinary) {
       if (shots) await page.screenshot({ path: join(shots, '10-banner.png') });
       await page.locator('#banner-open').click();
       await page.locator('.bubble', { hasText: 'Banner test' }).waitFor({ timeout: 15_000 });
-      await page.waitForFunction('document.getElementById("banner").hidden === true');
+      await page.locator('#banner').waitFor({ state: 'hidden' });
       assert.equal((await appState(player)).inbox.unseen, 0);
 
       // Games: what this console detects and the tracked history.
@@ -1480,7 +1480,7 @@ if (appBinary) {
       await row.focus();
       await page.keyboard.press('Enter');
       await page.locator('#profile-name', { hasText: 'it_bob' }).waitFor({ timeout: 15_000 });
-      await page.waitForFunction('document.activeElement && document.activeElement.id === "profile-message"');
+      await page.locator('#profile-message:focus').waitFor();
       await page.locator('#profile-banner img.banner-img').waitFor({ timeout: 15_000 });
       await page.locator('.profile-head .avatar.big img').waitFor();
       await page.locator('#profile-relationship', { hasText: 'Friends' }).waitFor();
@@ -1543,7 +1543,7 @@ if (appBinary) {
       // Someone who blocked this account: not distinguishable from a missing profile.
       await open(`profile:${erin.user.id}`);
       await page.locator('#profile-error', { hasText: 'Profile not available' }).waitFor({ timeout: 15_000 });
-      await page.waitForFunction('document.activeElement && document.activeElement.id === "profile-back"');
+      await page.locator('#profile-back:focus').waitFor();
       assert.ok(!(await page.content()).includes('it_erin'), 'nothing about the blocking user is shown');
       if (shots) await page.screenshot({ path: join(shots, '16-profile-unavailable.png') });
 
