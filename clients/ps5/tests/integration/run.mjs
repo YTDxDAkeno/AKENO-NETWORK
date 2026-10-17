@@ -2209,7 +2209,7 @@ if (audioLabBinary) {
       await section.locator('#audio-browser-feedback').waitFor({ timeout: 10_000 });
       await section.locator('#audio-bheard-tv').click();
       await section.getByText(/Last browser tone/).waitFor();
-      await section.getByText(/canPlayType WAV/).waitFor();
+      await section.getByText('canPlayType WAV', { exact: true }).waitFor();
 
       // HTML <audio> element: the generated WAV from a blob: URL, then the user's report.
       await section.locator('#audio-media').click();
