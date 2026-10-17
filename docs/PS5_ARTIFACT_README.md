@@ -17,6 +17,7 @@ run on a PS5 yet; test it with `HARDWARE_TEST_PLAN.md` (PS5 firmware 12.20 with 
 | `BUILDINFO.txt` | Source commit, workflow run, SDK, compiler, imports and hardware status. |
 | `HARDWARE_TEST_PLAN.md` | Tests A (release), B (quick access) and C (audio). |
 | `RELEASE_NOTES.md`, `AUDIO_RESEARCH.md` | What changed; the audio findings. |
+| `LICENSES.md` | Licences of everything shipped in the ELF files (mbedTLS, CA bundle, SDK runtime, Lucide icons). |
 
 ## Download
 

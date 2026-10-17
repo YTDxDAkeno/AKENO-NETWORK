@@ -123,6 +123,24 @@ build contains capture code (CI fails if the platform layer mentions `sceAudioIn
 3. Your separate approval of a hardware test with a printed checklist: microphone permission
    expectations, a visible recording indicator, local-only level meter, nothing stored or sent.
 
+## Next step toward PS5 voice parties, decided by the test C results
+
+PS5 voice chat is **not working and not claimed**. Each outcome of test C (hardware test plan)
+points to one next step; nothing beyond it is started before the result exists.
+
+| C4 timing | C3 heard (browser in front) | C5 heard (home screen) | C6 browser tone heard | Meaning | Next evidence-based step |
+| --- | --- | --- | --- | --- | --- |
+| paced | no | no | **yes** | The payload's audio is consumed but muted; the browser (app in front) can play | **Voice through the page**: check what the PS5 browser offers for capture and real-time media (`getUserMedia`, `RTCPeerConnection` presence is already reported read-only); if capture is missing, a payload→page audio path (payload receives voice over the existing WSS, page plays it with Web Audio) gives *listen-only* party audio first |
+| paced | no | **yes** | any | Output depends on which app is in front | Measure when AKENO's process is allowed audio (home screen vs. browser vs. game) — still output-only; no capture |
+| paced | **yes** | any | any | Native output works from the payload | Prototype D, output half: play a party's mixed audio received over WSS from a server-side bridge (listen-only), then the capture research below |
+| not paced | no | no | any | Samples are discarded without playback | Native output from a background payload is not available; only the browser route remains |
+| any failure state | – | – | any | A call failed (code in the report) | Compare the code with the SDL driver's behaviour; adjust within the verified parameters only |
+
+Microphone input stays blocked on missing evidence regardless of these results: a credible PS5
+declaration of `sceAudioIn*` (or a working PS5 homebrew that captures) and a separately approved,
+single test. The branch `feature/akeno-ps5-direct-capture` (another session's read-only capture
+diagnostic) is not part of Alpha 0.5; its findings should be read before any capture prototype.
+
 ## Hardware test plan
 
 See [HARDWARE_TEST_PLAN_PS5_ALPHA_0.5.md](HARDWARE_TEST_PLAN_PS5_ALPHA_0.5.md), test C. Run it from

@@ -135,6 +135,7 @@ jobs:
           cp docs/HARDWARE_TEST_PLAN_PS5_ALPHA_0.5.md "$out/HARDWARE_TEST_PLAN.md"
           cp docs/RELEASE_NOTES_PS5_ALPHA_0.5.md "$out/RELEASE_NOTES.md"
           cp docs/PS5_AUDIO_RESEARCH.md "$out/AUDIO_RESEARCH.md"
+          cp docs/LICENSES.md "$out/LICENSES.md"
           for elf in "$out"/*.elf "$out"/fallback/*.elf "$out"/debug/*.elf; do
             readelf -h "$elf" | grep -q 'ELF64'
             readelf -h "$elf" | grep -q 'Advanced Micro Devices X86-64'

@@ -27,11 +27,58 @@ The console build additionally contains, downloaded at pinned versions with SHA-
 | mbedTLS | 3.6.7 (LTS) | Apache-2.0 | TLS 1.2/1.3 and X.509 verification (statically linked) |
 | Mozilla CA certificate bundle, via certifi | 2026.07.22 | MPL-2.0 | Trusted roots embedded in the ELF |
 | ps5-payload-sdk (crt, libc, stubs) | `f5d40f0` | GPLv3+ (FreeBSD headers under BSD licenses) | Startup code and libc linked into the PS5 ELF |
+| Lucide icons (path data of 8 icons, from lucide-react) | 1.56.0 | ISC | Badge medallion icons in the console page (`app/web/app.js`, embedded in both PS5 ELFs); notice below |
 
 Because the PS5 ELF links the SDK's GPLv3+ runtime, a distributed PS5 binary is a combined work
 under the GPLv3; AKENO's MIT and mbedTLS's Apache-2.0 code are compatible with that. The complete
 corresponding source is this repository plus the pinned SDK and inputs named above. The PR #1
 diagnostic ELF (`clients/ps5/ps5-smoke`) is built from the same SDK.
+
+### Lucide icons in the PS5 console page (Alpha 0.5)
+
+The console page draws AKENO's badge medallions with the same line icons as the website
+(`apps/web/src/components/BadgeIcon.tsx`). Because the page has no package manager, the path data
+of exactly these eight Lucide icons is copied, unmodified, into `clients/ps5/app/web/app.js`, which
+is embedded in `akeno-network-ps5.elf` and `akeno-network-ps5-audiolab-v2.elf`:
+
+`crown` (AKENO Founder), `shield-check` (Administrator), `braces` (Developer), `badge-check`
+(Verified Contributor), `sprout` (Early Supporter), `flask-conical` (Beta Tester), `gamepad-2`
+(PS5 Alpha Tester), `ticket` (Community Event Participant).
+
+None of them is among the icons Lucide lists as derived from Feather (MIT), so only Lucide's ISC
+licence applies. Its full notice is reproduced in `app.js` next to the data (so it travels inside
+every ELF), in this file, and in the build artifact (`LICENSES.md`):
+
+```
+ISC License
+
+Copyright (c) 2026 Lucide Icons and Contributors
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+```
+
+The hexagon medallion shape, colours and badge names are AKENO's own (`packages/shared/src/badges.ts`).
+
+### Reference sources for the PS5 research (read, not linked into AKENO)
+
+Function declarations used by the PS5 platform layer were taken from these projects; no code from
+them is compiled into AKENO except the declarations' shapes and constants:
+
+| Project | Commit | License | What was used |
+| --- | --- | --- | --- |
+| ps5-payload-dev/SDL (`src/audio/ps5`, `src/joystick/ps5`) | `ee4c47d` | zlib | `sceAudioOut*` and `scePad*` declarations, formats, button bits, `PS5_PadData` layout |
+| ps5-payload-dev/websrv (`src/ps5/hbldr.c`) | `7748df9` | GPLv3+ | Declaration of `sceUserServiceGetForegroundUser`; read to understand how homebrew is launched (its method is **not** used) |
+| ps5-payload-dev/elfldr | `02cfe91` | GPLv3+ | Read to understand how payloads are spawned (no code used) |
 
 ## Runtime dependencies (shipped)
 

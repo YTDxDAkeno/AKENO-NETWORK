@@ -895,7 +895,23 @@
     ps5_alpha_tester: { name: 'PS5 Alpha Tester', color: '#5b8cff', description: 'Tested the AKENO console app on real PS5 hardware.' },
     event_participant: { name: 'Community Event Participant', color: '#fb923c', description: 'Took part in an AKENO community event.' }
   };
-  // Line icons of the website's badge medallions (Lucide, ISC licence; see docs/LICENSES.md).
+  // Line icons of the website's badge medallions: path data of the Lucide icons crown,
+  // shield-check, braces, badge-check, sprout, flask-conical, gamepad-2 and ticket (lucide-react
+  // 1.56.0), unmodified. None of them is derived from Feather, so only this licence applies:
+  //
+  //   ISC License
+  //   Copyright (c) 2026 Lucide Icons and Contributors
+  //   Permission to use, copy, modify, and/or distribute this software for any purpose with or
+  //   without fee is hereby granted, provided that the above copyright notice and this permission
+  //   notice appear in all copies.
+  //   THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS
+  //   SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL
+  //   THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY
+  //   DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF
+  //   CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE
+  //   OR PERFORMANCE OF THIS SOFTWARE.
+  //
+  // See docs/LICENSES.md. The hexagon medallion around each icon is AKENO's own artwork.
   var BADGE_ICONS = {
     founder: [['path',{'d':'M11.562 3.266a.5.5 0 0 1 .876 0L15.39 8.87a1 1 0 0 0 1.516.294L21.183 5.5a.5.5 0 0 1 .798.519l-2.834 10.246a1 1 0 0 1-.956.734H5.81a1 1 0 0 1-.957-.734L2.02 6.02a.5.5 0 0 1 .798-.519l4.276 3.664a1 1 0 0 0 1.516-.294z'}],['path',{'d':'M5 21h14'}]],
     administrator: [['path',{'d':'M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z'}],['path',{'d':'m9 12 2 2 4-4'}]],

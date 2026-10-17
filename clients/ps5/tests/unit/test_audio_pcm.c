@@ -28,16 +28,29 @@ static void test_formats(void) {
     CHECK(AUDIO_LAB_MAX_BLOCK_BYTES >= AUDIO_LAB_GRAIN_MAX * audio_lab_format_frame_bytes(AUDIO_LAB_FORMAT_FLOAT_STEREO));
 }
 
+/* Sample `channel` of frame `frame` in an interleaved block, as -1..1. */
+static double sample_at(const unsigned char *block, int is_float, unsigned channels, unsigned frame, unsigned channel) {
+    size_t index = (size_t)frame * channels + channel;
+    return is_float ? (double)((const float *)block)[index] : ((const int16_t *)block)[index] / 32767.0;
+}
+
 /* Renders lead + tone + tail in blocks of `grain` and checks the signal. */
 static void check_tone(int format, unsigned grain, double amplitude) {
     const unsigned long lead = RATE / 4, tone = RATE * 3 / 2, tail = RATE / 4;
     const unsigned long total = (lead + tone + tail + grain - 1) / grain * grain;
     unsigned channels = audio_lab_format_channels(format);
     int is_float = format == AUDIO_LAB_FORMAT_FLOAT_MONO || format == AUDIO_LAB_FORMAT_FLOAT_STEREO;
+    /* Only mono and stereo formats produce samples; anything else is a test bug. */
+    CHECK(channels == 1 || channels == 2);
+    if (channels != 1 && channels != 2) return;
     double *mono = calloc(total, sizeof(double));
     unsigned char *block = malloc(AUDIO_LAB_MAX_BLOCK_BYTES);
     CHECK(mono && block);
-    if (!mono || !block) return;
+    if (!mono || !block) {
+        free(mono);
+        free(block);
+        return;
+    }
     audio_lab_osc osc;
     audio_lab_osc_init(&osc, 440, amplitude, lead, tone);
     unsigned long nonzero = 0;
@@ -49,11 +62,10 @@ static void check_tone(int format, unsigned grain, double amplitude) {
         nonzero += stats.nonzero;
         if (stats.peak > peak) peak = stats.peak;
         for (unsigned i = 0; i < grain; i++) {
-            double v[2];
-            for (unsigned c = 0; c < channels; c++)
-                v[c] = is_float ? ((float *)block)[i * channels + c] : ((int16_t *)block)[i * channels + c] / 32767.0;
-            if (channels == 2 && v[0] != v[1]) channels_equal = 0;
-            mono[done + i] = v[0];
+            double left = sample_at(block, is_float, channels, i, 0);
+            double right = channels == 2 ? sample_at(block, is_float, channels, i, 1) : left;
+            if (left != right) channels_equal = 0;
+            mono[done + i] = left;
         }
     }
     /* Silence before and after the tone, exactly. */
