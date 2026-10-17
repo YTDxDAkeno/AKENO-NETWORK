@@ -10,7 +10,7 @@
 #include "text.h"
 #include "ui.h"
 
-#define MAX_SIZES 20
+#define MAX_SIZES 32 /* (pixel size, weight) pairs; the screens use about 21 */
 #define GLYPH_SLOTS 512 /* open-addressing table per size, power of two */
 #define MAX_SHAPES 48
 #define SS 4             /* supersampling for shape coverage */
@@ -257,7 +257,10 @@ void akn_gfx_ring(akn_gfx *g, int cx, int cy, int radius, int thickness, uint32_
 static face_t *face(akn_gfx *g, int px, akn_font_weight weight) {
     for (int i = 0; i < g->nfaces; i++)
         if (g->faces[i].px == px && g->faces[i].weight == weight) return &g->faces[i];
-    if (g->nfaces == MAX_SIZES || px < 6 || px > 200) return NULL;
+    if (g->nfaces == MAX_SIZES || px < 6 || px > 200) {
+        g->glyph_misses++; /* reported: text in this size cannot be drawn */
+        return NULL;
+    }
     face_t *f = &g->faces[g->nfaces];
     memset(f, 0, sizeof(*f));
     const stbtt_fontinfo *font = &g->font[weight];
@@ -270,7 +273,10 @@ static face_t *face(akn_gfx *g, int px, akn_font_weight weight) {
     f->line_height = (int)ceilf((ascent - descent + gap) * f->scale);
     int size = px <= 32 ? 512 : 1024;
     f->atlas = make_texture(g->r, size, size, NULL);
-    if (!f->atlas) return NULL;
+    if (!f->atlas) {
+        g->glyph_misses++;
+        return NULL;
+    }
     akn_packer_init(&f->packer, size, size, 2);
     g->nfaces++;
     return f;

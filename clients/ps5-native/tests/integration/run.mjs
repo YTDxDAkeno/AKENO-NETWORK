@@ -211,6 +211,7 @@ async function main() {
     check(new RegExp(` ${b}=[1-9]`).test(report), `report: ${b} press counted`);
   }
   check(/Attached\/removed: 2 \/ 1 events/.test(report), 'report: unplug and re-plug seen');
+  check(report.includes('Glyph misses:     0'), 'every screen visited, no text lost in the glyph cache');
   check(log.includes('controller.removed'), 'log: controller removal');
   check(log.includes('audio.heard: test 1: HEARD'), 'log: heard answer');
   check(log.includes('ui.screen: controller'), 'log: screens');

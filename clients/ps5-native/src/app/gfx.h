@@ -43,7 +43,7 @@ void akn_gfx_logo(akn_gfx *g, int x, int y, int size);
 /* The full-screen background (built once). */
 void akn_gfx_background(akn_gfx *g);
 
-/* Glyphs that could not be cached because an atlas was full (diagnostics). */
+/* Glyphs or font sizes that could not be cached (atlas or size table full): text was lost. */
 unsigned long akn_gfx_glyph_misses(const akn_gfx *g);
 
 #endif

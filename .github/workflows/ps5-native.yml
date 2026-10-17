@@ -32,6 +32,8 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+          # package.json names pnpm; this job needs no packages (the UI test uses Node built-ins only).
+          package-manager-cache: false
 
       - name: Install build requirements
         run: |
