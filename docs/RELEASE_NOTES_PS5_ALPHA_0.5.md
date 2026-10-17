@@ -78,10 +78,18 @@ ELF's dynamic imports are **identical** to the `ae94851` build that ran on your 
   shortcut on; missing ones disable only that feature.
 - The release ELF contains no audio code and no microphone code exists in any build (CI checks).
 
+## Hardware results (firmware 12.20, 2026-10-17)
+See [PS5_HARDWARE_RESULTS_FW12.20.md](PS5_HARDWARE_RESULTS_FW12.20.md).
+- **Profiles: verified** — real avatar, banner, badges, game covers and gaming activity.
+- **Controller shortcut: does not work** — `scePadOpen` returns `0x809B0081` for every
+  combination before any input is read. It stays off by default.
+- **Audio lab v2: no tone was audible**; the system browser has no Web Audio API.
+
 ## Known limitations
-- The controller shortcut may not see any input while a game or the browser is in front; test B
-  decides. Fallbacks: notification button, PS button → browser, sending the ELF again.
-- PS5 audio from AKENO is not audible as of v1; v2 is a diagnostic build, not a fix.
+- The controller shortcut cannot open a controller on 12.20 (`0x809B0081`, see
+  [QUICK_ACCESS.md](QUICK_ACCESS.md)). Ways in: notification button, PS button → browser, sending
+  the ELF again.
+- PS5 audio from AKENO is not audible (v1 and v2 on 12.20); v2 is a diagnostic build, not a fix.
 - Badges show AKENO's own medallions (no badge images exist on the server).
 - Mutual friends: the server returns at most six.
 

@@ -79,6 +79,13 @@ them is compiled into AKENO except the declarations' shapes and constants:
 | ps5-payload-dev/SDL (`src/audio/ps5`, `src/joystick/ps5`) | `ee4c47d` | zlib | `sceAudioOut*` and `scePad*` declarations, formats, button bits, `PS5_PadData` layout |
 | ps5-payload-dev/websrv (`src/ps5/hbldr.c`) | `7748df9` | GPLv3+ | Declaration of `sceUserServiceGetForegroundUser`; read to understand how homebrew is launched (its method is **not** used) |
 | ps5-payload-dev/elfldr | `02cfe91` | GPLv3+ | Read to understand how payloads are spawned (no code used) |
+| boykopovar/AnyPS5 (`core/libs/prx/libSceAudioOut`, `libSceAudioIn`, `libScePad`, `libSceVoice`, `docs/dev/debt`, issue #3177) | `f517240` | GPL-2.0-or-later | Research only (2026-10-17): structure layouts, argument lists, error codes and a 13.60 hardware log are cited in the research docs. **No code copied**, nothing used in a build |
+| sainsaji/PS5-Audio-Passthrough-Research (`docs/FINDINGS.md`, `sample-app/src/platform/ps5`) | `c3be9c2` | GPL-3.0 | Research only (2026-10-17): hardware results on firmware 12.70, call sequences and return codes cited in the research docs. **No code copied**, nothing used in a build |
+
+AKENO is MIT-licensed. Code from the two GPL projects above could only be incorporated after a
+licence review, because the combined ELF would then have to be distributed under the GPL. Only
+facts needed for interoperability (function names, argument order, constants, observed return
+codes) are recorded, with their source.
 
 ## Runtime dependencies (shipped)
 
