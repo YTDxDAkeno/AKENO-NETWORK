@@ -326,7 +326,7 @@ await step('native-IPC daemon: starts, writes a private key and announces the in
   assert.match(key, /^[0-9a-f]{64}$/);
   assert.notEqual(key, daemon.token, 'a separate secret from the page');
   const instance = await local(daemon.port, 'GET', '/api/instance');
-  assert.deepEqual(instance.body, { app: 'akeno-network-console', version: '0.5.0-alpha', nativeIpc: 1 });
+  assert.deepEqual(instance.body, { app: 'akeno-network-console', version: '0.5.0-alpha', nativeIpc: 2 });
 });
 
 await step('native-IPC daemon: pairs through its page and the website; one realtime session', async () => {
@@ -344,7 +344,8 @@ await step('native interface: the key opens only the native allow-list', async (
   const K = { 'X-Akeno-Native-Key': key };
   const hello = await local(daemon.port, 'GET', '/api/native/hello', K);
   assert.equal(hello.status, 200, hello.text);
-  assert.equal(hello.body.ipc, 1);
+  assert.equal(hello.body.ipc, 2);
+  assert.equal(hello.body.writes, true);
   assert.equal(hello.body.paired, true);
   assert.equal(hello.body.onlineId, 'it_alice');
   assert.equal((await local(daemon.port, 'GET', '/api/native/hello')).body.error.code, 'SESSION_REQUIRED');
@@ -381,10 +382,41 @@ await step('native interface: the key opens only the native allow-list', async (
   const friends = await local(daemon.port, 'GET', '/api/v1/friends', K);
   assert.equal(friends.body.ok, true);
   assert.deepEqual(friends.body.data.friends.map((f) => f.onlineId), ['it_bob']);
+  // IPC 2: only the listed writes, each an existing device route; IDs are one plain path segment.
+  const uuid = '00000000-0000-4000-8000-000000000000';
+  for (const [method, path] of [['PATCH', '/api/v1/profile'], ['POST', '/api/v1/profile'], ['DELETE', `/api/v1/friends/${uuid}`],
+    ['POST', `/api/v1/parties/${uuid}/close`], ['POST', `/api/v1/parties/${uuid}/leader`], ['DELETE', `/api/v1/parties/${uuid}/members/${uuid}`],
+    ['POST', `/api/v1/groups/${uuid}/messages`], ['POST', `/api/v1/parties/${uuid}/messages`], ['POST', '/api/v1/friends/requests'],
+    ['POST', `/api/v1/invitations/${uuid}/cancel`], ['POST', '/api/v1/game-sessions'], ['DELETE', '/api/v1/devices/current'],
+    ['POST', `/api/v1/conversations/${uuid}/messages?x=1`], ['POST', '/api/v1/conversations/../messages'],
+    ['POST', `/api/v1/conversations/${uuid}/x/messages`], ['POST', '/api/v1/conversations//messages'], ['PUT', '/api/v1/presence/x'],
+    ['POST', `/api/v1/conversations/${'a'.repeat(65)}/read`], ['POST', '/api/v1/conversations/a%2Fb/read'], ['PATCH', '/api/v1/presence'],
+    ['POST', '/api/v1/conversationsX'], ['POST', '/api/v1/blocks']]) {
+    const refused = await local(daemon.port, method, path, K, {});
+    assert.equal(refused.status, 403, `${method} ${path}`);
+    assert.equal(refused.body.error.code, 'NOT_ALLOWED_FOR_NATIVE', `${method} ${path}`);
+  }
+  // An allowed write reaches the server, which applies its own rules (here: an invalid body).
+  const presence = await local(daemon.port, 'PUT', '/api/v1/presence', K, { status: 'away' });
+  assert.equal(presence.body.ok, true, presence.text);
+  assert.equal((await local(daemon.port, 'PUT', '/api/v1/presence', K, { status: 'online' })).body.ok, true);
+  const invalid = await local(daemon.port, 'POST', `/api/v1/conversations/${uuid}/messages`, K, { body: '' });
+  assert.equal(invalid.body.ok, false);
+  assert.equal(invalid.body.status, 400);
+  // The conversation open in AKENO Native.
+  assert.equal((await local(daemon.port, 'POST', '/api/native/focus', K, { conversationId: null })).status, 200);
+  assert.equal((await local(daemon.port, 'POST', '/api/native/focus', K, { conversationId: uuid })).status, 200);
+  for (const body of [{ conversationId: '../x' }, { conversationId: 5 }, {}, { conversationId: 'a'.repeat(40) }])
+    assert.equal((await local(daemon.port, 'POST', '/api/native/focus', K, body)).status, 400, JSON.stringify(body));
+  assert.equal((await local(daemon.port, 'POST', '/api/native/focus', { 'X-Akeno-Token': daemon.token }, { conversationId: null })).status, 404,
+    'the page has no focus route');
   // The page keeps working as before.
   assert.equal((await local(daemon.port, 'GET', '/api/state', { 'X-Akeno-Token': daemon.token })).status, 200);
   const daemonLog = readFileSync(join(akenoDir, 'akeno.log'), 'utf8');
-  assert.match(daemonLog, /native\.ready Native interface 1 ready/);
+  assert.match(daemonLog, /native\.ready Native interface 2 ready/);
+  assert.match(daemonLog, /native\.write PUT \/presence/);
+  // native.write names the route only (the client library's existing http.response line logs failed paths, as for the page).
+  for (const line of daemonLog.split('\n').filter((l) => l.includes('native.write'))) assert.ok(!line.includes(uuid), line);
   assert.match(daemonLog, /native\.denied/);
   assert.ok(!daemonLog.includes(key), 'the key is never logged');
 });
@@ -433,7 +465,7 @@ await step('AKENO Native: friends, live presence, a friend request and a profile
   assert.equal(upgrades.length, 1, `realtime sessions: ${upgrades.map((r) => r.line).join(' | ')}`);
   assert.ok(upgrades[0].at < startedAt, 'the session predates AKENO Native');
   const report = readFileSync(join(nativeDir, 'native-report.txt'), 'utf8');
-  assert.match(report, /State:\s+Connected to the AKENO daemon: protocol 1, daemon 0\.5\.0-alpha \([0-9a-f]+-linux-native-ipc\)/);
+  assert.match(report, /State:\s+Connected to the AKENO daemon: protocol 2, daemon 0\.5\.0-alpha \([0-9a-f]+-linux-native-ipc\)/);
   assert.match(report, /Friends:\s+1 \(1 online, 0 playing\), 1 incoming and 0 outgoing requests/);
   assert.match(report, /Requests:\s+\d+ \(GET only\), 0 errors, \d+ event polls, [1-9]\d* events, 1 connects/);
   assert.match(report, /Signed in as:\s+it_alice \(@it_alice\)/);
