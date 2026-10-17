@@ -96,6 +96,42 @@ licence review, because the combined ELF would then have to be distributed under
 facts needed for interoperability (function names, argument order, constants, observed return
 codes) are recorded, with their source.
 
+## AKENO NETWORK Native (`clients/ps5-native`, prototype 0.1)
+
+All AKENO Native sources (core, SDL layer, platform layer, logo rasteriser, PNG writer, tests,
+icon generator, launcher manifest) were written for this project (MIT). It reuses AKENO's own
+`clients/ps5/src` client library, `clients/ps5/app/audio_lab_pcm.c` and `game_detect.c` unchanged.
+The AKENO mark is drawn in code from the website's own SVG geometry. **No Sony fonts, sounds or
+interface assets** are used, and the app does not read the console's system fonts.
+
+Inputs of the PS5 build, pinned and checksummed by `clients/ps5-native/scripts/` (not vendored):
+
+| Component | Version | License | Use |
+| --- | --- | --- | --- |
+| ps5-payload-dev/SDL | `ee4c47d` (2.30.12, PS5 port) | zlib | Window, software renderer, PS5 video/audio/pad drivers; statically linked, unmodified |
+| stb_truetype (nothings/stb) | v1.26, `6e9f34d` | MIT or public domain (choice) | Glyph rasterisation |
+| Inter | 4.1 (Regular, Bold) | SIL Open Font License 1.1 | UI font, embedded in the ELF; the OFL text ships in the artifact (`LICENSE-Inter-OFL.txt`) |
+| mbedTLS, CA bundle, ps5-payload-sdk | as for the daemon (above) | Apache-2.0, MPL-2.0, GPLv3+ | TLS, trust roots, runtime and libc |
+
+As with the daemon, the distributed PS5 ELF links the SDK's GPLv3+ runtime, so the ELF is a
+combined work under the GPLv3; zlib, MIT/public-domain, Apache-2.0 and the OFL (for the embedded
+font, "bundled with software") are compatible with that. The complete corresponding source is this
+repository plus the pinned inputs named above.
+
+Read for the native architecture (2026-10-17), **no code copied**, nothing linked:
+
+| Project | Commit | License | What was learned |
+| --- | --- | --- | --- |
+| TheCriicom/omega-dashboard | `4a7ac76` | GPLv3+ | Native SDL2 dashboard launched as websrv homebrew; software renderer; background daemon whose audio is silent ("no audio session") while the foreground UI's is heard; OnionHEN plugin page |
+| ps5-payload-dev/websrv | `7748df9` | GPLv3+ | `hbldr`: how websrv-format homebrew becomes the foreground app (FAKE00000, `/system_ex`, kill, ptrace); `homebrew.js` format |
+| Rufidj/Nativehbl | `e948810` | GPLv3 | Native launcher UI that relies on the same bigapp path and the installed launcher PKG |
+| aydencharles/onionHEN, OnionBuddies/onionHEN-plugin-sdk, -boilerplate | `b23ffe6`, `72527c3`, `ae52b39` | GPLv3 | Plugin model (separate processes, versioned IPC, Toolbox UI), kstuff detection, ports, system changes |
+| etaHEN/etaHEN, GronedWaffel/etahen-11.00-13.60 | `dafa13b`, `89123ff` | GPLv3 | Toolbox, plugin containers, firmware profiles (12.20 listed), "do not load a second kstuff" |
+| ps5-payload-dev/SDL drivers (also linked, see above) | `ee4c47d` | zlib | Pad mapping, audio and video call sequences; the `connected` flag SDL ignores |
+
+An OnionHEN plugin (Phase 4) would link the plugin SDK's GPLv3 runtime and would therefore be a
+separate GPLv3 component; it is not started.
+
 ## Runtime dependencies (shipped)
 
 Server (`apps/server`, installed in the Docker image):

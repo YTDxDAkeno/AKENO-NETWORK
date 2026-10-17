@@ -1,6 +1,13 @@
 # PS5 audio: research, the silent tone, and audio labs v2 and v3
 
-Status 2026-10-17. **Audible output from AKENO on a PS5 is NOT confirmed**: audio lab v2 was tested
+> **Update 2026-10-17 — the foreground app is audible.** AKENO NETWORK Native 0.1
+> (`d094e62bcaf1-ps5`) ran as the foreground application on the same PS5 with 12.20, played four
+> `sceAudioOut` tone tests, and the owner heard all four
+> ([native results](PS5_NATIVE_HARDWARE_RESULTS_FW12.20.md)). So AKENO's audio is audible from the
+> **foreground** process. The background daemon's silence described below is still what that
+> process gets. Voice chat is not claimed.
+
+Status 2026-10-17 (background daemon). **Audible output from the AKENO daemon is NOT confirmed**: audio lab v2 was tested
 on firmware 12.20; the system accepted and paced every block and none of its tones was heard
 (below). Why is **not** established; the audio-focus idea below remains a hypothesis. Audio lab v3
 (this commit, not yet run on a PS5) adds one read-only measurement of AKENO's own port and an HTML

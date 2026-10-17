@@ -112,7 +112,8 @@ It uses the same `/data/akeno` and ignores the new settings keys.
 
 All in `/data/akeno` (mode 0700): `settings.json` (0600), `device.json` (device token, 0600),
 `akeno.log` / `.1` (redacted, rotated at 512 KiB), `instance.key` (removed on exit), optional
-`ca.pem`. **Uninstall:** Exit AKENO, unpair on the website, delete `/data/akeno`.
+`ca.pem`; only the native-IPC build (below) also writes `native.key` (0600, removed on exit).
+**Uninstall:** Exit AKENO, unpair on the website, delete `/data/akeno`.
 
 ## System functions used by AKENO code
 
@@ -176,5 +177,13 @@ clients/ps5/console/check-imports.sh clients/ps5/build-ps5
 ```
 
 The build is reproducible: rebuilding Alpha 0.1 (`592c23a`) locally and in CI gives exactly the
-SHA-256 of the build that ran on the console. Linux build and tests: `pnpm test:client` (see
+SHA-256 of the build that ran on the console.
+
+`make -C clients/ps5/console NATIVE_IPC=1` builds the separate **native-IPC daemon**
+(`build-ps5-native-ipc/akeno-network-ps5-native-ipc.elf`) for AKENO NETWORK Native: the same
+app plus a local interface for the native app, opened by a per-launch key in
+`/data/akeno/native.key` and limited to reading social data and the daemon's state
+([PS5_NATIVE_PHASE2.md](PS5_NATIVE_PHASE2.md)). All of it is under `#ifdef AKENO_NATIVE_IPC`;
+CI proves on every commit that the release ELF is still the hardware-tested RC file and that the
+native-IPC ELF imports exactly the same system functions. Linux build and tests: `pnpm test:client` (see
 [TESTING.md](TESTING.md)).

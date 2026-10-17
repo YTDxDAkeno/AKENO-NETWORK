@@ -94,6 +94,9 @@ static void route_state(akeno_app *app, ui_response *r) {
      * for the old audioLab flag, which this build no longer sends). */
     json_kv_str(b, "release", AKENO_APP_RELEASE " \xc2\xb7 Audio lab v3", 1);
     json_kv_int(b, "audioLabVersion", 3, 1);
+#elif defined(AKENO_NATIVE_IPC)
+    json_kv_str(b, "release", AKENO_APP_RELEASE " \xc2\xb7 native IPC", 1);
+    json_kv_int(b, "nativeIpc", AKENO_NATIVE_IPC_VERSION, 1);
 #else
     json_kv_str(b, "release", AKENO_APP_RELEASE, 1);
 #endif
@@ -769,6 +772,97 @@ static int is(const ui_request *req, const char *method, const char *path) {
     return strcmp(req->method, method) == 0 && strcmp(req->path, path) == 0;
 }
 
+#ifdef AKENO_NATIVE_IPC
+/* ---- AKENO Native (native-IPC build only, docs/PS5_NATIVE_PHASE2.md) ----------------------- */
+
+/* The only settings AKENO Native may change; the server, the console name and the experimental
+ * functions stay with the page. */
+static int native_settings_allowed(const akeno_json *root) {
+    static const char *const keys[] = { "notifyMessages", "notifySocial", "activityEnabled" };
+    if (!root || root->type != AKENO_JSON_OBJECT || root->count == 0) return 0;
+    for (const akeno_json *m = root->child; m; m = m->next) {
+        int known = 0;
+        for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++)
+            if (m->key && strcmp(m->key, keys[i]) == 0 && m->type == AKENO_JSON_BOOL) known = 1;
+        if (!known) return 0;
+    }
+    return 1;
+}
+
+static void route_native_hello(akeno_app *app, ui_response *r) {
+    akeno_buf *b = &r->body;
+    respond_json(r, 200);
+    pthread_mutex_lock(&app->lock);
+    akeno_buf_printf(b, "{\"ok\":true,\"ipc\":%d", AKENO_NATIVE_IPC_VERSION);
+    json_kv_str(b, "app", "akeno-network-console", 1);
+    json_kv_str(b, "version", AKENO_APP_VERSION, 1);
+    json_kv_str(b, "build", AKENO_BUILD_ID, 1);
+    json_kv_bool(b, "paired", app->paired, 1);
+    json_kv_str(b, "onlineId", app->online_id, 1);
+    json_kv_str(b, "realtime", app->rt_state, 1);
+    json_kv_int(b, "eventsNext", (long long)app->next_seq, 1);
+    akeno_buf_append_str(b, "}");
+    pthread_mutex_unlock(&app->lock);
+}
+
+/* Requests that carry X-Akeno-Native-Key: a smaller allow-list than the page's. Never pairing,
+ * unpairing, the server or console name, diagnostics actions, opening the browser or stopping. */
+static void route_native(akeno_app *app, const ui_request *req, const char *body, size_t body_len, ui_response *r) {
+    long long now = akeno_now_ms();
+    /* AKENO Native never sends an Origin; a request with one comes from a page. */
+    if (req->origin[0] || !ui_http_secret_equal(req->native_key, app->native_key)) {
+        app->native_denied++;
+        if (now - app->native_denied_logged_at > 10000) {
+            app->native_denied_logged_at = now;
+            app_log(app, AKENO_LOG_WARN, "native.denied", "Refused a request with a wrong native key (%lu so far).", app->native_denied);
+        }
+        respond_error(r, 403, "NATIVE_KEY_INVALID", "This native key is not valid. AKENO Native reads the new one after a daemon restart.");
+        return;
+    }
+    if (strcmp(req->method, "GET") != 0 && body_len > 0 && strncmp(req->content_type, "application/json", 16) != 0) {
+        respond_error(r, 415, "JSON_REQUIRED", "Send JSON.");
+        return;
+    }
+    if (!app->native_seen_at || now - app->native_seen_at > 60000)
+        app_log(app, AKENO_LOG_INFO, "native.connected", "AKENO Native is using the native interface.");
+    app->native_seen_at = now;
+    app->native_requests++;
+
+    akeno_json_doc *doc = NULL;
+    if (is(req, "GET", "/api/native/hello")) {
+        route_native_hello(app, r);
+    } else if (strncmp(req->path, "/api/v1/", 8) == 0) {
+        route_proxy(app, req, body, body_len, r);
+    } else if (is(req, "GET", "/api/state")) {
+        route_state(app, r);
+    } else if (is(req, "GET", "/api/events")) {
+        route_events(app, req, r);
+    } else if (is(req, "GET", "/api/inbox")) {
+        route_inbox(app, r);
+    } else if (is(req, "POST", "/api/inbox/seen")) {
+        doc = akeno_json_parse(body ? body : "", body_len, NULL, 0);
+        route_inbox_seen(app, akeno_json_root(doc), r);
+    } else if (is(req, "GET", "/api/media")) {
+        route_media(app, req, r);
+    } else if (is(req, "GET", "/api/local-art")) {
+        route_local_art(app, req, r);
+    } else if (is(req, "POST", "/api/settings")) {
+        doc = akeno_json_parse(body ? body : "", body_len, NULL, 0);
+        if (native_settings_allowed(akeno_json_root(doc))) route_settings(app, akeno_json_root(doc), r);
+        else respond_error(r, 403, "NOT_ALLOWED_FOR_NATIVE", "AKENO Native may only change notification and activity settings.");
+    } else if (is(req, "POST", "/api/realtime/reconnect")) {
+        pthread_mutex_lock(&app->lock);
+        app->rt_wanted = 1;
+        pthread_mutex_unlock(&app->lock);
+        app_tick(app);
+        respond_ok(r);
+    } else {
+        respond_error(r, 403, "NOT_ALLOWED_FOR_NATIVE", "AKENO Native does not use this function; use the AKENO page.");
+    }
+    akeno_json_free(doc);
+}
+#endif
+
 void app_route(akeno_app *app, const ui_request *req, const char *body, size_t body_len, ui_response *r) {
     app_tick(app);
     /* Static page: no secret needed, contains no data. */
@@ -812,7 +906,12 @@ void app_route(akeno_app *app, const ui_request *req, const char *body, size_t b
     }
     if (is(req, "GET", "/api/instance")) {
         respond_json(r, 200);
+#ifdef AKENO_NATIVE_IPC
+        akeno_buf_printf(&r->body, "{\"app\":\"akeno-network-console\",\"version\":\"" AKENO_APP_VERSION "\",\"nativeIpc\":%d}",
+                         AKENO_NATIVE_IPC_VERSION);
+#else
         akeno_buf_append_str(&r->body, "{\"app\":\"akeno-network-console\",\"version\":\"" AKENO_APP_VERSION "\"}");
+#endif
         return;
     }
     if (is(req, "POST", "/api/instance/show")) {
@@ -835,6 +934,12 @@ void app_route(akeno_app *app, const ui_request *req, const char *body, size_t b
         respond_error(r, 404, "NOT_FOUND", "Not found.");
         return;
     }
+#ifdef AKENO_NATIVE_IPC
+    if (req->native_key[0]) {
+        route_native(app, req, body, body_len, r);
+        return;
+    }
+#endif
     if (!ui_http_secret_equal(req->token, app->session_token)) {
         respond_error(r, 403, "SESSION_REQUIRED", "This page has expired. Start AKENO NETWORK again to open a new one.");
         return;

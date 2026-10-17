@@ -83,6 +83,10 @@ int ui_http_parse_request(const char *data, size_t len, ui_request *out) {
             rc = copy_field(out->token, sizeof(out->token), value, value_len);
         } else if (IS("x-akeno-instance-key")) {
             rc = copy_field(out->instance_key, sizeof(out->instance_key), value, value_len);
+#ifdef AKENO_NATIVE_IPC
+        } else if (IS("x-akeno-native-key")) {
+            rc = copy_field(out->native_key, sizeof(out->native_key), value, value_len);
+#endif
         } else if (IS("content-type")) {
             rc = copy_field(out->content_type, sizeof(out->content_type), value, value_len);
         } else if (IS("content-length")) {
