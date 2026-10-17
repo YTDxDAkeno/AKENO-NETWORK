@@ -13,10 +13,18 @@ static akn_item_id focused(const akn_ui *ui) {
     return akn_ui_focused(ui, &it) ? it.id : AKN_ITEM_COUNT;
 }
 
+/* Home with the focus on the Controller test tile (the first platform check). */
+static void init_at_controller(akn_ui *ui) {
+    akn_ui_init(ui);
+    ui->focus[AKN_SCREEN_HOME] = 6;
+}
+
 static void test_home_navigation(void) {
     akn_ui ui;
     akn_ui_init(&ui);
     CHECK(ui.screen == AKN_SCREEN_HOME);
+    CHECK(focused(&ui) == AKN_ITEM_FRIENDS); /* Phase 2.1: the social tiles come first */
+    press(&ui, AKN_BTN_DOWN, 0);
     CHECK(focused(&ui) == AKN_ITEM_CONTROLLER);
     press(&ui, AKN_BTN_RIGHT, 0);
     CHECK(focused(&ui) == AKN_ITEM_AUDIO);
@@ -43,12 +51,11 @@ static void test_home_navigation(void) {
 static void test_preview_tile(void) {
     akn_ui ui;
     akn_ui_init(&ui);
-    press(&ui, AKN_BTN_UP, 100);
-    for (int i = 0; i < 6; i++) press(&ui, AKN_BTN_LEFT, 100);
-    CHECK(focused(&ui) == AKN_ITEM_FRIENDS);
+    press(&ui, AKN_BTN_RIGHT, 100);
+    CHECK(focused(&ui) == AKN_ITEM_MESSAGES);
     CHECK(press(&ui, AKN_BTN_CROSS, 100) == AKN_CMD_NONE);
     CHECK(ui.screen == AKN_SCREEN_HOME);
-    CHECK_CONTAINS(ui.toast, "Friends arrives in Phase 2");
+    CHECK_CONTAINS(ui.toast, "Messages arrives in Phase 2.2");
     akn_input in;
     akn_input_init(&in);
     akn_ui_tick(&ui, &in, 100 + 3499);
@@ -62,7 +69,7 @@ static void test_preview_tile(void) {
 
 static void test_screens_and_back(void) {
     akn_ui ui;
-    akn_ui_init(&ui);
+    init_at_controller(&ui);
     CHECK(press(&ui, AKN_BTN_RIGHT, 0) == AKN_CMD_NONE);
     CHECK(press(&ui, AKN_BTN_CROSS, 0) == AKN_CMD_OPENED_SCREEN);
     CHECK(ui.screen == AKN_SCREEN_AUDIO);
@@ -105,7 +112,7 @@ static void test_screens_and_back(void) {
 
 static void test_controller_screen(void) {
     akn_ui ui;
-    akn_ui_init(&ui);
+    init_at_controller(&ui);
     CHECK(press(&ui, AKN_BTN_CROSS, 0) == AKN_CMD_OPENED_SCREEN);
     CHECK(ui.screen == AKN_SCREEN_CONTROLLER);
     /* Every button is shown, none acts; a short Circle does not leave. */
@@ -139,6 +146,7 @@ static void test_dialogs(void) {
     CHECK(press(&ui, AKN_BTN_CROSS, 0) == AKN_CMD_NONE);
     CHECK(ui.dialog == AKN_DIALOG_NONE);
     /* The Exit tile opens it with Exit focused. */
+    ui.focus[AKN_SCREEN_HOME] = 6;
     for (int i = 0; i < 6; i++) press(&ui, AKN_BTN_RIGHT, 0);
     CHECK(focused(&ui) == AKN_ITEM_EXIT);
     press(&ui, AKN_BTN_CROSS, 0);
@@ -165,13 +173,16 @@ static void test_layout(void) {
     /* Every focusable item lies inside the 1920x1080 screen and items do not overlap. */
     akn_ui ui;
     akn_ui_init(&ui);
+    akn_ui_set_list_count(&ui, AKN_SCREEN_FRIENDS, 50);
+    akn_ui_set_list_count(&ui, AKN_SCREEN_ACTIVITY, 50);
     for (int s = 0; s < AKN_SCREEN_COUNT; s++) {
         akn_item items[AKN_MAX_ITEMS];
         int n = akn_ui_screen_items(&ui, (akn_screen)s, items, AKN_MAX_ITEMS);
+        if (akn_ui_is_list((akn_screen)s)) CHECK(n == (s == AKN_SCREEN_FRIENDS ? AKN_FRIEND_ROWS_VISIBLE : AKN_ACTIVITY_ROWS_VISIBLE));
         for (int i = 0; i < n; i++) {
             akn_rect r = items[i].rect;
             CHECK(r.x >= 0 && r.y >= 0 && r.x + r.w <= AKN_SCREEN_W && r.y + r.h <= 990);
-            CHECK(items[i].title != NULL);
+            CHECK(items[i].title != NULL || items[i].id == AKN_ITEM_ROW);
             for (int j = i + 1; j < n; j++) {
                 akn_rect o = items[j].rect;
                 CHECK(r.x + r.w <= o.x || o.x + o.w <= r.x || r.y + r.h <= o.y || o.y + o.h <= r.y);
@@ -181,6 +192,74 @@ static void test_layout(void) {
     for (int i = 0; i < AKN_ITEM_COUNT; i++) CHECK((int)akn_item_from_name(akn_item_name((akn_item_id)i)) == i);
     for (int i = 0; i < AKN_SCREEN_COUNT; i++) CHECK((int)akn_screen_from_name(akn_screen_name((akn_screen)i)) == i);
     CHECK(akn_item_from_name("nope") == AKN_ITEM_COUNT);
+}
+
+static void test_lists(void) {
+    akn_ui ui;
+    akn_ui_init(&ui);
+    akn_item it;
+    CHECK(press(&ui, AKN_BTN_CROSS, 0) == AKN_CMD_OPENED_SCREEN); /* the Friends tile */
+    CHECK(ui.screen == AKN_SCREEN_FRIENDS);
+    CHECK(!akn_ui_focused(&ui, &it)); /* no rows yet */
+    CHECK(press(&ui, AKN_BTN_CROSS, 0) == AKN_CMD_NONE);
+    CHECK(press(&ui, AKN_BTN_DOWN, 0) == AKN_CMD_NONE);
+    akn_ui_set_list_count(&ui, AKN_SCREEN_FRIENDS, 20);
+    CHECK(akn_ui_focused(&ui, &it) && it.id == AKN_ITEM_ROW && it.index == 0);
+    for (int i = 0; i < 9; i++) press(&ui, AKN_BTN_DOWN, 0);
+    CHECK(ui.focus[AKN_SCREEN_FRIENDS] == 9);
+    CHECK(ui.list_top[AKN_SCREEN_FRIENDS] == 9 - AKN_FRIEND_ROWS_VISIBLE + 1); /* scrolled just enough */
+    CHECK(akn_ui_focused(&ui, &it) && it.index == 9);
+    akn_rect last = akn_ui_row_rect(&ui, AKN_SCREEN_FRIENDS, 9);
+    CHECK(last.y + last.h <= 990);
+    press(&ui, AKN_BTN_LEFT, 0); /* nothing to the side */
+    CHECK(ui.focus[AKN_SCREEN_FRIENDS] == 9);
+    press(&ui, AKN_BTN_R1, 0);
+    CHECK(ui.focus[AKN_SCREEN_FRIENDS] == 9 + AKN_FRIEND_ROWS_VISIBLE);
+    press(&ui, AKN_BTN_R1, 0);
+    CHECK(ui.focus[AKN_SCREEN_FRIENDS] == 19); /* clamped to the last row */
+    press(&ui, AKN_BTN_DOWN, 0);
+    CHECK(ui.focus[AKN_SCREEN_FRIENDS] == 19);
+    CHECK(ui.list_top[AKN_SCREEN_FRIENDS] == 20 - AKN_FRIEND_ROWS_VISIBLE);
+    for (int i = 0; i < 5; i++) press(&ui, AKN_BTN_L1, 0);
+    CHECK(ui.focus[AKN_SCREEN_FRIENDS] == 0 && ui.list_top[AKN_SCREEN_FRIENDS] == 0);
+    ui.focus[AKN_SCREEN_FRIENDS] = 19;
+    akn_ui_set_list_count(&ui, AKN_SCREEN_FRIENDS, 20);
+    akn_ui_set_list_count(&ui, AKN_SCREEN_FRIENDS, 5); /* the list shrank */
+    CHECK(ui.focus[AKN_SCREEN_FRIENDS] == 4 && ui.list_top[AKN_SCREEN_FRIENDS] == 0);
+    /* Cross opens that friend's profile; Circle comes back to the same row. */
+    CHECK(press(&ui, AKN_BTN_CROSS, 0) == AKN_CMD_OPEN_PROFILE);
+    CHECK(ui.screen == AKN_SCREEN_PROFILE && ui.open_row == 4 && ui.profile_back == AKN_SCREEN_FRIENDS);
+    CHECK(!akn_ui_focused(&ui, &it));
+    CHECK(press(&ui, AKN_BTN_TRIANGLE, 0) == AKN_CMD_REFRESH);
+    CHECK(press(&ui, AKN_BTN_CROSS, 0) == AKN_CMD_NONE);
+    CHECK(press(&ui, AKN_BTN_CIRCLE, 0) == AKN_CMD_OPENED_SCREEN);
+    CHECK(ui.screen == AKN_SCREEN_FRIENDS && ui.focus[AKN_SCREEN_FRIENDS] == 4);
+    CHECK(press(&ui, AKN_BTN_TRIANGLE, 0) == AKN_CMD_REFRESH);
+    CHECK(press(&ui, AKN_BTN_CIRCLE, 0) == AKN_CMD_OPENED_SCREEN);
+    CHECK(ui.screen == AKN_SCREEN_HOME && ui.dialog == AKN_DIALOG_NONE);
+    /* The Profile tile opens your own profile and returns to Home. */
+    ui.focus[AKN_SCREEN_HOME] = 3;
+    CHECK(focused(&ui) == AKN_ITEM_PROFILE);
+    CHECK(press(&ui, AKN_BTN_CROSS, 0) == AKN_CMD_OPEN_OWN_PROFILE);
+    CHECK(ui.screen == AKN_SCREEN_PROFILE && ui.profile_back == AKN_SCREEN_HOME);
+    CHECK(press(&ui, AKN_BTN_CIRCLE, 0) == AKN_CMD_OPENED_SCREEN);
+    CHECK(ui.screen == AKN_SCREEN_HOME);
+    /* Activity: rows of friends playing now. */
+    ui.focus[AKN_SCREEN_HOME] = 4;
+    CHECK(press(&ui, AKN_BTN_CROSS, 0) == AKN_CMD_OPENED_SCREEN);
+    CHECK(ui.screen == AKN_SCREEN_ACTIVITY);
+    akn_ui_set_list_count(&ui, AKN_SCREEN_ACTIVITY, 2);
+    press(&ui, AKN_BTN_DOWN, 0);
+    press(&ui, AKN_BTN_DOWN, 0);
+    CHECK(ui.focus[AKN_SCREEN_ACTIVITY] == 1);
+    CHECK(press(&ui, AKN_BTN_CROSS, 0) == AKN_CMD_OPEN_PROFILE);
+    CHECK(ui.open_row == 1 && ui.profile_back == AKN_SCREEN_ACTIVITY);
+    press(&ui, AKN_BTN_CIRCLE, 0);
+    CHECK(ui.screen == AKN_SCREEN_ACTIVITY);
+    /* Not list screens: no rows, no refresh. */
+    CHECK(!akn_ui_is_list(AKN_SCREEN_HOME) && !akn_ui_is_list(AKN_SCREEN_PROFILE));
+    akn_ui_set_list_count(&ui, AKN_SCREEN_HOME, 9);
+    CHECK(ui.list_count[AKN_SCREEN_HOME] == 0);
 }
 
 static void test_script(void) {
@@ -214,6 +293,27 @@ static void test_script(void) {
     CHECK(akn_script_parse("wait 1;wait 1;wait 1", steps, 2, err, sizeof(err)) == -1);
     CHECK(akn_script_parse(";;\n ;", steps, 16, err, sizeof(err)) == 0);
     CHECK(akn_script_parse(NULL, steps, 16, err, sizeof(err)) == 0);
+    /* Phase 2.1 steps */
+    n = akn_script_parse("until ipc 5000; until friends 100; until profile 1; until activity 7; expect text Ada  Lovelace;"
+                         "expect notext @it_carol; until text 9000 Playing Astro Bot; sync bob-online",
+                         steps, 16, err, sizeof(err));
+    CHECK(n == 8);
+    CHECK(steps[0].kind == AKN_STEP_UNTIL_IPC && steps[0].ms == 5000);
+    CHECK(steps[1].kind == AKN_STEP_UNTIL_FRIENDS && steps[2].kind == AKN_STEP_UNTIL_PROFILE && steps[3].kind == AKN_STEP_UNTIL_ACTIVITY);
+    CHECK(steps[4].kind == AKN_STEP_EXPECT_TEXT);
+    CHECK_STR(steps[4].arg, "Ada Lovelace"); /* words joined by single spaces */
+    CHECK(steps[5].kind == AKN_STEP_EXPECT_NOTEXT);
+    CHECK_STR(steps[5].arg, "@it_carol");
+    CHECK(steps[6].kind == AKN_STEP_UNTIL_TEXT && steps[6].ms == 9000);
+    CHECK_STR(steps[6].arg, "Playing Astro Bot");
+    CHECK(steps[7].kind == AKN_STEP_SYNC);
+    CHECK_STR(steps[7].arg, "bob-online");
+    CHECK(akn_script_parse("sync ../etc", steps, 16, err, sizeof(err)) == -1);
+    CHECK(akn_script_parse("sync", steps, 16, err, sizeof(err)) == -1);
+    CHECK(akn_script_parse("expect text", steps, 16, err, sizeof(err)) == -1);
+    CHECK(akn_script_parse("until text 100", steps, 16, err, sizeof(err)) == -1);
+    CHECK(akn_script_parse("until text soon hello", steps, 16, err, sizeof(err)) == -1);
+    CHECK(akn_script_parse("until weather 100", steps, 16, err, sizeof(err)) == -1);
 }
 
 void run_ui_tests(void) {
@@ -223,6 +323,7 @@ void run_ui_tests(void) {
     test_controller_screen();
     test_dialogs();
     test_layout();
+    test_lists();
 }
 
 void run_script_tests(void) { test_script(); }

@@ -6,9 +6,12 @@
 // AKN_IT_OUT=<dir> keeps the screenshots and the first run's report there (CI uploads them).
 //
 // Runs the real app with SDL's dummy video and audio drivers and drives it through SDL's
-// game-controller event path (a virtual controller), against a fake AKENO server and a fake AKENO
-// daemon on loopback. Checks the screens it reaches, the diagnostic report, the log, screenshot
-// pixels, the requests the server received, and that the daemon's files are never modified.
+// game-controller event path (a virtual controller), against a fake AKENO server and fake AKENO
+// daemons on loopback: one like the Alpha 0.5 release (no native interface) and one with the
+// native interface of docs/PS5_NATIVE_PHASE2.md (key file, hello, state, event ring, proxy).
+// Checks the screens it reaches and the text they show, the diagnostic report, the log, screenshot
+// pixels, every request the server and the daemons received (GET only), and that the daemon's
+// files are never modified. The end-to-end test with the real server and daemon is tests/e2e.
 // This proves the app logic on a PC only; it is not evidence about PS5 hardware.
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -97,6 +100,140 @@ function run(env, timeoutMs) {
   });
 }
 
+// Runs the app and answers its "sync" steps: the harness acts, then creates the file it waits for.
+function runWithSync(env, timeoutMs, actions, dir) {
+  return new Promise((resolve) => {
+    const child = spawn(app, [], {
+      env: { ...process.env, SDL_VIDEODRIVER: 'dummy', SDL_AUDIODRIVER: 'dummy', AKENO_NATIVE_WINDOW: '1920x1080', ...env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let output = '';
+    let pending = '';
+    child.stdout.on('data', (d) => {
+      output += d;
+      pending += d;
+      let nl;
+      while ((nl = pending.indexOf('\n')) >= 0) {
+        const line = pending.slice(0, nl);
+        pending = pending.slice(nl + 1);
+        const m = /^AKN-SYNC ([A-Za-z0-9_-]+)$/.exec(line);
+        if (m) {
+          if (actions[m[1]]) actions[m[1]]();
+          writeFileSync(join(dir, m[1]), 'ok');
+        }
+      }
+    });
+    child.stderr.on('data', (d) => (output += d));
+    const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
+    child.on('exit', (code, signal) => {
+      clearTimeout(timer);
+      resolve({ code, signal, output });
+    });
+  });
+}
+
+function presence(status, game = null, lastSeenAt = null) {
+  return {
+    status, lastSeenAt, activity: null,
+    game: game ? { titleId: game.titleId, name: game.name, platform: 'PS5', startedAt: new Date(Date.now() - 1200000).toISOString(), art: null } : null,
+  };
+}
+
+function friend(id, onlineId, displayName, pres, statusMessage = '') {
+  return { id, onlineId, displayName, avatar: 'default', avatarImage: null, deleted: false, friendsSince: '2026-01-01T00:00:00.000Z', statusMessage, presence: pres };
+}
+
+// A fake daemon with the native interface: its key file, the allow-listed routes the native app uses
+// and a proxy that answers like the AKENO server (shapes of packages/shared/src/contracts).
+async function startIpcDaemon(akenoDir) {
+  const keyPath = join(akenoDir, 'native.key');
+  const newKey = () => createHash('sha256').update(String(Math.random())).digest('hex');
+  const state = { key: newKey(), firstKey: '', seq: 5, events: [], requests: [], rejected: 0 };
+  state.firstKey = state.key;
+  writeFileSync(keyPath, state.key);
+  chmodSync(keyPath, 0o600);
+  const friends = [
+    friend('u-carol', 'carol', 'Carol', presence('offline', null, new Date(Date.now() - 7200000).toISOString())),
+    friend('u-bob', 'bob', 'Bob', presence('online', { titleId: 'PPSA01234', name: 'Astro Bot' }), 'Ranked tonight'),
+    friend('u-ada', 'ada', 'Ada Lovelace', presence('online')),
+    friend('u-dan', 'dan', 'Dan', presence('away')),
+  ];
+  for (let i = 1; i <= 8; i++) friends.push(friend(`u-f${i}`, `friend_0${i}`, `Friend ${i}`, presence('offline')));
+  const profile = (user, extra) => ({
+    user: { id: user.id, onlineId: user.onlineId, displayName: user.displayName, avatar: 'default', avatarImage: null, deleted: false },
+    presence: user.presence, joinedAt: '2026-03-01T10:00:00.000Z', restricted: false, bio: '', statusMessage: user.statusMessage || null,
+    favoriteGames: [], favoriteGameDetails: [], relationship: { state: 'friend', friendRequestId: null, canMessage: true, canSendFriendRequest: false },
+    mutualFriendCount: 1, mutualFriends: [], appearance: { theme: 'default', accentColor: null, bannerImage: null, bannerOverlay: false },
+    badges: [], featuredBadges: [], party: null, ...extra,
+  });
+  const me = { id: 'u1', onlineId: 'akeno_tester', displayName: 'Akeno Tester', presence: presence('online'), statusMessage: '' };
+  const activity = (games) => ({
+    current: null, historyVisible: true, playtimeVisible: true, recentSessions: [], trackedSince: '2026-01-01T00:00:00.000Z',
+    recentGames: games.map((g) => ({ titleId: g[0], name: g[1], platform: 'PS5', art: null, lastPlayedAt: new Date(Date.now() - 86400000).toISOString(),
+      lastSessionSeconds: 3600, totalSeconds: g[2], sessionCount: 3, playingNow: false })),
+    totals: { seconds: games.reduce((s, g) => s + g[2], 0), games: games.length, sessions: 3 * games.length },
+  });
+  const proxy = (res, data) => json(res, 200, { ok: true, status: 200, data });
+  function json(res, status, body) {
+    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(body));
+  }
+  const server = await listen((req, res) => {
+    const key = req.headers['x-akeno-native-key'];
+    state.requests.push({ method: req.method, path: req.url, key: !!key, origin: req.headers.origin });
+    if (req.method === 'GET' && req.url === '/api/instance') return json(res, 200, { app: 'akeno-network-console', version: '0.5.0-alpha', nativeIpc: 1 });
+    if (key !== state.key) {
+      state.rejected++;
+      return json(res, 403, { ok: false, error: { code: 'NATIVE_KEY_INVALID', message: 'This native key is not valid.' } });
+    }
+    const url = new URL(req.url, 'http://x');
+    if (url.pathname === '/api/native/hello')
+      return json(res, 200, { ok: true, ipc: 1, app: 'akeno-network-console', version: '0.5.0-alpha', build: 'fake-ps5-native-ipc', paired: true,
+        onlineId: 'akeno_tester', realtime: 'connected', eventsNext: state.seq });
+    if (url.pathname === '/api/state')
+      return json(res, 200, { ok: true, paired: true, onlineId: 'akeno_tester', realtime: { state: 'connected', detail: '', secondsInState: 9 },
+        activity: { enabled: true, state: 'playing', detail: '', titleId: 'CUSA00001', name: 'Test Game', startedAt: null, sinceSeconds: 600 },
+        inbox: { latestSeq: 0, seenSeq: 0, unseen: 0, latest: null }, eventsNext: state.seq });
+    if (url.pathname === '/api/events') {
+      const after = Number(url.searchParams.get('after') || 0);
+      return json(res, 200, { ok: true, next: state.seq, gap: false, events: state.events.filter((e) => e.seq > after) });
+    }
+    if (url.pathname === '/api/v1/friends') return proxy(res, { friends });
+    if (url.pathname === '/api/v1/friends/requests') return proxy(res, { incoming: [{ id: 'r1' }], outgoing: [] });
+    if (url.pathname === '/api/v1/users/akeno_tester') return proxy(res, profile(me, { relationship: { state: 'self' } }));
+    if (url.pathname === '/api/v1/users/akeno_tester/activity') return proxy(res, activity([['PPSA05555', 'Gran Turismo 7', 36000]]));
+    const m = /^\/api\/v1\/users\/(u-[a-z0-9]+)(\/activity)?$/.exec(url.pathname);
+    const f = m && friends.find((x) => x.id === m[1]);
+    if (f && m[2]) return proxy(res, activity([['PPSA01234', 'Astro Bot', 5400]]));
+    if (f) return proxy(res, profile(f, f.id === 'u-bob' ? { bio: 'Speedrunner.', favoriteGames: ['Astro Bot'], party: { id: 'p1', name: 'Friday crew', memberCount: 3, maxMembers: 8, isMember: false } } : {}));
+    return json(res, 403, { ok: false, error: { code: 'NOT_ALLOWED_FOR_NATIVE', message: 'no' } });
+  });
+  return {
+    port: server.address().port,
+    requests: state.requests,
+    get key() { return state.key; },
+    get firstKey() { return state.firstKey; },
+    get rejected() { return state.rejected; },
+    push(type, data) {
+      state.seq++;
+      state.events.push({ seq: state.seq, type, data });
+      if (type === 'presence.updated') {
+        const f = friends.find((x) => x.id === data.userId);
+        if (f) f.presence = data.presence;
+      }
+    },
+    rotateKey() { // a daemon restart: new key, new event counter
+      state.key = newKey();
+      state.seq = 1;
+      state.events = [];
+      friends.find((x) => x.id === 'u-dan').presence = presence('online', { titleId: 'PPSA07777', name: 'Kart Racer' });
+      writeFileSync(keyPath, state.key);
+      chmodSync(keyPath, 0o600);
+    },
+    close() { server.close(); },
+  };
+}
+
 const DEVICE_SELF = {
   device: {
     id: 'd1', name: 'Living room PS5', platform: 'ps5', clientVersion: '0.5.0-alpha',
@@ -136,7 +273,7 @@ async function main() {
   // Fake AKENO daemon: the liveness answer of clients/ps5/app/app_routes.c.
   const daemonRequests = [];
   const daemon = await listen((req, res) => {
-    daemonRequests.push(`${req.method} ${req.url} host=${req.headers.host}`);
+    daemonRequests.push(`${req.method} ${req.url} host=${req.headers.host} key=${req.headers['x-akeno-native-key'] ? 'yes' : 'no'}`);
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end('{"app":"akeno-network-console","version":"0.5.0-alpha"}');
   });
@@ -163,14 +300,19 @@ async function main() {
   // ---- Run 1: a full session ---------------------------------------------------------------------
   const script = [
     'until account 15000', 'wait 400',
-    'expect screen home', 'expect focus controller', `shot ${shots}/home.png`,
+    'expect screen home', 'expect focus friends', 'pad down', 'expect focus controller', 'wait 250', `shot ${shots}/home.png`,
     // spatial navigation with the D-pad and the stick (repeat via hold)
     'pad up', 'expect focus friends', 'pad down', 'expect focus controller',
     'padhold right 430', 'expect focus connection', // a press and one repeat (400 ms)
     'stick -30000 0 300', 'expect focus audio', // the left stick moves like the D-pad
     'pad left', 'expect focus controller',
-    // a preview tile only explains itself
-    'pad up', 'pad left', 'expect focus friends', 'pad cross', 'expect screen home', 'pad down', 'expect focus controller',
+    // a later Phase 2 tile only explains itself
+    'pad up', 'pad right', 'expect focus messages', 'pad cross', 'expect screen home', 'expect text Messages arrives in Phase 2.2',
+    'pad left', 'pad down', 'expect focus controller',
+    // the release daemon has no native interface: Friends says so and what to do
+    'pad up', 'pad cross', 'expect screen friends', 'until ipc 10000', 'wait 300',
+    'expect text This AKENO daemon has no native interface', 'expect text akeno-network-ps5-native-ipc.elf', `shot ${shots}/friends-release-daemon.png`,
+    'pad circle', 'expect screen home', 'pad down', 'expect focus controller',
     // controller test: every button shows, hold circle to return
     // (SDL's virtual controller has no touchpad mapping on a PC; the PS5 driver maps it as b4)
     'pad cross', 'expect screen controller', 'pad triangle', 'pad square', 'pad l1', 'pad r1', 'pad options', 'press touchpad',
@@ -229,8 +371,9 @@ async function main() {
   check(readdirSync(akenoDir).sort().join(',') === before.files, 'no file added to the daemon folder');
   check(serverRequests.length >= 2, `server contacted (${serverRequests.length})`);
   check(serverRequests.every((r) => r === 'GET /api/v1/devices/current token'), `only GET /devices/current: ${serverRequests.join(' | ')}`);
-  check(daemonRequests.length >= 2 && daemonRequests.every((r) => r === `GET /api/instance host=127.0.0.1:${daemon.address().port}`),
-    `daemon: only the liveness probe: ${daemonRequests.join(' | ')}`);
+  check(daemonRequests.length >= 2 && daemonRequests.every((r) => r === `GET /api/instance host=127.0.0.1:${daemon.address().port} key=no`),
+    `release daemon: only the liveness probe, never a key: ${daemonRequests.join(' | ')}`);
+  check(report.includes('State:            This AKENO daemon has no native interface: version 0.5.0-alpha'), 'report: release daemon recognised');
 
   // Screenshots: real 1920x1080 frames with the expected content.
   const home = readPng(join(shots, 'home.png'));
@@ -254,8 +397,10 @@ async function main() {
       ...env,
       AKENO_NATIVE_DAEMON_PORT: '1',
       AKENO_NATIVE_SIM_AUDIO: 'open',
-      AKENO_NATIVE_SCRIPT: ['until account 15000', 'press right', 'press cross', 'press cross', 'until audio 10000', 'wait 200',
-        'expect dialog none', 'expect screen audio', 'press circle', 'press circle', 'expect dialog exit', 'press left', 'press cross'].join(';'),
+      AKENO_NATIVE_SCRIPT: ['until account 15000', 'press down', 'press right', 'press cross', 'press cross', 'until audio 10000', 'wait 200',
+        'expect dialog none', 'expect screen audio', 'press circle', 'press up', 'press left', 'press cross', 'until ipc 10000', 'wait 300',
+        'expect screen friends', 'expect text The AKENO daemon is not running', 'press circle', 'press circle', 'expect dialog exit',
+        'press left', 'press cross'].join(';'),
     },
     60000,
   );
@@ -268,6 +413,88 @@ async function main() {
   check(report2.includes('AKENO daemon:     Not running'), 'run 2: daemon absent');
   check(sha256(credentialPath) === before.credential && statSync(credentialPath).mtimeMs === before.credentialMtime,
     'run 2: the credential survives a 401 untouched');
+
+  // ---- Run 4: the native-IPC daemon (Phase 2.1) ----------------------------------------------------
+  const ipc = await startIpcDaemon(akenoDir);
+  serverRequests.length = 0;
+  respond401 = false;
+  const ipcEnv = { ...env, AKENO_NATIVE_DAEMON_PORT: String(ipc.port), AKENO_NATIVE_SYNC_DIR: root };
+  const script4 = [
+    'until ipc 10000', 'until friends 10000', 'wait 300', 'expect text Live from the AKENO daemon', 'expect text 3 ONLINE',
+    `shot ${shots}/home-ipc.png`,
+    // Friends: sorted (online and playing first), details of the focused friend, scrolling
+    'pad cross', 'expect screen friends', 'until friends 10000', 'wait 300', 'expect focus row',
+    'expect text Bob', 'expect text Playing Astro Bot', 'expect text Ranked tonight', 'expect text 1 friend request waiting',
+    'expect text 1–7 of 12', `shot ${shots}/friends.png`,
+    'padhold down 900', 'pad r1', 'expect text 6–12 of 12', 'pad l1', 'pad l1', 'expect text 1–7 of 12',
+    // a friend's profile and back to the same row
+    'pad cross', 'expect screen profile', 'until profile 10000', 'wait 300', 'expect text Speedrunner.', 'expect text Friday crew (3 of 8)',
+    'expect text Astro Bot', 'expect text @bob', `shot ${shots}/profile.png`, 'pad triangle', 'until profile 10000',
+    'pad circle', 'expect screen friends', 'expect text Bob',
+    // a realtime presence change arrives through the daemon's event ring
+    'expect notext Playing Zeta Racer', 'sync carol-online', 'until text 8000 Playing Zeta Racer', 'pad circle', 'expect screen home',
+    'expect text 4 ONLINE',
+    // your own profile, from Home
+    'pad right', 'pad right', 'pad right', 'expect focus profile', 'pad cross', 'expect screen profile', 'until profile 10000', 'wait 300',
+    'expect text @akeno_tester', 'expect text you', 'pad circle', 'expect screen home',
+    // Activity: this console's game (daemon detection), your games, friends playing now
+    'pad right', 'expect focus activity', 'pad cross', 'expect screen activity', 'until activity 10000', 'wait 300',
+    'expect text Playing Test Game', 'expect text YOUR RECENT GAMES', 'expect text Gran Turismo 7', 'expect text FRIENDS PLAYING NOW',
+    `shot ${shots}/activity.png`, 'pad down', 'pad cross', 'expect screen profile', 'until profile 10000', 'wait 300', 'expect text @carol',
+    'pad circle', 'expect screen activity', 'pad circle', 'expect screen home',
+    // the daemon restarts with a new key: AKENO Native reads it again and carries on
+    // (Dan's new game is only served by the restarted daemon, so seeing it proves the reconnect.)
+    'sync rotate-key', 'pad left', 'pad left', 'pad left', 'pad left', 'expect focus friends', 'pad cross',
+    'until text 15000 Playing Kart Racer', 'pad circle', 'expect text Live from the AKENO daemon',
+    // connection screen names the interface
+    'pad down', 'pad right', 'pad right', 'expect focus connection', 'pad cross', 'wait 300', 'expect text Connected to the AKENO daemon',
+    `shot ${shots}/connection-ipc.png`,
+    'pad circle', 'pad circle', 'expect dialog exit', 'pad left', 'pad cross',
+  ].join(';');
+  const r4 = await runWithSync({ ...ipcEnv, AKENO_NATIVE_SCRIPT: script4 }, 120000, {
+    'carol-online': () => ipc.push('presence.updated', { userId: 'u-carol', presence: presence('online', { titleId: 'PPSA09999', name: 'Zeta Racer' }) }),
+    'rotate-key': () => ipc.rotateKey(),
+  }, root);
+  check(r4.code === 0, `run 4 (native IPC) exits cleanly (code ${r4.code}, signal ${r4.signal})\n${r4.output.slice(-3000)}`);
+  const report4 = readFileSync(join(nativeDir, 'native-report.txt'), 'utf8');
+  const log4 = readFileSync(join(nativeDir, 'native.log'), 'utf8');
+  check(report4.includes('State:            Connected to the AKENO daemon: protocol 1, daemon 0.5.0-alpha (fake-ps5-native-ipc)'), 'report 4: IPC state');
+  check(/Friends:\s+12 \(4 online, 3 playing\), 1 incoming and 0 outgoing requests/.test(report4), `report 4: friend counts\n${report4}`);
+  check(/Requests:\s+\d+ \(GET only\), \d+ errors, \d+ event polls, [1-9]\d* events, 2 connects/.test(report4), `report 4: request counters\n${report4}`);
+  check(log4.includes('ipc.state: Connected to the AKENO daemon'), 'log 4: connected');
+  check(log4.includes('social.friends: 12 friends, 3 online, 1 incoming requests'), 'log 4: counts, no names');
+  for (const text of [report4, log4]) {
+    for (const secret of [ipc.firstKey, ipc.key]) check(!text.includes(secret), 'native key never in report or log');
+    for (const name of ['Ada Lovelace', '@bob', 'Speedrunner', 'Zeta Racer', 'Kart Racer', 'Friday crew']) check(!text.includes(name), `no other person's data in report or log (${name})`);
+  }
+  const methods = new Set(ipc.requests.map((r) => r.method));
+  check(methods.size === 1 && methods.has('GET'), `Phase 2.1 sends GET only: ${[...methods]}`);
+  check(ipc.requests.every((r) => !r.origin), 'no Origin header on native requests');
+  check(ipc.requests.filter((r) => r.path !== '/api/instance').every((r) => r.key), 'every interface request carries the native key');
+  check(ipc.requests.filter((r) => r.path === '/api/instance').every((r) => !r.key), 'the liveness probe never carries the key');
+  const proxied = ipc.requests.filter((r) => r.path.startsWith('/api/v1/')).map((r) => r.path);
+  check(proxied.includes('/api/v1/friends') && proxied.includes('/api/v1/friends/requests') && proxied.includes('/api/v1/users/u-bob') &&
+    proxied.includes('/api/v1/users/u-bob/activity') && proxied.includes('/api/v1/users/akeno_tester') &&
+    proxied.includes('/api/v1/users/akeno_tester/activity') && proxied.includes('/api/v1/users/u-carol'), `proxied paths: ${proxied.join(' ')}`);
+  check(ipc.requests.some((r) => r.path.startsWith('/api/events?after=')), 'the event ring is polled');
+  check(ipc.requests.filter((r) => r.path === '/api/native/hello').length === 2, 'hello once, and once more after the key changed');
+  check(ipc.rejected >= 1 && ipc.rejected <= 3, `old key refused briefly, then the new one used (${ipc.rejected} refusals)`);
+  check(serverRequests.every((r) => r === 'GET /api/v1/devices/current token'), `the server saw only the connection check: ${serverRequests.join(' | ')}`);
+  check(readdirSync(akenoDir).sort().join(',') === [...before.files.split(','), 'native.key'].sort().join(','), 'AKENO Native added nothing to the daemon folder');
+  check(sha256(credentialPath) === before.credential && sha256(settingsPath) === before.settings, 'run 4: daemon files unchanged');
+  const friendsShot = readPng(join(shots, 'friends.png'));
+  check(near(friendsShot.pixel(96 - 5 + 1, 290 + 40), [0x4f, 0x7c, 0xff], 40), 'friends: focus ring on the first row');
+  const av = friendsShot.pixel(96 + 50 - 24, 290 + 42);
+  check(Math.max(...av.slice(0, 3)) - Math.min(...av.slice(0, 3)) > 60, `friends: a coloured avatar is drawn (${av})`);
+
+  // ---- Run 5: an unsafe key file is not used --------------------------------------------------------
+  ipc.requests.length = 0;
+  chmodSync(join(akenoDir, 'native.key'), 0o644);
+  const r5 = await run({ ...ipcEnv, AKENO_NATIVE_SCRIPT: ['until ipc 10000', 'pad cross', 'wait 300', 'expect text native key file is not private',
+    'expect text not a private file', 'pad circle', 'pad circle', 'pad left', 'pad cross'].join(';') }, 60000);
+  check(r5.code === 0, `run 5 (unsafe key) exits cleanly (code ${r5.code})\n${r5.output.slice(-2000)}`);
+  check(ipc.requests.every((r) => !r.key), 'run 5: a key from an unsafe file is never sent');
+  ipc.close();
 
   // ---- Run 3: a broken script fails the run ------------------------------------------------------
   const r3 = await run({ ...env, AKENO_NATIVE_SCRIPT: 'expect screen audio' }, 30000);

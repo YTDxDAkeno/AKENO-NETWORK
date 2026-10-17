@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MAX_WORDS 4
+#define MAX_WORDS 24
 
 static int parse_int(const char *s, int lo, int hi, int *out) {
     if (!s || !*s) return -1;
@@ -14,6 +14,18 @@ static int parse_int(const char *s, int lo, int hi, int *out) {
     if (*end || v < lo || v > hi) return -1;
     *out = (int)v;
     return 0;
+}
+
+/* Joins words[from..n) with single spaces into out. */
+static int join(char **words, int from, int n, char *out, size_t len) {
+    size_t o = 0;
+    out[0] = '\0';
+    for (int i = from; i < n; i++) {
+        int w = snprintf(out + o, len - o, "%s%s", i > from ? " " : "", words[i]);
+        if (w < 0 || (size_t)w >= len - o) return -1;
+        o += (size_t)w;
+    }
+    return o ? 0 : -1;
 }
 
 static int parse_line(char *line, akn_step *st, char *err, size_t err_len) {
@@ -50,6 +62,18 @@ static int parse_line(char *line, akn_step *st, char *err, size_t err_len) {
         st->kind = AKN_STEP_SHOT;
         if (n != 2) FAIL("shot <file.png>");
         snprintf(st->arg, sizeof(st->arg), "%s", words[1]);
+    } else if (strcmp(cmd, "expect") == 0 && n >= 3 && (strcmp(words[1], "text") == 0 || strcmp(words[1], "notext") == 0)) {
+        st->kind = words[1][0] == 't' ? AKN_STEP_EXPECT_TEXT : AKN_STEP_EXPECT_NOTEXT;
+        if (join(words, 2, n, st->arg, sizeof(st->arg)) != 0) FAIL("expect %s <text>", words[1]);
+    } else if (strcmp(cmd, "until") == 0 && n >= 4 && strcmp(words[1], "text") == 0) {
+        st->kind = AKN_STEP_UNTIL_TEXT;
+        if (parse_int(words[2], 1, 600000, &st->ms) || join(words, 3, n, st->arg, sizeof(st->arg)) != 0) FAIL("until text <ms> <text>");
+    } else if (strcmp(cmd, "sync") == 0) {
+        st->kind = AKN_STEP_SYNC;
+        if (n != 2) FAIL("sync <label>");
+        for (const char *c = words[1]; *c; c++)
+            if (!isalnum((unsigned char)*c) && *c != '-' && *c != '_') FAIL("sync labels use letters, digits, - and _");
+        snprintf(st->arg, sizeof(st->arg), "%s", words[1]);
     } else if (strcmp(cmd, "expect") == 0) {
         if (n != 3) FAIL("expect screen|dialog|focus <name>");
         if (strcmp(words[1], "screen") == 0) st->kind = AKN_STEP_EXPECT_SCREEN;
@@ -58,10 +82,14 @@ static int parse_line(char *line, akn_step *st, char *err, size_t err_len) {
         else FAIL("expect screen|dialog|focus <name>");
         snprintf(st->arg, sizeof(st->arg), "%s", words[2]);
     } else if (strcmp(cmd, "until") == 0) {
-        if (n != 3 || parse_int(words[2], 1, 600000, &st->ms)) FAIL("until audio|account <ms>");
+        if (n != 3 || parse_int(words[2], 1, 600000, &st->ms)) FAIL("until audio|account|ipc|friends|profile|activity <ms>");
         if (strcmp(words[1], "audio") == 0) st->kind = AKN_STEP_UNTIL_AUDIO;
         else if (strcmp(words[1], "account") == 0) st->kind = AKN_STEP_UNTIL_ACCOUNT;
-        else FAIL("until audio|account <ms>");
+        else if (strcmp(words[1], "ipc") == 0) st->kind = AKN_STEP_UNTIL_IPC;
+        else if (strcmp(words[1], "friends") == 0) st->kind = AKN_STEP_UNTIL_FRIENDS;
+        else if (strcmp(words[1], "profile") == 0) st->kind = AKN_STEP_UNTIL_PROFILE;
+        else if (strcmp(words[1], "activity") == 0) st->kind = AKN_STEP_UNTIL_ACTIVITY;
+        else FAIL("until audio|account|ipc|friends|profile|activity <ms>");
     } else if (strcmp(cmd, "quit") == 0) {
         st->kind = AKN_STEP_QUIT;
         if (n != 1) FAIL("quit takes no argument");

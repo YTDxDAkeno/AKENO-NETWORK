@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "akeno/akeno.h"
 #include "embed.h"
@@ -296,6 +297,84 @@ static void poll_pad_status(akn_app *app, uint64_t now) {
     app->pad_status = st;
 }
 
+/* ---- Social screens ---------------------------------------------------------------------------- */
+
+#define FRIENDS_STALE_MS 30000
+
+/* Once per frame: row counts for the list screens, and the focus stays on the same friend when
+ * the list is reloaded or reordered by a presence change. */
+static void sync_social(akn_app *app) {
+    SDL_LockMutex(app->lock);
+    akn_social *s = &app->social;
+    akn_ui *ui = &app->ui;
+    if (s->friends_gen != app->focus_friend_gen) {
+        int i = s->friends && app->focus_friend_id[0] ? akn_friends_find(s->friends, app->focus_friend_id) : -1;
+        if (i >= 0) ui->focus[AKN_SCREEN_FRIENDS] = i;
+        app->focus_friend_gen = s->friends_gen;
+    }
+    akn_ui_set_list_count(ui, AKN_SCREEN_FRIENDS, s->friends ? s->friends->count : 0);
+    akn_ui_set_list_count(ui, AKN_SCREEN_ACTIVITY, akn_social_playing_count(s));
+    int f = ui->focus[AKN_SCREEN_FRIENDS];
+    if (s->friends && f >= 0 && f < s->friends->count) snprintf(app->focus_friend_id, sizeof(app->focus_friend_id), "%s", s->friends->items[f].id);
+    else app->focus_friend_id[0] = '\0';
+    SDL_UnlockMutex(app->lock);
+}
+
+static void opened_social_screen(akn_app *app) {
+    SDL_LockMutex(app->lock);
+    akn_social *s = &app->social;
+    unsigned want = s->ipc == AKN_IPC_READY ? 0 : AKN_WANT_RECONNECT;
+    if (app->ui.screen == AKN_SCREEN_FRIENDS &&
+        (s->friends_load != AKN_LOAD_OK || akn_platform_now_ms() - s->friends_at > FRIENDS_STALE_MS))
+        want |= AKN_WANT_FRIENDS;
+    if (app->ui.screen == AKN_SCREEN_ACTIVITY) {
+        want |= AKN_WANT_STATE | AKN_WANT_OWN_ACTIVITY;
+        if (s->own_activity_load == AKN_LOAD_NONE) s->own_activity_load = AKN_LOAD_LOADING;
+        if (s->friends_load != AKN_LOAD_OK) want |= AKN_WANT_FRIENDS;
+    }
+    SDL_UnlockMutex(app->lock);
+    if (want) akn_social_want(app, want);
+}
+
+static void open_row_profile(akn_app *app, uint64_t now) {
+    char id[40] = "";
+    SDL_LockMutex(app->lock);
+    akn_social *s = &app->social;
+    int row = app->ui.open_row;
+    int i = app->ui.profile_back == AKN_SCREEN_ACTIVITY ? akn_social_playing_index(s, row) : row;
+    if (s->friends && i >= 0 && i < s->friends->count) snprintf(id, sizeof(id), "%s", s->friends->items[i].id);
+    SDL_UnlockMutex(app->lock);
+    if (!id[0]) {
+        akn_ui_open_screen(&app->ui, app->ui.profile_back);
+        akn_ui_toast(&app->ui, "That friend is no longer in the list.", now, 2500);
+        return;
+    }
+    akn_logf(&app->log, AKN_LOG_INFO, "ui.profile", "a friend's profile (from %s)", akn_screen_name(app->ui.profile_back));
+    akn_social_open_profile(app, id, 0);
+}
+
+static void open_own_profile(akn_app *app) {
+    char handle[48];
+    SDL_LockMutex(app->lock);
+    snprintf(handle, sizeof(handle), "%s", app->social.daemon.online_id[0] ? app->social.daemon.online_id : app->account.online_id);
+    SDL_UnlockMutex(app->lock);
+    akn_logf(&app->log, AKN_LOG_INFO, "ui.profile", "your own profile");
+    if (handle[0]) akn_social_open_profile(app, handle, 1);
+    else akn_social_want(app, AKN_WANT_RECONNECT);
+}
+
+static void refresh_screen(akn_app *app, uint64_t now) {
+    unsigned want = AKN_WANT_RECONNECT;
+    if (app->ui.screen == AKN_SCREEN_FRIENDS) want |= AKN_WANT_FRIENDS;
+    else if (app->ui.screen == AKN_SCREEN_PROFILE) want |= AKN_WANT_PROFILE;
+    else if (app->ui.screen == AKN_SCREEN_ACTIVITY) want |= AKN_WANT_STATE | AKN_WANT_OWN_ACTIVITY | AKN_WANT_FRIENDS;
+    SDL_LockMutex(app->lock);
+    if (app->social.ipc == AKN_IPC_READY) want &= ~(unsigned)AKN_WANT_RECONNECT;
+    SDL_UnlockMutex(app->lock);
+    akn_social_want(app, want);
+    akn_ui_toast(&app->ui, "Loading again...", now, 1500);
+}
+
 /* ---- Commands ---------------------------------------------------------------------------------- */
 
 static void set_heard(akn_app *app, akn_heard heard) {
@@ -341,7 +420,11 @@ static void run_command(akn_app *app, akn_cmd cmd, uint64_t now) {
             SDL_UnlockMutex(app->lock);
             if (never) start_net_check(app);
         }
+        opened_social_screen(app);
         break;
+    case AKN_CMD_OPEN_PROFILE: open_row_profile(app, now); break;
+    case AKN_CMD_OPEN_OWN_PROFILE: open_own_profile(app); break;
+    case AKN_CMD_REFRESH: refresh_screen(app, now); break;
     }
 }
 
@@ -501,14 +584,65 @@ static const char *run_script(akn_app *app, uint64_t now) {
             break;
         }
         case AKN_STEP_UNTIL_AUDIO:
-        case AKN_STEP_UNTIL_ACCOUNT: {
+        case AKN_STEP_UNTIL_ACCOUNT:
+        case AKN_STEP_UNTIL_IPC:
+        case AKN_STEP_UNTIL_FRIENDS:
+        case AKN_STEP_UNTIL_PROFILE:
+        case AKN_STEP_UNTIL_ACTIVITY: {
             if (app->step_phase == 0) app->step_until = now + (uint64_t)st->ms, app->step_phase = 1;
             SDL_LockMutex(app->lock);
-            int done = st->kind == AKN_STEP_UNTIL_AUDIO ? (!app->audio_running && !app->audio_done && app->audio_count > 0)
-                                                        : (!app->net_running && app->account.checks > 0);
+            const akn_social *s = &app->social;
+            int done;
+            const char *what;
+            switch (st->kind) {
+            case AKN_STEP_UNTIL_AUDIO:
+                done = !app->audio_running && !app->audio_done && app->audio_count > 0, what = "audio";
+                break;
+            case AKN_STEP_UNTIL_ACCOUNT: done = !app->net_running && app->account.checks > 0, what = "account"; break;
+            case AKN_STEP_UNTIL_IPC: done = s->ipc != AKN_IPC_UNCHECKED, what = "ipc"; break;
+            case AKN_STEP_UNTIL_FRIENDS:
+                done = (s->friends_load == AKN_LOAD_OK || s->friends_load == AKN_LOAD_ERROR) && !(s->want & AKN_WANT_FRIENDS), what = "friends";
+                break;
+            case AKN_STEP_UNTIL_PROFILE:
+                done = (s->profile_load == AKN_LOAD_OK || s->profile_load == AKN_LOAD_ERROR) && !(s->want & AKN_WANT_PROFILE), what = "profile";
+                break;
+            default:
+                done = (s->own_activity_load == AKN_LOAD_OK || s->own_activity_load == AKN_LOAD_ERROR) &&
+                       !(s->want & AKN_WANT_OWN_ACTIVITY),
+                what = "activity";
+                break;
+            }
             SDL_UnlockMutex(app->lock);
             if (done) next = 1;
-            else if (now >= app->step_until) script_fail(app, "timed out waiting for %s", st->kind == AKN_STEP_UNTIL_AUDIO ? "audio" : "account");
+            else if (now >= app->step_until) script_fail(app, "timed out waiting for %s", what);
+            break;
+        }
+        case AKN_STEP_EXPECT_TEXT:
+        case AKN_STEP_EXPECT_NOTEXT: {
+            int found = akn_gfx_capture_contains(app->gfx, st->arg);
+            if (found != (st->kind == AKN_STEP_EXPECT_TEXT))
+                script_fail(app, "%s \"%s\" on screen", found ? "unexpected" : "missing", st->arg);
+            next = 1;
+            break;
+        }
+        case AKN_STEP_UNTIL_TEXT:
+            if (app->step_phase == 0) app->step_until = now + (uint64_t)st->ms, app->step_phase = 1;
+            if (app->frames > 0 && akn_gfx_capture_contains(app->gfx, st->arg)) next = 1;
+            else if (now >= app->step_until) script_fail(app, "timed out waiting for \"%s\" on screen", st->arg);
+            break;
+        case AKN_STEP_SYNC: {
+            char path[600];
+            snprintf(path, sizeof(path), "%s/%s", app->options.sync_dir ? app->options.sync_dir : ".", st->arg);
+            if (app->step_phase == 0) {
+                printf("AKN-SYNC %s\n", st->arg);
+                fflush(stdout);
+                app->step_until = now + 60000;
+                app->step_phase = 1;
+            } else if (access(path, F_OK) == 0) {
+                next = 1;
+            } else if (now >= app->step_until) {
+                script_fail(app, "no answer to sync %s", st->arg);
+            }
             break;
         }
         case AKN_STEP_QUIT:
@@ -664,12 +798,15 @@ int akn_app_run(const akn_options *options, int *opened_devices) {
     if (!app->pad && SDL_NumJoysticks() == 0) akn_logf(&app->log, AKN_LOG_INFO, "controller.none", "no controller attached yet");
 
     start_net_check(app);
+    if (akn_social_start(app) != 0) akn_logf(&app->log, AKN_LOG_ERROR, "social.start", "the social screens are unavailable");
+    if (options->script) akn_gfx_capture_enable(app->gfx);
 
     app->last_frame_ms = akn_platform_now_ms();
     while (!app->quit) {
         uint64_t now = akn_platform_now_ms();
         SDL_Event e;
         while (SDL_PollEvent(&e)) handle_event(app, &e, now);
+        sync_social(app);
         const char *shot = app->step_count ? run_script(app, now) : NULL;
         akn_input_tick(&app->input, &app->queue, now);
         akn_input_event ev;
@@ -686,6 +823,7 @@ int akn_app_run(const akn_options *options, int *opened_devices) {
         poll_pad_status(app, now);
 
         uint64_t t0 = akn_platform_now_us();
+        akn_gfx_capture_begin_frame(app->gfx);
         akn_screens_draw(app, now);
         double ms = (akn_platform_now_us() - t0) / 1000.0;
         app->frames++;
@@ -701,8 +839,9 @@ int akn_app_run(const akn_options *options, int *opened_devices) {
     if (app->audio_thread) SDL_WaitThread(app->audio_thread, NULL);
     app->audio_thread = NULL;
     collect_audio(app, akn_platform_now_ms());
+    int social_done = akn_social_stop(app);
     SDL_LockMutex(app->lock);
-    int net_busy = app->net_running;
+    int net_busy = app->net_running || !social_done;
     SDL_UnlockMutex(app->lock);
     akn_logf(&app->log, AKN_LOG_INFO, "app.stop", "%lu frames, average draw %.1f ms%s", app->frames, app->frame_ms_avg,
              app->script_failed ? "; test script FAILED" : "");
@@ -714,12 +853,14 @@ int akn_app_run(const akn_options *options, int *opened_devices) {
     SDL_DestroyWindow(app->window);
     int code = app->script_failed ? 3 : app->exit_code;
     if (net_busy) {
-        /* A connection check is still inside its (bounded) timeouts: let the process end take it
-         * instead of waiting; its memory and the log stay valid until then. */
-        SDL_DetachThread(app->net_thread);
+        /* A connection check or a daemon request is still inside its (bounded) timeouts: let the
+         * process end take it instead of waiting; its memory and the log stay valid until then. */
+        if (app->net_thread) SDL_DetachThread(app->net_thread);
         return code;
     }
     if (app->net_thread) SDL_WaitThread(app->net_thread, NULL);
+    if (app->social_cond) SDL_DestroyCond(app->social_cond);
+    free(app->social.friends);
     SDL_Quit();
     akeno_global_cleanup();
     akn_log_close(&app->log);

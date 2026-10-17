@@ -104,6 +104,26 @@ void akn_report_build(akn_app *app, char *out, size_t out_len) {
         acc.error_code, acc.duration_ms);
     add(&b, "Written by AKENO Native in the daemon's folder: nothing (read-only use)\n");
 
+    /* Phase 2.1: counts and states only; other people's names never go into the report. */
+    add(&b, "\n[Native interface]\n");
+    SDL_LockMutex(app->lock);
+    const akn_social *s = &app->social;
+    add(&b, "State:            %s%s%s\n", akn_ipc_state_text(s->ipc), s->ipc_detail[0] ? ": " : "", s->ipc_detail);
+    add(&b, "Daemon:           protocol %d, version %s, build %s, paired %s\n", s->daemon.ipc, s->daemon.version[0] ? s->daemon.version : "-",
+        s->daemon.build[0] ? s->daemon.build : "-", s->daemon.paired ? "yes" : "no");
+    add(&b, "Daemon realtime:  %s\n", s->daemon.realtime[0] ? s->daemon.realtime : "-");
+    add(&b, "Game detection:   %s%s\n", s->daemon.activity_state[0] ? s->daemon.activity_state : "-",
+        s->daemon.console_game.present ? " (a game is running)" : "");
+    if (s->friends)
+        add(&b, "Friends:          %d (%d online, %d playing), %d incoming and %d outgoing requests%s\n", s->friends->count, s->friends->online,
+            s->friends->playing, s->friends->incoming_requests, s->friends->outgoing_requests, s->friends->truncated ? ", list cut" : "");
+    else add(&b, "Friends:          not loaded%s%s\n", s->friends_error[0] ? ": " : "", s->friends_error);
+    add(&b, "Profile:          %s\n", s->profile_load == AKN_LOAD_OK ? (s->profile_own ? "own profile loaded" : "a friend's profile loaded")
+                                      : s->profile_load == AKN_LOAD_ERROR ? s->profile_error : "not opened");
+    add(&b, "Requests:         %lu (GET only), %lu errors, %lu event polls, %lu events, %lu connects\n", s->requests, s->errors,
+        s->event_polls, s->events, s->reconnects);
+    SDL_UnlockMutex(app->lock);
+
     add(&b, "\n[Recent log]\n");
     char lines[AKN_LOG_RING][AKN_LOG_LINE];
     int n = akn_log_recent(&app->log, lines, AKN_LOG_RING);

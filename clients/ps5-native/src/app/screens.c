@@ -194,7 +194,7 @@ static void top_bar(akn_app *app, const akn_account_view *acc) {
     tracked(g, 177, 74, 14, AKN_FONT_REGULAR, C_MUTED, "NETWORK", 6);
     akn_rect pill = { 360, 46, 210, 36 };
     akn_gfx_rrect(g, pill, 18, C_ACCENT_SOFT);
-    akn_gfx_text_center(g, pill.x, pill.w, 52, 18, AKN_FONT_BOLD, 0xFFB7C8FFu, "NATIVE PROTOTYPE");
+    akn_gfx_text_center(g, pill.x, pill.w, 52, 18, AKN_FONT_BOLD, 0xFFB7C8FFu, "NATIVE PREVIEW");
 
     int x = AKN_SCREEN_W - AKN_MARGIN_X;
     char text[120];
@@ -228,6 +228,13 @@ static void bottom_bar(akn_app *app) {
         prompt(app, &x, y, SYM_CIRCLE, "Hold 1 s to return");
     } else if (app->ui.screen == AKN_SCREEN_AUDIO && app->ui.audio_busy) {
         prompt(app, &x, y, SYM_CIRCLE, "Stop the tone");
+    } else if (app->ui.screen == AKN_SCREEN_PROFILE) {
+        prompt(app, &x, y, SYM_CIRCLE, "Back");
+        prompt(app, &x, y, SYM_TRIANGLE, "Reload");
+    } else if (akn_ui_is_list(app->ui.screen)) {
+        prompt(app, &x, y, SYM_CROSS, "Profile");
+        prompt(app, &x, y, SYM_CIRCLE, "Back");
+        prompt(app, &x, y, SYM_TRIANGLE, "Reload");
     } else {
         prompt(app, &x, y, SYM_CROSS, "Select");
         prompt(app, &x, y, SYM_CIRCLE, app->ui.screen == AKN_SCREEN_HOME ? "Exit" : "Back");
@@ -329,6 +336,393 @@ static void draw_items(akn_app *app, const akn_item *items, int n, int focused, 
         focus_ring(app, items[focused].rect, items[focused].kind == AKN_KIND_TILE ? 20 : 18, now);
 }
 
+/* ---- Social pieces (Phase 2.1) ------------------------------------------------------------------ */
+
+static uint32_t presence_color(akn_presence p) {
+    switch (p) {
+    case AKN_PRES_ONLINE: return C_SUCCESS;
+    case AKN_PRES_AWAY: return C_WARNING;
+    case AKN_PRES_DND: return C_DANGER;
+    default: return C_OFFLINE;
+    }
+}
+
+/* Initials on a colour picked from the user ID, with a presence dot. Pictures arrive in Phase 2.4. */
+static void avatar(akn_app *app, int cx, int cy, int r, const char *id, const char *display_name, const char *online_id,
+                   int show_presence, akn_presence p) {
+    static const uint32_t palette[] = { 0xFF3B5BDBu, 0xFF7048E8u, 0xFF0C8599u, 0xFF2B8A3Eu, 0xFFC2255Cu, 0xFFE8590Cu, 0xFF5F3DC4u, 0xFF1971C2u };
+    unsigned h = 2166136261u;
+    for (const char *c = id && id[0] ? id : online_id; c && *c; c++) h = (h ^ (unsigned char)*c) * 16777619u;
+    akn_gfx_disc(app->gfx, cx, cy, r, palette[h % (sizeof(palette) / sizeof(palette[0]))]);
+    char ini[8];
+    akn_initials(display_name, online_id, ini);
+    int px = r * 9 / 10;
+    akn_gfx_text_center(app->gfx, cx - r, 2 * r, cy - px * 6 / 10, px, AKN_FONT_BOLD, 0xFFFFFFFFu, ini);
+    if (show_presence) {
+        int dr = r / 4 > 7 ? r / 4 : 7;
+        int dx = cx + (int)(r * 0.72), dy = cy + (int)(r * 0.72);
+        akn_gfx_disc(app->gfx, dx, dy, dr + 4, 0xFF0D1323u);
+        akn_gfx_disc(app->gfx, dx, dy, dr, presence_color(p));
+    }
+}
+
+static void pill(akn_app *app, int x, int y, uint32_t bg, uint32_t fg, const char *text) {
+    int w = akn_gfx_text_width(app->gfx, 16, AKN_FONT_BOLD, text, strlen(text)) + 28;
+    akn_rect r = { x, y, w, 30 };
+    akn_gfx_rrect(app->gfx, r, 15, bg);
+    akn_gfx_text_center(app->gfx, r.x, r.w, r.y + 5, 16, AKN_FONT_BOLD, fg, text);
+}
+
+/* When the daemon's native interface is not available: what is wrong and what to do. */
+static void ipc_status_panel(akn_app *app, const akn_social *s, akn_rect p) {
+    akn_gfx *g = app->gfx;
+    panel(app, p);
+    int x = p.x + 44, y = p.y + 38, w = p.w - 88;
+    akn_gfx_text_fit(g, x, y, 34, AKN_FONT_BOLD, s->ipc == AKN_IPC_UNCHECKED ? C_INK : C_WARNING, akn_ipc_state_text(s->ipc), w);
+    y += 66;
+    char text[600];
+    switch (s->ipc) {
+    case AKN_IPC_UNCHECKED: snprintf(text, sizeof(text), "AKENO Native reads your friends through the AKENO daemon on this console."); break;
+    case AKN_IPC_NO_DAEMON:
+        snprintf(text, sizeof(text),
+                 "Start the AKENO daemon with your ELF loader as usual (the native-IPC build, akeno-network-ps5-native-ipc.elf, "
+                 "for these screens), then press Triangle. AKENO Native checks again every few seconds.");
+        break;
+    case AKN_IPC_NOT_SUPPORTED:
+        snprintf(text, sizeof(text),
+                 "The daemon that is running (%s) is the Alpha 0.5 release, which has no native interface. To use Friends, "
+                 "Profile and Activity here, stop it with \"Exit AKENO\" on its page and send akeno-network-ps5-native-ipc.elf "
+                 "from this build instead. The controller and audio tests and the connection check work with either daemon.",
+                 s->ipc_detail[0] ? s->ipc_detail : "an older version");
+        break;
+    case AKN_IPC_NO_KEY:
+        snprintf(text, sizeof(text), "The daemon has not written its key file (/data/akeno/native.key). Stop the daemon and start it again.");
+        break;
+    case AKN_IPC_UNSAFE_KEY:
+        snprintf(text, sizeof(text),
+                 "/data/akeno/native.key is not a private file holding a key (a link, readable by others, or wrong content), so "
+                 "AKENO Native does not use it. Stop the daemon and start it again: it writes a new key.");
+        break;
+    case AKN_IPC_KEY_REJECTED: snprintf(text, sizeof(text), "The daemon restarted and has a new key. Reconnecting..."); break;
+    case AKN_IPC_READY: snprintf(text, sizeof(text), "%s", s->ipc_detail); break;
+    }
+    akn_gfx_text_wrap(g, x, y, 26, AKN_FONT_REGULAR, C_MUTED, text, w, 38, 6);
+    akn_gfx_text_wrap(g, x, p.y + p.h - 84, 21, AKN_FONT_REGULAR, C_SUBTLE,
+                      "The daemon keeps the only connection to your AKENO server, your notifications and the game detection. "
+                      "AKENO Native only reads through it.",
+                      w, 30, 2);
+}
+
+static void centered_note(akn_app *app, akn_rect p, const char *title, const char *text) {
+    panel(app, p);
+    akn_gfx_text_center(app->gfx, p.x, p.w, p.y + p.h / 2 - 50, 32, AKN_FONT_BOLD, C_INK, title);
+    if (text) akn_gfx_text_center(app->gfx, p.x, p.w, p.y + p.h / 2 + 4, 24, AKN_FONT_REGULAR, C_MUTED, text);
+}
+
+static void friend_row(akn_app *app, akn_rect r, const akn_friend *f, int focused, long long now) {
+    akn_gfx *g = app->gfx;
+    akn_gfx_rrect(g, r, 18, focused ? 0xF21A2542u : C_SURFACE2);
+    akn_gfx_rrect_outline(g, r, 18, 1, focused ? C_LINE_STRONG : C_LINE);
+    avatar(app, r.x + 50, r.y + r.h / 2, 30, f->id, f->display_name, f->online_id, 1, f->presence.status);
+    int x = r.x + 100, w = r.w - 130;
+    int nw = akn_gfx_text_fit(g, x, r.y + 10, 27, AKN_FONT_BOLD, f->deleted ? C_SUBTLE : C_INK, f->display_name, w - 220);
+    char id[48];
+    snprintf(id, sizeof(id), "@%s", f->online_id);
+    akn_gfx_text_fit(g, x + nw + 14, r.y + 15, 21, AKN_FONT_REGULAR, C_SUBTLE, id, w - nw - 14);
+    char line[200];
+    akn_presence_line(&f->presence, now, line, sizeof(line));
+    akn_gfx_text_fit(g, x, r.y + 48, 22, AKN_FONT_REGULAR, f->presence.game.present ? 0xFFB7C8FFu : C_MUTED, line, w);
+}
+
+static void scroll_info(akn_app *app, akn_screen screen, int x_right, int y, int visible) {
+    int count = app->ui.list_count[screen], top = app->ui.list_top[screen];
+    if (count <= visible) return;
+    char text[64];
+    int last = top + visible < count ? top + visible : count;
+    snprintf(text, sizeof(text), "%d\xE2\x80\x93%d of %d  \xC2\xB7  L1/R1 page", top + 1, last, count);
+    int w = akn_gfx_text_width(app->gfx, 20, AKN_FONT_REGULAR, text, strlen(text));
+    akn_gfx_text(app->gfx, x_right - w, y, 20, AKN_FONT_REGULAR, C_SUBTLE, text);
+}
+
+static void draw_friends(akn_app *app, const akn_social *s, uint64_t now) {
+    akn_gfx *g = app->gfx;
+    long long unix_now = akn_platform_unix_time();
+    const akn_friend_list *list = s->friends;
+    char sub[200];
+    if (list) {
+        snprintf(sub, sizeof(sub), "%d online  \xC2\xB7  %d playing  \xC2\xB7  %d friend request%s waiting%s", list->online, list->playing,
+                 list->incoming_requests, list->incoming_requests == 1 ? "" : "s",
+                 list->incoming_requests ? " (answer them on the AKENO page)" : "");
+    } else {
+        snprintf(sub, sizeof(sub), "Your AKENO friends, live from the daemon on this console.");
+    }
+    screen_title(app, "Friends", sub);
+    akn_rect area = { AKN_MARGIN_X, 290, 1728, 660 };
+    if (s->ipc != AKN_IPC_READY && !list) {
+        ipc_status_panel(app, s, area);
+        return;
+    }
+    if (!list || list->count == 0) {
+        if (s->friends_load == AKN_LOAD_ERROR) centered_note(app, area, "Your friends could not be loaded", s->friends_error);
+        else if (!list) centered_note(app, area, "Loading your friends...", NULL);
+        else centered_note(app, area, "No friends yet", "Add friends on the AKENO website; they appear here right away.");
+        return;
+    }
+    int focus = app->ui.focus[AKN_SCREEN_FRIENDS];
+    akn_rect focus_rect = { 0, 0, 0, 0 };
+    for (int i = app->ui.list_top[AKN_SCREEN_FRIENDS]; i < list->count && i < app->ui.list_top[AKN_SCREEN_FRIENDS] + AKN_FRIEND_ROWS_VISIBLE; i++) {
+        akn_rect r = akn_ui_row_rect(&app->ui, AKN_SCREEN_FRIENDS, i);
+        friend_row(app, r, &list->items[i], i == focus && !app->ui.dialog, unix_now);
+        if (i == focus) focus_rect = r;
+    }
+    scroll_info(app, AKN_SCREEN_FRIENDS, AKN_MARGIN_X + 1000, 966, AKN_FRIEND_ROWS_VISIBLE);
+    if (s->ipc != AKN_IPC_READY)
+        akn_gfx_text(g, AKN_MARGIN_X, 966, 20, AKN_FONT_REGULAR, C_WARNING, "Not connected to the daemon: this list may be out of date.");
+
+    /* The focused friend */
+    akn_rect d = { 1136, 290, 688, 660 };
+    panel(app, d);
+    if (focus >= 0 && focus < list->count) {
+        const akn_friend *f = &list->items[focus];
+        int x = d.x + 40, w = d.w - 80, y = d.y + 40;
+        avatar(app, d.x + d.w / 2, y + 74, 74, f->id, f->display_name, f->online_id, 1, f->presence.status);
+        y += 176;
+        akn_gfx_text_center(g, d.x, d.w, y, 38, AKN_FONT_BOLD, C_INK, f->display_name);
+        char id[48];
+        snprintf(id, sizeof(id), "@%s", f->online_id);
+        akn_gfx_text_center(g, d.x, d.w, y + 52, 24, AKN_FONT_REGULAR, C_MUTED, id);
+        y += 110;
+        akn_gfx_disc(g, x + 8, y + 15, 8, presence_color(f->presence.status));
+        akn_gfx_text(g, x + 28, y, 26, AKN_FONT_BOLD, C_INK, akn_presence_label(f->presence.status));
+        y += 46;
+        char text[300];
+        if (f->presence.game.present) {
+            snprintf(text, sizeof(text), "Playing %s", akn_game_label(&f->presence.game));
+            akn_gfx_text_fit(g, x, y, 26, AKN_FONT_BOLD, 0xFFB7C8FFu, text, w);
+            y += 40;
+            if (f->presence.game.started_at > 0) {
+                char dur[40];
+                akn_format_duration(unix_now - f->presence.game.started_at, dur, sizeof(dur));
+                snprintf(text, sizeof(text), "for %s  \xC2\xB7  %s", dur, f->presence.game.title_id);
+                akn_gfx_text_fit(g, x, y, 22, AKN_FONT_REGULAR, C_MUTED, text, w);
+                y += 40;
+            }
+        } else if (f->presence.status == AKN_PRES_OFFLINE && f->presence.last_seen > 0) {
+            char ago[40];
+            akn_format_ago(f->presence.last_seen, unix_now, ago, sizeof(ago));
+            snprintf(text, sizeof(text), "Last seen %s", ago);
+            akn_gfx_text_fit(g, x, y, 24, AKN_FONT_REGULAR, C_MUTED, text, w);
+            y += 40;
+        } else if (f->presence.activity[0]) {
+            akn_gfx_text_fit(g, x, y, 24, AKN_FONT_REGULAR, C_MUTED, f->presence.activity, w);
+            y += 40;
+        }
+        if (f->status_message[0]) {
+            y += 10;
+            akn_gfx_text_wrap(g, x, y, 23, AKN_FONT_REGULAR, C_INK, f->status_message, w, 32, 3);
+        }
+        akn_gfx_text_center(g, d.x, d.w, d.y + d.h - 56, 21, AKN_FONT_REGULAR, C_SUBTLE, "Cross: open the profile  \xC2\xB7  Triangle: reload");
+    }
+    if (focus_rect.w && !app->ui.dialog) focus_ring(app, focus_rect, 18, now);
+}
+
+static void draw_profile(akn_app *app, const akn_social *s, uint64_t now) {
+    akn_gfx *g = app->gfx;
+    (void)now;
+    long long unix_now = akn_platform_unix_time();
+    akn_rect area = { AKN_MARGIN_X, 150, 1728, 800 };
+    if (!s->profile.online_id[0]) {
+        if (s->ipc != AKN_IPC_READY) ipc_status_panel(app, s, area);
+        else if (s->profile_load == AKN_LOAD_ERROR) centered_note(app, area, "The profile could not be loaded", s->profile_error);
+        else centered_note(app, area, "Loading the profile...", NULL);
+        return;
+    }
+    const akn_profile *p = &s->profile;
+    akn_rect head = { AKN_MARGIN_X, 136, 1728, 236 };
+    panel(app, head);
+    avatar(app, head.x + 132, head.y + head.h / 2, 84, p->id, p->display_name, p->online_id, 1, p->presence.status);
+    int x = head.x + 260, w = head.w - 300;
+    akn_gfx_text_fit(g, x, head.y + 30, 54, AKN_FONT_BOLD, C_INK, p->display_name, w);
+    char line[300];
+    const char *rel = strcmp(p->relationship, "self") == 0 ? "  \xC2\xB7  you" : strcmp(p->relationship, "friend") == 0 ? "  \xC2\xB7  friend" : "";
+    snprintf(line, sizeof(line), "@%s%s", p->online_id, rel);
+    akn_gfx_text_fit(g, x, head.y + 100, 26, AKN_FONT_REGULAR, C_MUTED, line, w);
+    akn_gfx_disc(g, x + 8, head.y + 158, 8, presence_color(p->presence.status));
+    akn_presence_line(&p->presence, unix_now, line, sizeof(line));
+    akn_gfx_text_fit(g, x + 26, head.y + 143, 26, AKN_FONT_BOLD, p->presence.game.present ? 0xFFB7C8FFu : C_INK, line, w - 26);
+    if (p->status_message[0]) akn_gfx_text_fit(g, x, head.y + 186, 23, AKN_FONT_REGULAR, C_MUTED, p->status_message, w);
+    if (s->profile_load == AKN_LOAD_ERROR) pill(app, head.x + head.w - 260, head.y + 24, 0x33F5A524u, C_WARNING, "NOT UPDATED");
+
+    /* About */
+    akn_rect about = { AKN_MARGIN_X, 396, 1000, 554 };
+    panel(app, about);
+    int ax = about.x + 40, aw = about.w - 80, ay = about.y + 30;
+    akn_gfx_text(g, ax, ay, 20, AKN_FONT_BOLD, C_SUBTLE, "ABOUT");
+    ay += 40;
+    if (p->restricted) {
+        akn_gfx_text_wrap(g, ax, ay, 24, AKN_FONT_REGULAR, C_MUTED, "Details are hidden by this person's privacy settings.", aw, 34, 2);
+        ay += 80;
+    } else if (p->bio[0]) {
+        int lines = akn_gfx_text_wrap(g, ax, ay, 24, AKN_FONT_REGULAR, C_INK, p->bio, aw, 34, 5);
+        ay += lines * 34 + 20;
+    } else {
+        akn_gfx_text(g, ax, ay, 24, AKN_FONT_REGULAR, C_SUBTLE, "No bio yet.");
+        ay += 54;
+    }
+    char text[400];
+    if (p->joined_at > 0) {
+        char ago[40];
+        akn_format_ago(p->joined_at, unix_now, ago, sizeof(ago));
+        snprintf(text, sizeof(text), "joined %s", ago);
+        ay = row(app, ax, ay, aw, "Member", 0, text);
+    }
+    if (strcmp(p->relationship, "self") != 0) {
+        snprintf(text, sizeof(text), "%d", p->mutual_friends);
+        ay = row(app, ax, ay, aw, "Mutual friends", 0, text);
+    }
+    snprintf(text, sizeof(text), "%d", p->badges);
+    ay = row(app, ax, ay, aw, "Badges", 0, text);
+    if (p->favorite_count) {
+        size_t o = 0;
+        text[0] = '\0';
+        for (int i = 0; i < p->favorite_count && o + 4 < sizeof(text); i++)
+            o += (size_t)snprintf(text + o, sizeof(text) - o, "%s%s", i ? ", " : "", p->favorites[i]);
+        ay = row(app, ax, ay, aw, "Favourite games", 0, text);
+    }
+    if (p->has_party) {
+        snprintf(text, sizeof(text), "%s (%d of %d)", p->party_name, p->party_members, p->party_max);
+        row(app, ax, ay, aw, "Party", C_VIOLET, text);
+    }
+
+    /* Games */
+    akn_rect games = { 1136, 396, 688, 554 };
+    panel(app, games);
+    int gx = games.x + 36, gw = games.w - 72, gy = games.y + 30;
+    akn_gfx_text(g, gx, gy, 20, AKN_FONT_BOLD, C_SUBTLE, "GAMES");
+    gy += 40;
+    const akn_activity *a = &s->profile_activity;
+    if (p->presence.game.present) {
+        snprintf(text, sizeof(text), "Now: %s", akn_game_label(&p->presence.game));
+        akn_gfx_text_fit(g, gx, gy, 26, AKN_FONT_BOLD, 0xFFB7C8FFu, text, gw);
+    } else {
+        akn_gfx_text(g, gx, gy, 24, AKN_FONT_REGULAR, C_MUTED, "Not playing right now");
+    }
+    gy += 54;
+    if (s->profile_activity_load == AKN_LOAD_OK && a->history_visible && a->recent_count) {
+        for (int i = 0; i < a->recent_count && i < 6; i++) {
+            const akn_recent_game *r = &a->recent[i];
+            akn_gfx_text_fit(g, gx, gy, 23, AKN_FONT_BOLD, C_INK, r->name[0] ? r->name : r->title_id, gw);
+            char ago[40], dur[40];
+            akn_format_ago(r->last_played, unix_now, ago, sizeof(ago));
+            if (r->playing_now) snprintf(text, sizeof(text), "playing now");
+            else if (r->total_seconds >= 0) {
+                akn_format_duration(r->total_seconds, dur, sizeof(dur));
+                snprintf(text, sizeof(text), "%s  \xC2\xB7  %s in total", ago, dur);
+            } else snprintf(text, sizeof(text), "%s", ago);
+            akn_gfx_text_fit(g, gx, gy + 30, 20, AKN_FONT_REGULAR, C_MUTED, text, gw);
+            gy += 70;
+        }
+    } else if (s->profile_activity_load == AKN_LOAD_OK) {
+        akn_gfx_text_wrap(g, gx, gy, 22, AKN_FONT_REGULAR, C_SUBTLE,
+                          a->history_visible ? "No games tracked yet." : "The game history is private.", gw, 30, 2);
+    } else if (s->profile_activity_load == AKN_LOAD_ERROR) {
+        akn_gfx_text(g, gx, gy, 22, AKN_FONT_REGULAR, C_SUBTLE, "Game history not available.");
+    }
+}
+
+static void draw_activity(akn_app *app, const akn_social *s, uint64_t now) {
+    akn_gfx *g = app->gfx;
+    long long unix_now = akn_platform_unix_time();
+    screen_title(app, "Activity", "This console, your games and your friends playing now. The AKENO daemon detects the games.");
+    if (s->ipc != AKN_IPC_READY && !s->daemon.ipc) {
+        ipc_status_panel(app, s, (akn_rect){ AKN_MARGIN_X, 290, 1728, 660 });
+        return;
+    }
+    char text[300];
+    /* This console */
+    akn_rect c = { AKN_MARGIN_X, 290, 840, 230 };
+    panel(app, c);
+    int x = c.x + 36, w = c.w - 72;
+    akn_gfx_text(g, x, c.y + 28, 20, AKN_FONT_BOLD, C_SUBTLE, "THIS CONSOLE");
+    const akn_daemon_info *d = &s->daemon;
+    if (d->console_game.present) {
+        snprintf(text, sizeof(text), "Playing %s", akn_game_label(&d->console_game));
+        akn_gfx_text_fit(g, x, c.y + 70, 34, AKN_FONT_BOLD, 0xFFB7C8FFu, text, w);
+        char dur[40];
+        akn_format_duration(d->console_game_seconds, dur, sizeof(dur));
+        snprintf(text, sizeof(text), "%s  \xC2\xB7  for %s", d->console_game.title_id, dur);
+        akn_gfx_text_fit(g, x, c.y + 124, 24, AKN_FONT_REGULAR, C_MUTED, text, w);
+    } else {
+        const char *st = d->activity_state;
+        const char *head = !d->activity_enabled || strcmp(st, "off") == 0 ? "Game detection is off"
+                           : strcmp(st, "permission-missing") == 0  ? "This console may not share games"
+                           : strcmp(st, "excluded") == 0             ? "This game is not shared (excluded)"
+                                                                     : "No game running";
+        akn_gfx_text_fit(g, x, c.y + 70, 34, AKN_FONT_BOLD, C_INK, head, w);
+        akn_gfx_text_wrap(g, x, c.y + 124, 22, AKN_FONT_REGULAR, C_MUTED,
+                          "Starting AKENO Native from the launcher closes a running game. Game detection is set on the AKENO page.",
+                          w, 32, 2);
+    }
+
+    /* Friends playing now */
+    akn_gfx_text(g, AKN_MARGIN_X, 552, 20, AKN_FONT_BOLD, C_SUBTLE, "FRIENDS PLAYING NOW");
+    int count = akn_social_playing_count(s), focus = app->ui.focus[AKN_SCREEN_ACTIVITY];
+    akn_rect focus_rect = { 0, 0, 0, 0 };
+    if (!count) {
+        akn_gfx_text(g, AKN_MARGIN_X, 600, 24, AKN_FONT_REGULAR, C_MUTED,
+                     s->friends ? "None of your friends is playing right now." : "Loading your friends...");
+    }
+    for (int row = app->ui.list_top[AKN_SCREEN_ACTIVITY]; row < count && row < app->ui.list_top[AKN_SCREEN_ACTIVITY] + AKN_ACTIVITY_ROWS_VISIBLE;
+         row++) {
+        int i = akn_social_playing_index(s, row);
+        if (i < 0 || !s->friends) break;
+        akn_rect r = akn_ui_row_rect(&app->ui, AKN_SCREEN_ACTIVITY, row);
+        friend_row(app, r, &s->friends->items[i], row == focus && !app->ui.dialog, unix_now);
+        if (row == focus) focus_rect = r;
+    }
+    scroll_info(app, AKN_SCREEN_ACTIVITY, AKN_MARGIN_X + 840, 552, AKN_ACTIVITY_ROWS_VISIBLE);
+
+    /* Your games */
+    akn_rect y = { 976, 290, 848, 660 };
+    panel(app, y);
+    int gx = y.x + 36, gw = y.w - 72, gy = y.y + 28;
+    akn_gfx_text(g, gx, gy, 20, AKN_FONT_BOLD, C_SUBTLE, "YOUR RECENT GAMES");
+    gy += 42;
+    const akn_activity *a = &s->own_activity;
+    if (s->own_activity_load == AKN_LOAD_OK) {
+        char dur[40];
+        if (a->total_seconds >= 0) {
+            akn_format_duration(a->total_seconds, dur, sizeof(dur));
+            snprintf(text, sizeof(text), "%d game%s, %d session%s, %s tracked", a->total_games, a->total_games == 1 ? "" : "s",
+                     a->total_sessions, a->total_sessions == 1 ? "" : "s", dur);
+        } else {
+            snprintf(text, sizeof(text), "%d game%s, %d session%s", a->total_games, a->total_games == 1 ? "" : "s", a->total_sessions,
+                     a->total_sessions == 1 ? "" : "s");
+        }
+        akn_gfx_text_fit(g, gx, gy, 22, AKN_FONT_REGULAR, C_MUTED, text, gw);
+        gy += 50;
+        if (!a->recent_count) akn_gfx_text(g, gx, gy, 24, AKN_FONT_REGULAR, C_SUBTLE, "No games tracked yet.");
+        for (int i = 0; i < a->recent_count && i < 7; i++) {
+            const akn_recent_game *r = &a->recent[i];
+            akn_gfx_text_fit(g, gx, gy, 24, AKN_FONT_BOLD, C_INK, r->name[0] ? r->name : r->title_id, gw - 200);
+            char ago[40];
+            akn_format_ago(r->last_played, unix_now, ago, sizeof(ago));
+            if (r->playing_now) snprintf(text, sizeof(text), "playing now");
+            else if (r->total_seconds >= 0) {
+                akn_format_duration(r->total_seconds, dur, sizeof(dur));
+                snprintf(text, sizeof(text), "%s  \xC2\xB7  %s", ago, dur);
+            } else snprintf(text, sizeof(text), "%s", ago);
+            akn_gfx_text_fit(g, gx, gy + 32, 20, AKN_FONT_REGULAR, C_MUTED, text, gw);
+            gy += 74;
+        }
+    } else if (s->own_activity_load == AKN_LOAD_ERROR) {
+        akn_gfx_text(g, gx, gy, 24, AKN_FONT_REGULAR, C_MUTED, "Your game history could not be loaded.");
+    } else {
+        akn_gfx_text(g, gx, gy, 24, AKN_FONT_REGULAR, C_MUTED, "Loading...");
+    }
+    if (focus_rect.w && !app->ui.dialog) focus_ring(app, focus_rect, 18, now);
+}
+
 /* ---- Screens ------------------------------------------------------------------------------------ */
 
 static const char *audio_summary(akn_app *app, uint32_t *color) {
@@ -382,14 +776,27 @@ static void draw_home(akn_app *app, const akn_account_view *acc, uint64_t now) {
     akn_gfx_disc(g, card.x + 40, card.y + 185, 7, ac);
     akn_gfx_text_fit(g, card.x + 60, card.y + 170, 24, AKN_FONT_REGULAR, C_INK, text, card.w - 90);
 
+    SDL_LockMutex(app->lock);
+    const akn_social *s = &app->social;
     akn_gfx_text(g, AKN_MARGIN_X, 396, 20, AKN_FONT_BOLD, C_SUBTLE, "AKENO SOCIAL");
-    akn_gfx_text(g, AKN_MARGIN_X + 186, 396, 20, AKN_FONT_REGULAR, C_SUBTLE, "Phase 2: your friends, messages and parties, natively");
+    akn_gfx_text(g, AKN_MARGIN_X + 186, 396, 20, AKN_FONT_REGULAR, s->ipc == AKN_IPC_READY ? C_SUBTLE : C_WARNING,
+                 s->ipc == AKN_IPC_READY ? "Live from the AKENO daemon on this console" : akn_ipc_state_text(s->ipc));
+    char badge[48] = "", playing[16] = "";
+    if (s->friends) snprintf(badge, sizeof(badge), "%d ONLINE", s->friends->online);
+    if (s->daemon.console_game.present) snprintf(playing, sizeof(playing), "PLAYING");
+    SDL_UnlockMutex(app->lock);
     akn_gfx_text(g, AKN_MARGIN_X, 696, 20, AKN_FONT_BOLD, C_SUBTLE, "NATIVE PLATFORM CHECKS");
-    akn_gfx_text(g, AKN_MARGIN_X + 296, 696, 20, AKN_FONT_REGULAR, C_SUBTLE, "Phase 1: prove controller, sound and connection on this console");
+    akn_gfx_text(g, AKN_MARGIN_X + 296, 696, 20, AKN_FONT_REGULAR, C_SUBTLE, "Controller, sound and connection on this console");
 
     akn_item items[AKN_MAX_ITEMS];
     int n = akn_ui_screen_items(&app->ui, AKN_SCREEN_HOME, items, AKN_MAX_ITEMS);
     draw_items(app, items, n, app->ui.dialog ? -1 : app->ui.focus[AKN_SCREEN_HOME], now);
+    for (int i = 0; i < n; i++) {
+        const char *label = items[i].id == AKN_ITEM_FRIENDS ? badge : items[i].id == AKN_ITEM_ACTIVITY ? playing : "";
+        if (!label[0]) continue;
+        int w = akn_gfx_text_width(g, 16, AKN_FONT_BOLD, label, strlen(label)) + 28;
+        pill(app, items[i].rect.x + items[i].rect.w - w - 22, items[i].rect.y + 22, 0x2622C55Eu, 0xFF86EFACu, label);
+    }
 }
 
 static void button_chip(akn_app *app, akn_rect r, const char *label, int down, int sym) {
@@ -565,6 +972,12 @@ static void draw_connection(akn_app *app, const akn_account_view *acc, int runni
     snprintf(text, sizeof(text), "%s%s%s", akn_daemon_state_text(acc->daemon), acc->daemon_version[0] ? "  \xC2\xB7  version " : "",
              acc->daemon_version);
     y = row(app, x, y, w, "AKENO daemon", acc->daemon == AKN_DAEMON_RUNNING ? C_SUCCESS : C_WARNING, text);
+    SDL_LockMutex(app->lock);
+    snprintf(text, sizeof(text), "%s%s%s", akn_ipc_state_text(app->social.ipc), app->social.ipc_detail[0] ? "  \xC2\xB7  " : "",
+             app->social.ipc_detail);
+    int ipc_ready = app->social.ipc == AKN_IPC_READY;
+    SDL_UnlockMutex(app->lock);
+    y = row(app, x, y, w, "Native interface", ipc_ready ? C_SUCCESS : C_WARNING, text);
     y = row(app, x, y, w, "Server", acc->server_desc && strcmp(acc->server_desc, "https (host hidden)") == 0 ? C_SUCCESS : C_WARNING,
             acc->server_desc ? acc->server_desc : "not checked");
     snprintf(text, sizeof(text), "%s%s", acc->credential_present ? "device credential present" : "no device credential",
@@ -669,6 +1082,15 @@ void akn_screens_draw(akn_app *app, uint64_t now) {
     case AKN_SCREEN_AUDIO: draw_audio(app, now); break;
     case AKN_SCREEN_CONNECTION: draw_connection(app, &acc, running, now); break;
     case AKN_SCREEN_SYSTEM: draw_system(app, now); break;
+    case AKN_SCREEN_FRIENDS:
+    case AKN_SCREEN_PROFILE:
+    case AKN_SCREEN_ACTIVITY:
+        SDL_LockMutex(app->lock); /* the worker replaces the data under the same lock */
+        if (app->ui.screen == AKN_SCREEN_FRIENDS) draw_friends(app, &app->social, now);
+        else if (app->ui.screen == AKN_SCREEN_PROFILE) draw_profile(app, &app->social, now);
+        else draw_activity(app, &app->social, now);
+        SDL_UnlockMutex(app->lock);
+        break;
     case AKN_SCREEN_COUNT: break;
     }
     bottom_bar(app);

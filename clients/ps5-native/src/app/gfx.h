@@ -46,4 +46,10 @@ void akn_gfx_background(akn_gfx *g);
 /* Glyphs or font sizes that could not be cached (atlas or size table full): text was lost. */
 unsigned long akn_gfx_glyph_misses(const akn_gfx *g);
 
+/* PC test scripts only: record the text runs drawn in each frame, so a script can check what is on
+ * the screen. Off unless enabled; begin_frame clears the record. */
+int akn_gfx_capture_enable(akn_gfx *g);
+void akn_gfx_capture_begin_frame(akn_gfx *g);
+int akn_gfx_capture_contains(const akn_gfx *g, const char *needle);
+
 #endif

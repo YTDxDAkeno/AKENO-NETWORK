@@ -16,108 +16,28 @@
 #include <unistd.h>
 
 #include "akeno/akeno.h"
+#include "ipc.h"
 #include "redact.h"
 
 #define DAEMON_REPLY_MAX 4096
-#define LOOPBACK_ADDR 0x7F000001u /* 127.0.0.1 (INADDR_LOOPBACK is BSD-only in strict POSIX mode) */
 #define DEVICE_RESPONSE_MAX (64 * 1024)
-
-static int wait_fd(int fd, short events, int timeout_ms) {
-    struct pollfd p = { fd, events, 0 };
-    int rc;
-    do rc = poll(&p, 1, timeout_ms);
-    while (rc < 0 && errno == EINTR);
-    return rc;
-}
-
-/* 1 when the header block has `name: value` (case-insensitive name and value). */
-static int header_has(const char *headers, const char *name, const char *value) {
-    size_t nl = strlen(name), vl = strlen(value);
-    for (const char *line = strstr(headers, "\r\n"); line; line = strstr(line + 2, "\r\n")) {
-        const char *h = line + 2;
-        if (strncasecmp(h, name, nl) != 0 || h[nl] != ':') continue;
-        h += nl + 1;
-        while (*h == ' ') h++;
-        if (strncasecmp(h, value, vl) == 0) return 1;
-    }
-    return 0;
-}
-
-/* Decodes a chunked body into out; returns its length (stops at the last chunk or bad input). */
-static size_t dechunk(const char *in, char *out, size_t out_len) {
-    size_t used = 0;
-    for (;;) {
-        char *end;
-        unsigned long size = strtoul(in, &end, 16);
-        if (end == in || strncmp(end, "\r\n", 2) != 0 || size == 0) break;
-        in = end + 2;
-        if (strlen(in) < size || used + size >= out_len) break;
-        memcpy(out + used, in, size);
-        used += size;
-        in += size;
-        if (strncmp(in, "\r\n", 2) != 0) break;
-        in += 2;
-    }
-    out[used] = '\0';
-    return used;
-}
 
 void akn_net_probe_daemon(int port, int timeout_ms, akn_account_view *view) {
     view->daemon = AKN_DAEMON_NOT_RUNNING;
     view->daemon_version[0] = '\0';
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return;
-    int flags = fcntl(fd, F_GETFL, 0);
-    if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons((unsigned short)port);
-    addr.sin_addr.s_addr = htonl(LOOPBACK_ADDR);
-    int rc = connect(fd, (struct sockaddr *)&addr, sizeof(addr));
-    if (rc != 0 && errno == EINPROGRESS) {
-        int err = 0;
-        socklen_t len = sizeof(err);
-        if (wait_fd(fd, POLLOUT, timeout_ms) > 0 && getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len) == 0 && err == 0) rc = 0;
-    }
-    if (rc != 0) {
-        close(fd);
+    view->daemon_ipc = 0;
+    akn_http_reply reply;
+    akn_loopback_get(port, "/api/instance", NULL, timeout_ms, DAEMON_REPLY_MAX, &reply);
+    if (!reply.connected) {
+        akn_http_reply_free(&reply);
         return;
     }
-    char request[160];
-    int n = snprintf(request, sizeof(request),
-                     "GET /api/instance HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nAccept: application/json\r\nConnection: close\r\n\r\n", port);
-    size_t sent = 0;
-    while (n > 0 && sent < (size_t)n) {
-        if (wait_fd(fd, POLLOUT, timeout_ms) <= 0) break;
-        ssize_t w = send(fd, request + sent, (size_t)n - sent, 0);
-        if (w <= 0) break;
-        sent += (size_t)w;
-    }
-    char reply[DAEMON_REPLY_MAX + 1];
-    size_t got = 0;
-    while (sent == (size_t)n && got < DAEMON_REPLY_MAX && wait_fd(fd, POLLIN, timeout_ms) > 0) {
-        ssize_t r = recv(fd, reply + got, DAEMON_REPLY_MAX - got, 0);
-        if (r <= 0) break;
-        got += (size_t)r;
-    }
-    close(fd);
-    reply[got] = '\0';
     /* Something answered on the port: it is the daemon only if it says so. */
     view->daemon = AKN_DAEMON_OTHER;
-    if (strncmp(reply, "HTTP/1.1 200", 12) != 0 && strncmp(reply, "HTTP/1.0 200", 12) != 0) return;
-    char *body = strstr(reply, "\r\n\r\n");
-    if (!body) return;
-    *body = '\0';
-    body += 4;
-    char decoded[DAEMON_REPLY_MAX + 1];
-    size_t len = strlen(body);
-    if (header_has(reply, "transfer-encoding", "chunked")) {
-        len = dechunk(body, decoded, sizeof(decoded));
-        body = decoded;
-    }
-    if (akn_parse_daemon_instance(body, len, view->daemon_version, sizeof(view->daemon_version)) == 0)
+    if (reply.status == 200 &&
+        akn_parse_daemon_instance(reply.body, reply.len, view->daemon_version, sizeof(view->daemon_version), &view->daemon_ipc) == 0)
         view->daemon = AKN_DAEMON_RUNNING;
+    akn_http_reply_free(&reply);
 }
 
 static void library_log(void *user, akeno_log_level level, const char *event, const char *message) {

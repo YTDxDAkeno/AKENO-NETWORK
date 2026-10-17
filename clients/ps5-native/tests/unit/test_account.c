@@ -125,10 +125,10 @@ static void test_parse(void) {
 
     char version[32];
     const char *inst = "{\"app\":\"akeno-network-console\",\"version\":\"0.5.0-alpha\"}";
-    CHECK(akn_parse_daemon_instance(inst, strlen(inst), version, sizeof(version)) == 0);
+    CHECK(akn_parse_daemon_instance(inst, strlen(inst), version, sizeof(version), NULL) == 0);
     CHECK_STR(version, "0.5.0-alpha");
     const char *other = "{\"app\":\"websrv\"}";
-    CHECK(akn_parse_daemon_instance(other, strlen(other), version, sizeof(version)) == -1);
+    CHECK(akn_parse_daemon_instance(other, strlen(other), version, sizeof(version), NULL) == -1);
 
     long long t;
     CHECK(akn_parse_iso8601("1970-01-01T00:00:00Z", &t) == 0 && t == 0);

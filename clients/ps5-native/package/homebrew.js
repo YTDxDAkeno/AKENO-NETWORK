@@ -6,7 +6,7 @@ async function main() {
   const payload = window.workingDir + '/eboot.elf';
   return {
     mainText: 'AKENO NETWORK',
-    secondaryText: 'Native prototype 0.1',
+    secondaryText: 'Native preview 0.2',
     onclick: async () => {
       return { path: payload, args: ['--launcher'] };
     },

@@ -48,6 +48,7 @@ typedef struct {
 
     akn_daemon_state daemon;
     char daemon_version[32];
+    int daemon_ipc; /* native IPC protocol of the running daemon, 0 = none */
 } akn_account_view;
 
 /*
@@ -59,6 +60,14 @@ int akn_read_server_setting(const char *settings_path, char *out, size_t len);
 /* Inspects the credential file (existence, regular file, permissions) without reading it. */
 void akn_inspect_credential(const char *credential_path, akn_account_view *view);
 
+/*
+ * Reads the native-IPC daemon's per-launch key (docs/PS5_NATIVE_PHASE2.md): it must be a regular
+ * file, not a link, readable by its owner only, holding exactly 64 hex digits. Returns 0, -1 when
+ * the file does not exist, -2 when it is unsafe or malformed (nothing is copied then).
+ */
+#define AKN_NATIVE_KEY_LEN 64
+int akn_read_native_key(const char *path, char *out, size_t len);
+
 struct akeno_json;
 /* Fills the account fields from a GET /devices/current answer. Returns 0, or -1 if malformed. */
 int akn_fill_device_self(const struct akeno_json *root, long long console_unix_now, akn_account_view *view);
@@ -66,9 +75,10 @@ int akn_parse_device_self(const char *json, size_t len, long long console_unix_n
 
 /*
  * Checks a GET /api/instance answer: 0 and the version when it is the AKENO console daemon,
- * -1 for any other answer.
+ * -1 for any other answer. *native_ipc (may be NULL) is the daemon's native IPC protocol version,
+ * 0 for a daemon without the native interface (the Alpha 0.5 release).
  */
-int akn_parse_daemon_instance(const char *json, size_t len, char *version, size_t version_len);
+int akn_parse_daemon_instance(const char *json, size_t len, char *version, size_t version_len, int *native_ipc);
 
 /* "2026-10-17T12:34:56.789Z" -> seconds since 1970 (UTC). Returns 0, or -1 if malformed. */
 int akn_parse_iso8601(const char *s, long long *out);

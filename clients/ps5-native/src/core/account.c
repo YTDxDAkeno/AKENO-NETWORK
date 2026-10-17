@@ -5,6 +5,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -49,6 +50,30 @@ void akn_inspect_credential(const char *credential_path, akn_account_view *view)
     if (lstat(credential_path, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0) return;
     view->credential_present = 1;
     view->credential_private = (st.st_mode & 077) == 0;
+}
+
+int akn_read_native_key(const char *path, char *out, size_t len) {
+    if (len) out[0] = '\0';
+    if (len < AKN_NATIVE_KEY_LEN + 1) return -2;
+    struct stat st;
+    if (lstat(path, &st) != 0) return errno == ENOENT ? -1 : -2;
+    if (!S_ISREG(st.st_mode) || (st.st_mode & 077) != 0 || st.st_size != AKN_NATIVE_KEY_LEN) return -2;
+    int flags = O_RDONLY;
+#ifdef O_NOFOLLOW
+    flags |= O_NOFOLLOW;
+#endif
+    int fd = open(path, flags);
+    if (fd < 0) return -2;
+    char key[AKN_NATIVE_KEY_LEN + 1];
+    ssize_t n = read(fd, key, AKN_NATIVE_KEY_LEN + 1);
+    close(fd);
+    if (n != AKN_NATIVE_KEY_LEN) return -2;
+    for (int i = 0; i < AKN_NATIVE_KEY_LEN; i++)
+        if (!isxdigit((unsigned char)key[i])) return -2;
+    memcpy(out, key, AKN_NATIVE_KEY_LEN);
+    out[AKN_NATIVE_KEY_LEN] = '\0';
+    memset(key, 0, sizeof(key));
+    return 0;
 }
 
 static int digits(const char *s, int n, int *out) {
@@ -126,13 +151,16 @@ int akn_parse_device_self(const char *json, size_t len, long long console_unix_n
     return rc;
 }
 
-int akn_parse_daemon_instance(const char *json, size_t len, char *version, size_t version_len) {
+int akn_parse_daemon_instance(const char *json, size_t len, char *version, size_t version_len, int *native_ipc) {
+    if (native_ipc) *native_ipc = 0;
     akeno_json_doc *doc = akeno_json_parse(json, len, NULL, 0);
     if (!doc) return -1;
     const akeno_json *root = akeno_json_root(doc);
     int rc = -1;
     if (strcmp(akeno_json_get_string(root, "app", ""), "akeno-network-console") == 0) {
         copy_str(version, version_len, akeno_json_get_string(root, "version", "?"));
+        int64_t ipc;
+        if (native_ipc && akeno_json_int64(akeno_json_get(root, "nativeIpc"), &ipc) == 0 && ipc > 0 && ipc < 1000) *native_ipc = (int)ipc;
         rc = 0;
     }
     akeno_json_free(doc);

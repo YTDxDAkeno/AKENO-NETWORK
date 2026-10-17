@@ -22,6 +22,9 @@ typedef enum {
     AKN_SCREEN_AUDIO,
     AKN_SCREEN_CONNECTION,
     AKN_SCREEN_SYSTEM,
+    AKN_SCREEN_FRIENDS,  /* Phase 2.1: list of friends (rows) */
+    AKN_SCREEN_PROFILE,  /* Phase 2.1: one profile, yours or a friend's */
+    AKN_SCREEN_ACTIVITY, /* Phase 2.1: this console's game, your games, friends playing (rows) */
     AKN_SCREEN_COUNT
 } akn_screen;
 
@@ -49,6 +52,7 @@ typedef enum {
     AKN_ITEM_HEARD_YES,
     AKN_ITEM_HEARD_NO,
     AKN_ITEM_HEARD_UNSURE,
+    AKN_ITEM_ROW, /* a row of a list screen; akn_item.index is the row */
     AKN_ITEM_COUNT
 } akn_item_id;
 
@@ -59,7 +63,8 @@ typedef struct {
     akn_item_kind kind;
     akn_rect rect;
     int enabled;
-    int preview; /* a Phase 2 feature shown as a preview tile */
+    int preview; /* a later Phase 2 feature shown as a preview tile */
+    int index;   /* AKN_ITEM_ROW: the row in the list */
     const char *title;
     const char *subtitle;
 } akn_item;
@@ -74,7 +79,10 @@ typedef enum {
     AKN_CMD_HEARD_YES,
     AKN_CMD_HEARD_NO,
     AKN_CMD_HEARD_UNSURE,
-    AKN_CMD_OPENED_SCREEN /* informational: the screen changed */
+    AKN_CMD_OPENED_SCREEN, /* informational: the screen changed */
+    AKN_CMD_OPEN_PROFILE,  /* the profile screen opened for row ui->open_row of ui->profile_back */
+    AKN_CMD_OPEN_OWN_PROFILE,
+    AKN_CMD_REFRESH        /* triangle on a social screen: load it again */
 } akn_cmd;
 
 #define AKN_MAX_ITEMS 16
@@ -92,7 +100,15 @@ typedef struct {
     uint64_t toast_until;
     unsigned long focus_moves;
     unsigned long confirms;
+    /* List screens (friends, activity): focus[] is the row; the app sets the row count. */
+    int list_count[AKN_SCREEN_COUNT];
+    int list_top[AKN_SCREEN_COUNT]; /* first visible row */
+    akn_screen profile_back;        /* where circle on the profile returns to */
+    int open_row;                   /* the row AKN_CMD_OPEN_PROFILE refers to */
 } akn_ui;
+
+#define AKN_FRIEND_ROWS_VISIBLE 7
+#define AKN_ACTIVITY_ROWS_VISIBLE 4
 
 void akn_ui_init(akn_ui *ui);
 int akn_ui_screen_items(const akn_ui *ui, akn_screen screen, akn_item *out, int max);
@@ -106,6 +122,11 @@ akn_cmd akn_ui_handle(akn_ui *ui, const akn_input_event *ev, uint64_t now_ms);
 akn_cmd akn_ui_tick(akn_ui *ui, const akn_input *in, uint64_t now_ms);
 
 void akn_ui_open_screen(akn_ui *ui, akn_screen screen);
+/* List screens: the number of rows the app has now (clamps the focus and the scroll position). */
+void akn_ui_set_list_count(akn_ui *ui, akn_screen screen, int count);
+int akn_ui_is_list(akn_screen screen);
+/* Row index -> rectangle on a list screen (rows outside the visible window are not drawn). */
+akn_rect akn_ui_row_rect(const akn_ui *ui, akn_screen screen, int row);
 void akn_ui_open_heard(akn_ui *ui);
 void akn_ui_toast(akn_ui *ui, const char *text, uint64_t now_ms, unsigned duration_ms);
 

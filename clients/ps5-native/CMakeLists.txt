@@ -71,7 +71,7 @@ target_link_libraries(akn_akeno PUBLIC m Threads::Threads)
 # ---- Portable core (no SDL): unit-tested -------------------------------------------------------
 add_library(akn_core STATIC
   src/core/nav.c src/core/input.c src/core/audio_test.c src/core/redact.c src/core/log.c src/core/context.c
-  src/core/logo.c src/core/png.c src/core/text.c src/core/ui.c src/core/script.c src/core/account.c
+  src/core/logo.c src/core/png.c src/core/text.c src/core/ui.c src/core/script.c src/core/account.c src/core/social.c
   "${PS5_DIR}/app/audio_lab_pcm.c" "${PS5_DIR}/app/game_detect.c")
 target_include_directories(akn_core PUBLIC src/core "${PS5_DIR}/app")
 target_compile_options(akn_core PRIVATE ${AKN_WARNINGS} ${AKN_HARDENING})
@@ -94,7 +94,7 @@ if(SDL2_FOUND)
   target_compile_options(akn_stb PRIVATE -w) # third-party code
 
   add_executable(akeno-native src/app/main.c src/app/app.c src/app/screens.c src/app/gfx.c src/app/net.c src/app/report.c
-    src/platform/platform_host.c)
+    src/app/ipc.c src/app/social.c src/platform/platform_host.c)
   target_include_directories(akeno-native PRIVATE src/app src/platform "${PS5_DIR}/src")
   target_compile_options(akeno-native PRIVATE ${AKN_WARNINGS} ${AKN_HARDENING})
   target_compile_definitions(akeno-native PRIVATE
@@ -116,7 +116,7 @@ target_link_libraries(make-icon PRIVATE akn_core)
 enable_testing()
 add_executable(akn_unit_tests tests/unit/test_main.c tests/unit/test_nav_input.c tests/unit/test_audio.c
   tests/unit/test_redact_context.c tests/unit/test_image_text.c tests/unit/test_ui_script.c tests/unit/test_account.c
-  src/app/net.c)
+  tests/unit/test_social.c src/app/net.c src/app/ipc.c)
 target_include_directories(akn_unit_tests PRIVATE tests/unit src/app src/platform)
 target_compile_options(akn_unit_tests PRIVATE ${AKN_WARNINGS})
 target_link_libraries(akn_unit_tests PRIVATE akn_core)

@@ -5,7 +5,7 @@
 
 #include "audio_test.h"
 
-/* Home: six Phase 2 preview tiles, then five native platform checks. */
+/* Home: six social tiles (Phase 2), then five native platform checks. */
 #define HOME_ROW1_Y 440
 #define HOME_ROW1_H 210
 #define HOME_ROW1_W 268
@@ -14,18 +14,30 @@
 #define HOME_ROW2_W 326
 #define HOME_GAP 24
 
-#define DEFAULT_HOME_FOCUS 6 /* Controller test: the point of this prototype */
+#define DEFAULT_HOME_FOCUS 0 /* Friends */
+
+/* Rows of the list screens. */
+#define FRIEND_ROW_X AKN_MARGIN_X
+#define FRIEND_ROW_Y 290
+#define FRIEND_ROW_W 1000
+#define FRIEND_ROW_H 84
+#define ACTIVITY_ROW_X AKN_MARGIN_X
+#define ACTIVITY_ROW_Y 588
+#define ACTIVITY_ROW_W 840
+#define ACTIVITY_ROW_H 84
+#define ROW_STEP 96
 
 static const struct {
     akn_item_id id;
     const char *title, *subtitle;
+    const char *increment; /* NULL: available in this build */
 } HOME_ROW1[6] = {
-    { AKN_ITEM_FRIENDS, "Friends", "Friends and requests" },
-    { AKN_ITEM_MESSAGES, "Messages", "Direct and group chats" },
-    { AKN_ITEM_PARTIES, "Parties", "Voice parties and invites" },
-    { AKN_ITEM_PROFILE, "Profile", "Avatar, banner, badges" },
-    { AKN_ITEM_ACTIVITY, "Activity", "Games and play time" },
-    { AKN_ITEM_SETTINGS, "Settings", "Notifications and privacy" },
+    { AKN_ITEM_FRIENDS, "Friends", "Who is online and playing", NULL },
+    { AKN_ITEM_MESSAGES, "Messages", "Direct and group chats", "2.2" },
+    { AKN_ITEM_PARTIES, "Parties", "Parties and invitations", "2.3" },
+    { AKN_ITEM_PROFILE, "Profile", "Your status and games", NULL },
+    { AKN_ITEM_ACTIVITY, "Activity", "Games on this console", NULL },
+    { AKN_ITEM_SETTINGS, "Settings", "Notifications and activity", "2.4" },
 };
 
 static const struct {
@@ -57,7 +69,7 @@ static akn_item make(akn_item_id id, akn_item_kind kind, int x, int y, int w, in
 static const char *const ITEM_NAMES[AKN_ITEM_COUNT] = {
     "friends", "messages", "parties", "profile", "activity", "settings", "controller", "audio", "connection",
     "system", "exit", "audio-preset", "audio-level", "audio-play", "recheck", "save-report", "exit-confirm",
-    "exit-cancel", "heard-yes", "heard-no", "heard-unsure",
+    "exit-cancel", "heard-yes", "heard-no", "heard-unsure", "row",
 };
 
 const char *akn_item_name(akn_item_id id) { return (id >= 0 && id < AKN_ITEM_COUNT) ? ITEM_NAMES[id] : "?"; }
@@ -81,6 +93,9 @@ const char *akn_screen_name(akn_screen screen) {
     case AKN_SCREEN_AUDIO: return "audio";
     case AKN_SCREEN_CONNECTION: return "connection";
     case AKN_SCREEN_SYSTEM: return "system";
+    case AKN_SCREEN_FRIENDS: return "friends";
+    case AKN_SCREEN_PROFILE: return "profile";
+    case AKN_SCREEN_ACTIVITY: return "activity";
     case AKN_SCREEN_COUNT: break;
     }
     return "?";
@@ -93,6 +108,9 @@ const char *akn_screen_title(akn_screen screen) {
     case AKN_SCREEN_AUDIO: return "Audio test";
     case AKN_SCREEN_CONNECTION: return "Connection";
     case AKN_SCREEN_SYSTEM: return "System";
+    case AKN_SCREEN_FRIENDS: return "Friends";
+    case AKN_SCREEN_PROFILE: return "Profile";
+    case AKN_SCREEN_ACTIVITY: return "Activity";
     case AKN_SCREEN_COUNT: break;
     }
     return "?";
@@ -105,6 +123,43 @@ void akn_ui_init(akn_ui *ui) {
     ui->focus[AKN_SCREEN_AUDIO] = 2; /* Play */
     ui->audio_preset = AKN_AUDIO_DEFAULT_PRESET;
     ui->audio_level = AKN_AUDIO_DEFAULT_LEVEL;
+    ui->profile_back = AKN_SCREEN_HOME;
+}
+
+int akn_ui_is_list(akn_screen screen) { return screen == AKN_SCREEN_FRIENDS || screen == AKN_SCREEN_ACTIVITY; }
+
+static int rows_visible(akn_screen screen) {
+    return screen == AKN_SCREEN_FRIENDS ? AKN_FRIEND_ROWS_VISIBLE : screen == AKN_SCREEN_ACTIVITY ? AKN_ACTIVITY_ROWS_VISIBLE : 0;
+}
+
+akn_rect akn_ui_row_rect(const akn_ui *ui, akn_screen screen, int row) {
+    int slot = row - ui->list_top[screen];
+    akn_rect r = { FRIEND_ROW_X, FRIEND_ROW_Y + slot * ROW_STEP, FRIEND_ROW_W, FRIEND_ROW_H };
+    if (screen == AKN_SCREEN_ACTIVITY) {
+        r.x = ACTIVITY_ROW_X;
+        r.y = ACTIVITY_ROW_Y + slot * ROW_STEP;
+        r.w = ACTIVITY_ROW_W;
+        r.h = ACTIVITY_ROW_H;
+    }
+    return r;
+}
+
+/* Keeps the focused row inside the visible window. */
+static void scroll_to_focus(akn_ui *ui, akn_screen screen) {
+    int visible = rows_visible(screen), count = ui->list_count[screen];
+    int *f = &ui->focus[screen], *top = &ui->list_top[screen];
+    if (*f >= count) *f = count - 1;
+    if (*f < 0) *f = 0;
+    if (*f < *top) *top = *f;
+    if (*f >= *top + visible) *top = *f - visible + 1;
+    if (*top > count - visible) *top = count - visible;
+    if (*top < 0) *top = 0;
+}
+
+void akn_ui_set_list_count(akn_ui *ui, akn_screen screen, int count) {
+    if (!akn_ui_is_list(screen)) return;
+    ui->list_count[screen] = count < 0 ? 0 : count;
+    scroll_to_focus(ui, screen);
 }
 
 int akn_ui_screen_items(const akn_ui *ui, akn_screen screen, akn_item *out, int max) {
@@ -119,7 +174,7 @@ int akn_ui_screen_items(const akn_ui *ui, akn_screen screen, akn_item *out, int 
         for (int i = 0; i < 6; i++) {
             akn_item it = make(HOME_ROW1[i].id, AKN_KIND_TILE, AKN_MARGIN_X + i * (HOME_ROW1_W + HOME_GAP), HOME_ROW1_Y,
                                HOME_ROW1_W, HOME_ROW1_H, HOME_ROW1[i].title, HOME_ROW1[i].subtitle);
-            it.preview = 1;
+            it.preview = HOME_ROW1[i].increment != NULL;
             ADD(it);
         }
         for (int i = 0; i < 5; i++)
@@ -145,7 +200,20 @@ int akn_ui_screen_items(const akn_ui *ui, akn_screen screen, akn_item *out, int 
     case AKN_SCREEN_SYSTEM:
         ADD(make(AKN_ITEM_SAVE_REPORT, AKN_KIND_BUTTON, AKN_MARGIN_X, 860, 520, 96, "Save diagnostic report", NULL));
         break;
+    case AKN_SCREEN_FRIENDS:
+    case AKN_SCREEN_ACTIVITY: {
+        int end = ui->list_top[screen] + rows_visible(screen);
+        if (end > ui->list_count[screen]) end = ui->list_count[screen];
+        for (int i = ui->list_top[screen]; i < end; i++) {
+            akn_rect r = akn_ui_row_rect(ui, screen, i);
+            akn_item it = make(AKN_ITEM_ROW, AKN_KIND_BUTTON, r.x, r.y, r.w, r.h, NULL, NULL);
+            it.index = i;
+            ADD(it);
+        }
+        break;
+    }
     case AKN_SCREEN_CONTROLLER:
+    case AKN_SCREEN_PROFILE:
     case AKN_SCREEN_COUNT:
         break;
     }
@@ -183,6 +251,14 @@ int akn_ui_focused(const akn_ui *ui, akn_item *out) {
         return 1;
     }
     int n = akn_ui_screen_items(ui, ui->screen, items, AKN_MAX_ITEMS);
+    if (akn_ui_is_list(ui->screen)) {
+        for (int i = 0; i < n; i++)
+            if (items[i].index == ui->focus[ui->screen]) {
+                *out = items[i];
+                return 1;
+            }
+        return 0;
+    }
     int f = clamp_focus(ui->focus[ui->screen], n);
     if (f < 0) return 0;
     *out = items[f];
@@ -249,12 +325,26 @@ static akn_cmd activate_dialog(akn_ui *ui, akn_item_id id) {
 static akn_cmd activate(akn_ui *ui, const akn_item *it, uint64_t now_ms) {
     ui->confirms++;
     if (it->preview) {
+        const char *increment = "2";
+        for (int i = 0; i < 6; i++)
+            if (HOME_ROW1[i].id == it->id && HOME_ROW1[i].increment) increment = HOME_ROW1[i].increment;
         char text[200];
-        snprintf(text, sizeof(text), "%s arrives in Phase 2. This prototype proves the console platform first.", it->title);
+        snprintf(text, sizeof(text), "%s arrives in Phase %s. Until then, use the AKENO page in the browser.", it->title, increment);
         akn_ui_toast(ui, text, now_ms, 3500);
         return AKN_CMD_NONE;
     }
     switch (it->id) {
+    case AKN_ITEM_FRIENDS: akn_ui_open_screen(ui, AKN_SCREEN_FRIENDS); return AKN_CMD_OPENED_SCREEN;
+    case AKN_ITEM_ACTIVITY: akn_ui_open_screen(ui, AKN_SCREEN_ACTIVITY); return AKN_CMD_OPENED_SCREEN;
+    case AKN_ITEM_PROFILE:
+        akn_ui_open_screen(ui, AKN_SCREEN_PROFILE);
+        ui->profile_back = AKN_SCREEN_HOME;
+        return AKN_CMD_OPEN_OWN_PROFILE;
+    case AKN_ITEM_ROW:
+        ui->open_row = it->index;
+        ui->profile_back = ui->screen;
+        akn_ui_open_screen(ui, AKN_SCREEN_PROFILE);
+        return AKN_CMD_OPEN_PROFILE;
     case AKN_ITEM_CONTROLLER: akn_ui_open_screen(ui, AKN_SCREEN_CONTROLLER); return AKN_CMD_OPENED_SCREEN;
     case AKN_ITEM_AUDIO: akn_ui_open_screen(ui, AKN_SCREEN_AUDIO); return AKN_CMD_OPENED_SCREEN;
     case AKN_ITEM_CONNECTION: akn_ui_open_screen(ui, AKN_SCREEN_CONNECTION); return AKN_CMD_OPENED_SCREEN;
@@ -297,6 +387,34 @@ akn_cmd akn_ui_handle(akn_ui *ui, const akn_input_event *ev, uint64_t now_ms) {
 
     int n = akn_ui_screen_items(ui, ui->screen, items, AKN_MAX_ITEMS);
     int *focus = &ui->focus[ui->screen];
+    if (ev->button == AKN_BTN_TRIANGLE && (akn_ui_is_list(ui->screen) || ui->screen == AKN_SCREEN_PROFILE)) return AKN_CMD_REFRESH;
+    if (ui->screen == AKN_SCREEN_PROFILE && ev->button == AKN_BTN_CIRCLE) {
+        akn_screen back = ui->profile_back;
+        akn_ui_open_screen(ui, back == AKN_SCREEN_PROFILE ? AKN_SCREEN_HOME : back);
+        return AKN_CMD_OPENED_SCREEN;
+    }
+    if (akn_ui_is_list(ui->screen)) {
+        int count = ui->list_count[ui->screen], before = *focus;
+        int page = rows_visible(ui->screen);
+        if (ev->button == AKN_BTN_UP) *focus -= 1;
+        else if (ev->button == AKN_BTN_DOWN) *focus += 1;
+        else if (ev->button == AKN_BTN_L1) *focus -= page;
+        else if (ev->button == AKN_BTN_R1) *focus += page;
+        scroll_to_focus(ui, ui->screen);
+        if (*focus != before) {
+            ui->focus_moves++;
+            return AKN_CMD_NONE;
+        }
+        if (ev->button == AKN_BTN_CROSS && count > 0) {
+            akn_item it;
+            if (akn_ui_focused(ui, &it)) return activate(ui, &it, now_ms);
+        }
+        if (ev->button == AKN_BTN_CIRCLE) {
+            akn_ui_open_screen(ui, AKN_SCREEN_HOME);
+            return AKN_CMD_OPENED_SCREEN;
+        }
+        return AKN_CMD_NONE;
+    }
     int f = clamp_focus(*focus, n);
     if (is_dir) {
         if (f >= 0 && items[f].kind == AKN_KIND_SELECTOR && (ev->button == AKN_BTN_LEFT || ev->button == AKN_BTN_RIGHT)) {

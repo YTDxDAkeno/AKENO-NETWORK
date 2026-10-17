@@ -7,7 +7,8 @@
  * the background context, opens nothing and just ends (see app.c, background_mode).
  *
  * PC: a window for development; AKENO_NATIVE_SCRIPT runs an automated test (script.h),
- * AKENO_NATIVE_WINDOW=WxH sets the window size (default 1280x720; the 1920x1080 layout is scaled).
+ * AKENO_NATIVE_WINDOW=WxH sets the window size (default 1280x720; the 1920x1080 layout is scaled),
+ * AKENO_NATIVE_SYNC_DIR is where a test harness confirms the script's "sync" steps.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,6 +23,7 @@ int main(int argc, char **argv) {
         if (strcmp(argv[i], "--launcher") == 0) options.launcher_arg = 1;
 #ifndef AKN_PLATFORM_PS5
     options.script = getenv("AKENO_NATIVE_SCRIPT");
+    options.sync_dir = getenv("AKENO_NATIVE_SYNC_DIR");
     const char *window = getenv("AKENO_NATIVE_WINDOW");
     if (!window || sscanf(window, "%dx%d", &options.window_w, &options.window_h) != 2) {
         options.window_w = 1280;

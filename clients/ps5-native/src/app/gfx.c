@@ -55,7 +55,19 @@ struct akn_gfx {
     size_t scratch_len;
     uint32_t *upload;
     size_t upload_len;
+    char *capture; /* PC test scripts: every text run drawn in the current frame, one per line */
+    size_t capture_len;
 };
+
+#define CAPTURE_MAX (64 * 1024)
+
+static void capture_run(akn_gfx *g, const char *s, size_t len) {
+    if (!g->capture || g->capture_len + len + 2 > CAPTURE_MAX) return;
+    memcpy(g->capture + g->capture_len, s, len);
+    g->capture_len += len;
+    g->capture[g->capture_len++] = '\n';
+    g->capture[g->capture_len] = '\0';
+}
 
 static void set_color(SDL_Renderer *r, uint32_t argb) {
     SDL_SetRenderDrawColor(r, (Uint8)(argb >> 16), (Uint8)(argb >> 8), (Uint8)argb, (Uint8)(argb >> 24));
@@ -101,8 +113,22 @@ void akn_gfx_destroy(akn_gfx *g) {
     if (g->background) SDL_DestroyTexture(g->background);
     free(g->scratch);
     free(g->upload);
+    free(g->capture);
     free(g);
 }
+
+int akn_gfx_capture_enable(akn_gfx *g) {
+    if (!g->capture) g->capture = calloc(1, CAPTURE_MAX);
+    return g->capture ? 0 : -1;
+}
+
+void akn_gfx_capture_begin_frame(akn_gfx *g) {
+    if (!g->capture) return;
+    g->capture_len = 0;
+    g->capture[0] = '\0';
+}
+
+int akn_gfx_capture_contains(const akn_gfx *g, const char *needle) { return g->capture && strstr(g->capture, needle) != NULL; }
 
 static void *grow(void **buf, size_t *len, size_t need) {
     if (*len >= need) return *buf;
@@ -365,6 +391,7 @@ int akn_gfx_text_width(akn_gfx *g, int px, akn_font_weight weight, const char *s
 }
 
 static int draw_run(akn_gfx *g, face_t *f, int x, int y, uint32_t argb, const char *s, size_t len) {
+    capture_run(g, s, len);
     if (!f || !f->atlas) return 0;
     SDL_SetTextureColorMod(f->atlas, (Uint8)(argb >> 16), (Uint8)(argb >> 8), (Uint8)argb);
     SDL_SetTextureAlphaMod(f->atlas, (Uint8)(argb >> 24));

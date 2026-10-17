@@ -1,7 +1,7 @@
 # AKENO NETWORK Native — Phase 2 plan: native social screens over the daemon
 
 Status: **approved direction** (owner, 2026-10-17, after the 12.20 result
-[E14](PS5_NATIVE_ADR.md#2-evidence)). Increment 2.1 is being implemented in this branch; nothing in
+[E14](PS5_NATIVE_ADR.md#2-evidence)). Increment 2.1 is implemented in this branch; nothing in
 Phase 2 is verified on a PS5 until the owner reports it. Nothing is merged or deployed
 automatically.
 
@@ -13,7 +13,7 @@ AKENO backend, with these rules from the owner:
 | Rule | How Phase 2 keeps it |
 | --- | --- |
 | The daemon stays responsible for realtime, notifications and game detection | The native app never opens a WebSocket, never sends presence or game heartbeats and never shows system notifications. It reads the daemon's existing event ring and state |
-| No competing realtime sessions | One server session per console: the daemon's. The native app talks only to the daemon (loopback); CI fails if native code references `akeno_realtime_run` |
+| No competing realtime sessions | One realtime session per console: the daemon's (the end-to-end test counts the WebSocket upgrades). Social data reaches the native app only through the daemon (loopback); its 0.1 connection check — one read-only `GET /devices/current` with the existing pairing — stays as a diagnostic. CI fails if native code references `akeno_realtime_run` |
 | Preserve existing functionality, Account Bridge and production | No server, API, database, web or migration change. The daemon release ELF stays the hardware-tested Alpha 0.5 RC file (ps5.yml proves it on every commit); the IPC is a **separate daemon build** |
 | Secure local IPC | Per-launch secret in a private file, loopback only, allow-list, existing Host/Origin defences; details below |
 | Incremental, CI-tested, hardware-testable | One increment per hardware test; each ships native + daemon builds, the previous tested builds as byte-verified fallbacks, and a test plan |

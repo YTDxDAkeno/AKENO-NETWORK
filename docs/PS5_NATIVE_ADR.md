@@ -153,6 +153,15 @@ server, web, migration, daemon or existing workflow file, so it merges cleanly i
 Bridge line (which changes none of those paths either) once production is published —
 `docs/INTEGRATION_ALPHA_0.5.md` still applies unchanged.
 
+**Phase 2.1 update.** The native-IPC daemon adds self-contained `#ifdef AKENO_NATIVE_IPC` blocks to
+`clients/ps5/app/{app.c,app_internal.h,app_routes.c,ui_http.c,ui_http.h}`, a `NATIVE_IPC=1`
+variant to `clients/ps5/console/Makefile` and an `akeno-app-native-ipc` target to
+`clients/ps5/CMakeLists.txt`; the release build compiles exactly as before (CI proves the release
+ELF is still the RC file). Alpha 0.5 and the Account Bridge line already both change `app.c`,
+`app_internal.h`, `app_routes.c`, the Makefile and the CMake file, so these files are part of the
+integration in `docs/INTEGRATION_ALPHA_0.5.md` anyway; the native-IPC blocks merge as separate
+hunks (the Account Bridge line does not touch `ui_http.*`). `ps5.yml` and `ci.yml` are unchanged.
+
 ## 4. Launch levels
 
 | Level | What | Status | Requires |
