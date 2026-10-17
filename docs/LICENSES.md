@@ -128,6 +128,20 @@ stb_image are used under their MIT option (notice in `LICENSES.md`); SDL2's zlib
 no notice in binaries, which is given anyway. The MPL-2.0 CA bundle is unmodified; its source is
 named by version and checksum in `BUILDINFO.txt`.
 
+## AKENO In-Game Companion (`clients/ps5-ingame`, EXPERIMENTAL)
+
+AKENO's sources are MIT. The plugin ELF (`AKEN00001.elf`) links, unmodified:
+
+| Component | Version | License | Use |
+| --- | --- | --- | --- |
+| OnionHEN plugin SDK runtime (OnionBuddies/onionHEN-plugin-sdk) | `72527c3` | GPLv3 | Plugin descriptor, IPC client, `onion.ui` document builder; `tools/inspect_plugin.py` only reads the built ELF |
+| ps5-payload-sdk | as above | GPLv3+ | Runtime and libc |
+| AKENO Native's parsers and IPC client, stb_image | as above | MIT | Reading the daemon's answers |
+
+The plugin ELF is therefore a **GPLv3** work. It ships only in the `experimental/` folder of a
+release package, with this file, the GPLv3 text and the source pointer (tagged commit, SDK commits).
+It requires OnionHEN (aydencharles/onionHEN, GPLv3), which AKENO does not ship or install.
+
 ### stb_truetype and stb_image (used under the MIT alternative)
 
 ```

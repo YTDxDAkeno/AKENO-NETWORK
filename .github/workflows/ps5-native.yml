@@ -94,6 +94,13 @@ jobs:
       - name: Fuzz the picture decoder and the badge paths (libFuzzer, ASan + UBSan, committed regression seeds)
         run: AKN_FUZZ_OUT="$RUNNER_TEMP/fuzz" clients/ps5-native/tests/fuzz/run.sh 90 clang-18
 
+      - name: In-Game Companion (experimental) - menu model and OnionHEN page tests (sanitizers)
+        run: |
+          clients/ps5-ingame/scripts/fetch-deps.sh
+          cmake -S clients/ps5-ingame -B clients/ps5-ingame/build -DAKN_SANITIZE=ON -DCMAKE_BUILD_TYPE=Debug
+          cmake --build clients/ps5-ingame/build -j"$(nproc)"
+          ctest --test-dir clients/ps5-ingame/build --output-on-failure
+
       - name: Upload fuzzer findings
         if: failure()
         uses: actions/upload-artifact@v4
@@ -153,7 +160,9 @@ jobs:
           pnpm build
 
       - name: Fetch pinned third-party inputs (checksums verified)
-        run: clients/ps5-native/scripts/fetch-deps.sh
+        run: |
+          clients/ps5-native/scripts/fetch-deps.sh
+          clients/ps5-ingame/scripts/fetch-deps.sh
 
       - name: Build the daemon (release and native-IPC host builds) and AKENO Native with sanitizers
         run: |
@@ -161,11 +170,14 @@ jobs:
           cmake --build clients/ps5/build-asan -j"$(nproc)" --target akeno-app akeno-app-native-ipc
           cmake -S clients/ps5-native -B clients/ps5-native/build-asan -DAKN_SANITIZE=ON -DCMAKE_BUILD_TYPE=Debug
           cmake --build clients/ps5-native/build-asan -j"$(nproc)" --target akeno-native
+          cmake -S clients/ps5-ingame -B clients/ps5-ingame/build -DAKN_SANITIZE=ON -DCMAKE_BUILD_TYPE=Debug
+          cmake --build clients/ps5-ingame/build -j"$(nproc)" --target akeno-ingame-check
 
       - name: End-to-end tests (real server, TLS, pairing, live events, IPC security, release daemon)
         run: |
           AKN_E2E_OUT="$RUNNER_TEMP/e2e" node clients/ps5-native/tests/e2e/run.mjs --native clients/ps5-native/build-asan/akeno-native \
-            --daemon clients/ps5/build-asan/akeno-app-native-ipc --release-daemon clients/ps5/build-asan/akeno-app
+            --daemon clients/ps5/build-asan/akeno-app-native-ipc --release-daemon clients/ps5/build-asan/akeno-app \
+            --companion clients/ps5-ingame/build/akeno-ingame-check
 
       - name: Upload the end-to-end screenshots and report (PC, not PS5 evidence)
         if: always()
@@ -200,7 +212,9 @@ jobs:
           make -C "$RUNNER_TEMP/ps5-sdk-src" DESTDIR="$RUNNER_TEMP/ps5-payload-sdk" install
 
       - name: Fetch pinned third-party inputs (checksums verified)
-        run: clients/ps5-native/scripts/fetch-deps.sh
+        run: |
+          clients/ps5-native/scripts/fetch-deps.sh
+          clients/ps5-ingame/scripts/fetch-deps.sh
 
       - name: Build SDL2 for the PS5 (ps5-payload-dev/SDL ee4c47d, software renderer)
         run: PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk" clients/ps5-native/scripts/build-sdl-ps5.sh
@@ -274,6 +288,15 @@ jobs:
           if grep -qa NATIVE_KEY_INVALID "$RUNNER_TEMP/release-as-rc/akeno-network-ps5.elf"; then
             echo "The release daemon contains the native interface" >&2; exit 1
           fi
+
+      - name: Build the In-Game Companion OnionHEN plugin twice (reproducible), check its descriptor and imports (EXPERIMENTAL)
+        shell: bash
+        run: |
+          export PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk"
+          make -C clients/ps5-ingame/console -j"$(nproc)" BUILD="$RUNNER_TEMP/ingame-repro"
+          make -C clients/ps5-ingame/console -j"$(nproc)"
+          cmp "$RUNNER_TEMP/ingame-repro/AKEN00001.elf" clients/ps5-ingame/build-ps5/AKEN00001.elf
+          clients/ps5-ingame/console/check-plugin.sh clients/ps5-ingame/build-ps5 | tee gate-ingame.txt
 
       - name: Rebuild the hardware-tested Alpha 0.5 RC daemon (7e28255) as the daemon fallback
         shell: bash

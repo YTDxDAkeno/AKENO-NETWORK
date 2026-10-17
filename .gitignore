@@ -40,3 +40,5 @@ clients/ps5/ps5-smoke/*.elf
 
 # Local media storage (development default MEDIA_DIR)
 data/
+clients/ps5-ingame/build*/
+clients/ps5-ingame/third_party/

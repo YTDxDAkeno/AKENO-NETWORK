@@ -37,6 +37,7 @@ const arg = (name) => {
 const nativeBinary = arg('--native');
 const daemonBinary = arg('--daemon');
 const releaseBinary = arg('--release-daemon');
+const companionBinary = arg('--companion'); // optional: clients/ps5-ingame akeno-ingame-check
 if (!nativeBinary || !daemonBinary || !releaseBinary) {
   console.error('usage: run.mjs --native <akeno-native> --daemon <akeno-app-native-ipc> --release-daemon <akeno-app>');
   process.exit(2);
@@ -667,6 +668,47 @@ await step('AKENO Native: an uninstalled game keeps its administrator-verified c
   assert.ok(magenta > 20000, `the verified cover is on screen (${magenta} magenta pixels)`);
   const report = readFileSync(join(nativeDir, 'native-report.txt'), 'utf8');
   assert.match(report, /Pictures:\s+\d+ asked for, [1-9]\d* shown/);
+});
+
+if (companionBinary) await step('In-Game Companion (experimental): the menu from the real server, a status change and an accepted invitation', async () => {
+  // asynchronous: this process also runs the TLS terminator the daemon talks to
+  const check = (...extra) => new Promise((done) => {
+    const child = spawn(companionBinary, ['--port', String(daemon.port), '--akeno-dir', akenoDir, ...extra], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => (stdout += d));
+    child.stderr.on('data', (d) => (stderr += d));
+    child.on('exit', (status) => done({ status, stdout, stderr }));
+  });
+  // bob writes to alice and invites her to a new party
+  const conv = await bob.request('POST', '/conversations', { userId: alice.user.id });
+  assert.equal((await bob.request('POST', `/conversations/${conv.body.id}/messages`, { body: 'gg, party?', clientMessageId: randomUUID() })).status, 201);
+  const party = await bob.request('POST', '/parties', { name: 'Companion party', privacy: 'invite_only' });
+  assert.equal(party.status, 201, JSON.stringify(party.body));
+  assert.equal((await bob.request('POST', `/parties/${party.body.id}/invitations`, { userId: alice.user.id })).status, 201);
+  let r = await check();
+  assert.equal(r.status, 0, r.stderr + r.stdout);
+  assert.match(r.stdout, /AKENO QUICK MENU/);
+  assert.match(r.stdout, /Friends\s+\d+ online/);
+  // bob's unread "Reply after leaving" from the messages step, and the new one
+  assert.match(r.stdout, /Messages\s+2 unread in 1 conversation/);
+  assert.match(r.stdout, /Party\s+Not in a party/);
+  assert.match(r.stdout, /Invitations\s+1 party invitation/);
+  assert.match(r.stdout, /Status\s+Online as @it_alice/);
+  assert.match(r.stdout, /it_bob \(2\): gg, party\?/);
+  assert.match(r.stdout, /Invitation: it_bob invited you to "Companion party"/);
+  assert.match(r.stdout, /OnionHEN page: valid, \d+ nodes/);
+  // the two quick actions, through the daemon's write list
+  r = await check('--presence', 'away', '--accept-invite');
+  assert.equal(r.status, 0, r.stderr + r.stdout);
+  assert.match(r.stdout, /Status\s+Away as @it_alice/);
+  assert.match(r.stdout, /Party\s+Companion party, 2 members/);
+  assert.equal((await bob.request('GET', `/parties/${party.body.id}`)).body.memberCount, 2);
+  await waitFor(async () => (await bob.request('GET', '/friends')).body.friends.find((f) => f.id === alice.user.id)?.presence.status === 'away',
+    'alice away for bob', 10_000);
+  assert.equal((await check('--presence', 'online')).status, 0);
+  // still the daemon's single realtime session; the companion opened none
+  assert.equal(tlsRequests.filter((x) => x.upgrade).length, 1);
 });
 
 await step('native-IPC daemon: stopping removes the key; the release daemon ignores it', async () => {
