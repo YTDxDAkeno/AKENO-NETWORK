@@ -1,0 +1,150 @@
+name: AKENO PS5 ShellUI Host (experimental)
+
+# Builds an actual PS5 OnionHEN ShellUI host, AKENO plugin and daemon.
+# This is NOT a safe-to-install proof: no firmware 12.20 hardware tests.
+on:
+  push:
+    branches: [chatgpt/phase35-ps5-shellui-host-20261018]
+  pull_request:
+    paths:
+      - ".github/workflows/ps5-shellui-host.yml"
+      - "tools/shellui_host/**"
+      - "clients/ps5-ingame/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shellui-host:
+    name: Build custom PS5 ShellUI host and AKENO plugin (not hardware tested)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    env:
+      UPSTREAM_SHA: aaa4264588e00da33faccc7642d27c3c4cc339b1
+      SDK_VERSION: v0.44
+      SDK_SHA256: 4d06eab777bb135705b5a6816688c9132efb246093fe606ac488ab6cf65ca5b0
+    steps:
+      - name: Checkout AKENO source
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential ca-certificates clang-18 cmake curl file git libssl-dev \
+            librsvg2-bin lld-18 llvm-18 ninja-build pkg-config python3 \
+            unzip wget xz-utils binutils
+          sudo ln -sf /usr/lib/llvm-18/bin/llvm-config /usr/local/bin/llvm-config
+
+      - name: Install pinned complete PS5 SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://github.com/ps5-payload-dev/sdk/releases/download/$SDK_VERSION/ps5-payload-sdk.zip"
+          curl -fL --retry 4 -o "$RUNNER_TEMP/sdk.zip" "$url"
+          echo "$SDK_SHA256  $RUNNER_TEMP/sdk.zip" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/sdk-unpacked"
+          unzip -q "$RUNNER_TEMP/sdk.zip" -d "$RUNNER_TEMP/sdk-unpacked"
+          root="$(find "$RUNNER_TEMP/sdk-unpacked" -maxdepth 3 -type f -path '*/bin/prospero-cmake' -printf '%h\n' | head -1)"
+          test -n "$root" || { echo "PS5 SDK wrapper missing"; exit 1; }
+          echo "PS5_PAYLOAD_SDK=$(dirname "$root")" >> "$GITHUB_ENV"
+          echo "/usr/lib/llvm-18/bin" >> "$GITHUB_PATH"
+          echo "$(dirname "$root")/bin" >> "$GITHUB_PATH"
+          test -f "$(dirname "$root")/target/lib/libc++.a"
+
+      - name: Clone exact upstream onionHEN including submodules
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://github.com/aydencharles/onionHEN.git "$RUNNER_TEMP/onionhen"
+          git -C "$RUNNER_TEMP/onionhen" checkout --detach "$UPSTREAM_SHA"
+          test "$(git -C "$RUNNER_TEMP/onionhen" rev-parse HEAD)" = "$UPSTREAM_SHA"
+          git -C "$RUNNER_TEMP/onionhen" submodule update --init --recursive
+
+      - name: Apply AKENO Settings-only host patch (fail closed on mismatched source)
+        run: |
+          python3 tools/shellui_host/patch_onionhen.py "$RUNNER_TEMP/onionhen"
+          git -C "$RUNNER_TEMP/onionhen" diff --check
+          git -C "$RUNNER_TEMP/onionhen" diff -- source > "$RUNNER_TEMP/AKENO-shellui-host.patch"
+          test -s "$RUNNER_TEMP/AKENO-shellui-host.patch"
+
+      - name: Build the actual custom OnionHEN ShellUI host
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/onionhen"
+          export LLVM_CONFIG=/usr/lib/llvm-18/bin/llvm-config
+          export PATH="/usr/lib/llvm-18/bin:$PS5_PAYLOAD_SDK/bin:$PATH"
+          ./scripts/build.sh --release --jobs 4
+          test -s build/bin/OnionHEN.elf
+          test -s build/bin/shellui.elf
+          test -s build/bin/daemon.elf
+
+      - name: Build AKENO In-Game Companion and native IPC daemon
+        shell: bash
+        run: |
+          set -euo pipefail
+          clients/ps5-ingame/scripts/fetch-deps.sh
+          clients/ps5/scripts/fetch-deps.sh
+          make -C clients/ps5-ingame/console -j4
+          clients/ps5-ingame/console/check-plugin.sh clients/ps5-ingame/build-ps5
+          make -C clients/ps5/console -j4 NATIVE_IPC=1
+          clients/ps5/console/check-imports.sh clients/ps5/build-ps5-native-ipc
+
+      - name: Package ShellUI host + AKENO plugin + native daemon (NO HARDWARE RELEASE)
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/akeno-shellui-preview"
+          mkdir -p "$out/host" "$out/plugin" "$out/daemon" "$out/source" "$out/licenses"
+          cp "$RUNNER_TEMP/onionhen/build/bin/OnionHEN.elf" "$out/host/AKENO-ShellUI-Host-EXPERIMENTAL.elf"
+          cp "$RUNNER_TEMP/onionhen/build/bin/shellui.elf" "$out/host/shellui-internal-debug.elf"
+          cp clients/ps5-ingame/build-ps5/AKEN00001.elf "$out/plugin/AKEN00001.elf"
+          cp clients/ps5/build-ps5-native-ipc/akeno-network-ps5-native-ipc.elf "$out/daemon/"
+          cp "$RUNNER_TEMP/AKENO-shellui-host.patch" "$out/source/host-changes.patch"
+          cp "$RUNNER_TEMP/onionhen/LICENSE" "$out/licenses/OnionHEN-GPL-3.0.txt"
+          cat > "$out/README-DE.txt" <<'TXT'
+          AKENO NETWORK -- PS5 SHELLUI HOST EXPERIMENTAL
+          =================================================
+          Firmware-Ziel: PS5 12.20 -- noch NICHT auf der Konsole getestet!
+
+          Dieser Build enthaelt einen speziell angepassten onionHEN-Host,
+          der die AKENO-Seite im ShellUI/Toolbox-Einstellungsmenue laden
+          koennte, das AKENO-Plugin und den Native-IPC-Daemon.
+
+          NOCH NICHT AUF DIE PS5 LADEN.
+          Es wurden nur PC-Quellcodepruefungen und PS5-Cross-Builds gemacht.
+          ShellUI-Injektion und Runtime-Kompatibilitaet mit dem vorhandenen
+          Jailbreak/kstuff sind NICHT nachgewiesen.
+          Der Host wird nur mit bereits laufendem kstuff gestartet.
+          Remounts von /system und /system_ex sind aus dem Bootstrap entfernt.
+          Keine Loeschung von Update-Dateien durch den Bootstrapper.
+          ABER: Die Firmware-Update-Sperre des Hosts ist damit entfernt;
+          DNS allein garantiert KEINEN vollstaendigen Updateschutz.
+          Der Build aendert nicht automatisch die PS5 oder den Server.
+
+          Zielumfang: Settings/ShellUI -> Toolbox -> AKENO NETWORK.
+          KEINE Sony-Game-Base-Ersetzung und KEINE In-Game-Party-Voice.
+          Der Quellcode-Diff liegt unter source/host-changes.patch.
+          TXT
+          printf 'Upstream onionHEN: %s\nPS5 SDK: %s\nAKENO commit: %s\n' \
+            "$UPSTREAM_SHA" "$SDK_VERSION" "$GITHUB_SHA" > "$out/BUILDINFO.txt"
+          (cd "$out" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+
+      - name: Upload experimental PS5 ShellUI build
+        uses: actions/upload-artifact@v4
+        with:
+          name: AKENO-PS5-ShellUI-Host-EXPERIMENTAL
+          path: ${{ runner.temp }}/akeno-shellui-preview/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Preserve patch report when build fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AKENO-ShellUI-Host-Build-Diagnostics
+          path: ${{ runner.temp }}/AKENO-shellui-host.patch
+          if-no-files-found: ignore
