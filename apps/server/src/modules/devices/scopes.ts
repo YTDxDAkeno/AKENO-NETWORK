@@ -47,6 +47,8 @@ const API_ROUTES: Record<string, DeviceScope | null> = {
   'POST /parties/:id/join': 'parties:write',
   'POST /parties/:id/leave': 'parties:write',
   'POST /parties/:id/invitations': 'parties:write',
+  // Party voice for consoles, through the AKENO voice gateway (docs/PS5_VOICE.md).
+  'POST /parties/:id/voice/device-token': 'parties:write',
 
   'GET /game-sessions': 'sessions:read',
   'GET /game-sessions/mine': 'sessions:read',
