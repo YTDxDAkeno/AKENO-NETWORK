@@ -5,6 +5,7 @@
 
 #include "companion.h"
 #include "ui_doc.h"
+#include <onion/ui_protocol.h>
 
 static int g_checks, g_failures;
 #define CHECK(c)                                                                  \
@@ -31,6 +32,45 @@ static int page_has(onion_ui_document *doc, const char *text) {
     }
     free(buf);
     return found;
+}
+
+/* The SDK validates DISABLED but the pinned v0.9.0 Toolbox renderer cannot
+ * represent it. Inspect the wire document so a future UI change cannot sneak
+ * unsupported node flags back into any of our tested states. */
+static unsigned read16(const unsigned char *p) {
+    return (unsigned)p[0] | ((unsigned)p[1] << 8);
+}
+static unsigned read32(const unsigned char *p) {
+    return (unsigned)p[0] | ((unsigned)p[1] << 8) | ((unsigned)p[2] << 16) | ((unsigned)p[3] << 24);
+}
+static int page_has_disabled_nodes(onion_ui_document *doc) {
+    size_t size = 0, used = 0;
+    if (onion_ui_document_encoded_size(doc, &size) != ONION_OK) return 1;
+    unsigned char *buf = malloc(size);
+    if (!buf) return 1;
+    if (onion_ui_document_encode(doc, buf, size, &used) != ONION_OK || used != size ||
+        size < ONION_UI_DOCUMENT_HEADER_SIZE) {
+        free(buf);
+        return 1;
+    }
+    size_t pos = ONION_UI_DOCUMENT_HEADER_SIZE;
+    for (unsigned i = 0; i < 5; i++) pos += read16(buf + 24 + i * 2);
+    unsigned count = read32(buf + 12);
+    int invalid = pos > size;
+    for (unsigned i = 0; i < count && !invalid; i++) {
+        if (size - pos < ONION_UI_NODE_HEADER_SIZE) { invalid = 1; break; }
+        unsigned record_size = read32(buf + pos);
+        unsigned flags = read32(buf + pos + 8);
+        if (record_size < ONION_UI_NODE_HEADER_SIZE || record_size > size - pos ||
+            (flags & ONION_UI_NODE_FLAG_DISABLED)) {
+            invalid = 1;
+            break;
+        }
+        pos += record_size;
+    }
+    if (pos != size) invalid = 1;
+    free(buf);
+    return invalid;
 }
 
 static void fixtures(akn_daemon_info *d, akn_friend_list *f, akn_conv_list *c, akn_party *p, akn_inbox *in) {
@@ -107,6 +147,7 @@ static void test_model(void) {
     /* the page: valid for the SDK, with the summary and the actions */
     onion_ui_document *doc = NULL;
     CHECK(akn_companion_document(m, "note", &doc) == ONION_OK && doc);
+    CHECK(!page_has_disabled_nodes(doc));
     CHECK(page_has(doc, "Friends: 2 online, 1 playing"));
     CHECK(page_has(doc, "Party: Squad, 3 members"));
     CHECK(page_has(doc, AKN_EV_PRESENCE) && page_has(doc, AKN_EV_ACCEPT) && page_has(doc, AKN_EV_REFRESH));
@@ -132,6 +173,7 @@ static void test_model(void) {
     CHECK(!m->writes);
     CHECK(akn_companion_document(m, NULL, &doc) == ONION_OK);
     CHECK(page_has(doc, "Quick actions unavailable"));
+    CHECK(!page_has_disabled_nodes(doc));
     CHECK(!page_has(doc, AKN_EV_PRESENCE));
     CHECK(!page_has(doc, AKN_EV_ACCEPT));
     onion_ui_document_destroy(doc);
@@ -142,6 +184,7 @@ static void test_model(void) {
     akn_companion_build(m, AKN_COMP_READY, &d, f, c, &p, NULL, "online", 1000);
     CHECK(akn_companion_document(m, NULL, &doc) == ONION_OK);
     CHECK(page_has(doc, AKN_EV_PRESENCE));
+    CHECK(!page_has_disabled_nodes(doc));
     CHECK(!page_has(doc, AKN_EV_ACCEPT));
     CHECK(page_has(doc, "No invitation waiting"));
     onion_ui_document_destroy(doc);
