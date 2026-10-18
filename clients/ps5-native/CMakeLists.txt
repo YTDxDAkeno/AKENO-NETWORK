@@ -59,10 +59,8 @@ if(EXISTS "${AKENO_THIRD_PARTY_DIR}/mbedtls/library/ssl_tls.c" AND EXISTS "${AKE
   target_link_libraries(akn_akeno PUBLIC akn_mbedtls)
   set(AKN_TRANSPORT "mbedTLS (console transport)")
 else()
-  find_package(OpenSSL 1.1.1 REQUIRED)
-  add_library(akn_akeno STATIC ${AKENO_CORE_SOURCES} "${PS5_DIR}/src/transport_openssl.c")
-  target_link_libraries(akn_akeno PUBLIC OpenSSL::SSL OpenSSL::Crypto)
-  set(AKN_TRANSPORT "OpenSSL")
+  # The updater verifies signatures with mbedTLS (src/core/update_verify.c), as on the console.
+  message(FATAL_ERROR "mbedTLS and the CA bundle are missing; run clients/ps5-native/scripts/fetch-deps.sh")
 endif()
 message(STATUS "AKENO Native: client library transport ${AKN_TRANSPORT}")
 target_include_directories(akn_akeno PUBLIC "${PS5_DIR}/include" PRIVATE "${PS5_DIR}/src")
@@ -93,8 +91,10 @@ add_library(akn_core STATIC
   src/core/logo.c src/core/png.c src/core/text.c src/core/ui.c src/core/script.c src/core/account.c src/core/social.c
   src/core/image.c src/core/vector.c src/core/badges.c src/core/artwork.c src/core/chat.c src/core/osk.c src/core/party.c
   src/core/voice.c src/core/voice_codec.c src/core/voice_dsp.c src/core/voice_proto.c src/core/jitter.c src/core/mic_test.c
+  src/core/semver.c src/core/update.c src/core/update_verify.c src/core/update_zip.c src/core/update_fs.c
+  src/core/update_install.c src/core/update_net.c src/core/update_engine.c
   "${PS5_DIR}/app/audio_lab_pcm.c" "${PS5_DIR}/app/game_detect.c")
-target_include_directories(akn_core PUBLIC src/core "${PS5_DIR}/app")
+target_include_directories(akn_core PUBLIC src/core "${PS5_DIR}/app" "${PS5_DIR}/src")
 target_compile_options(akn_core PRIVATE ${AKN_WARNINGS} ${AKN_HARDENING})
 target_link_libraries(akn_core PUBLIC akn_akeno akn_stbimage akn_opus m Threads::Threads)
 
@@ -137,7 +137,7 @@ target_link_libraries(make-icon PRIVATE akn_core)
 enable_testing()
 add_executable(akn_unit_tests tests/unit/test_main.c tests/unit/test_nav_input.c tests/unit/test_audio.c
   tests/unit/test_redact_context.c tests/unit/test_image_text.c tests/unit/test_ui_script.c tests/unit/test_account.c
-  tests/unit/test_social.c tests/unit/test_pictures.c tests/unit/test_artwork.c tests/unit/test_chat.c tests/unit/test_party.c tests/unit/test_voice.c src/app/net.c src/app/ipc.c)
+  tests/unit/test_social.c tests/unit/test_pictures.c tests/unit/test_artwork.c tests/unit/test_chat.c tests/unit/test_party.c tests/unit/test_voice.c tests/unit/test_update.c src/app/net.c src/app/ipc.c)
 target_include_directories(akn_unit_tests PRIVATE tests/unit src/app src/platform)
 target_compile_options(akn_unit_tests PRIVATE ${AKN_WARNINGS})
 target_link_libraries(akn_unit_tests PRIVATE akn_core)
