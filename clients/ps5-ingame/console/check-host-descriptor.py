@@ -55,15 +55,16 @@ def check(elf: bytes) -> None:
     size, abi, capabilities, flags = struct.unpack_from("<IIII", descriptor)
     if not 128 <= size <= len(descriptor) or abi != 1:
         fail("invalid descriptor size or ABI")
-    if capabilities != (1 << 1) | (1 << 5):
+    # NOTIFY | IPC | UI; the host knows bits 0-5 (kKnownCapabilities = (1 << 6) - 1).
+    if capabilities != (1 << 0) | (1 << 1) | (1 << 5):
         fail("unexpected plugin capabilities")
     if flags != (1 << 1) | (1 << 2):
         fail("host v0.9.0 only permits LONG_RUNNING and STOP_SUPPORTED")
     identifier = descriptor[16:48].split(b"\0", 1)[0]
     version = descriptor[48:64].split(b"\0", 1)[0]
-    if identifier != b"AKEN00001" or version != b"1.00":
+    if identifier != b"AKEN00001" or version != b"1.10":
         fail("unexpected plugin ID or version")
-    print("host descriptor: OK (onionHEN v0.9.0, ABI 1, IPC+UI, flags 0x06)")
+    print("host descriptor: OK (onionHEN v0.9.0, ABI 1, NOTIFY+IPC+UI, flags 0x06)")
 
 
 if __name__ == "__main__":

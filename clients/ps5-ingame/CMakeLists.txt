@@ -45,7 +45,7 @@ target_include_directories(akn_shared PUBLIC "${NATIVE_DIR}/src/core" "${NATIVE_
   PRIVATE "${PS5_DIR}/src" "${NATIVE_DIR}/third_party")
 target_link_libraries(akn_shared PUBLIC m)
 
-add_library(akn_ingame STATIC src/companion.c src/fetch.c src/ui_doc.c)
+add_library(akn_ingame STATIC src/companion.c src/fetch.c src/ui_doc.c src/actions.c)
 target_include_directories(akn_ingame PUBLIC src)
 target_compile_options(akn_ingame PRIVATE ${AKN_WARNINGS})
 target_link_libraries(akn_ingame PUBLIC akn_shared onion_runtime)
