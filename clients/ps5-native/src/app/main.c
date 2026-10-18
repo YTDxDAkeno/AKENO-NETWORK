@@ -19,8 +19,10 @@
 int main(int argc, char **argv) {
     akn_options options;
     memset(&options, 0, sizeof(options));
-    for (int i = 1; i < argc; i++)
+    for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--launcher") == 0) options.launcher_arg = 1;
+        else if (strcmp(argv[i], "--install-dir") == 0 && i + 1 < argc) options.install_dir = argv[++i];
+    }
 #ifndef AKN_PLATFORM_PS5
     options.script = getenv("AKENO_NATIVE_SCRIPT");
     options.sync_dir = getenv("AKENO_NATIVE_SYNC_DIR");

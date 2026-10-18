@@ -3,6 +3,28 @@
 Hardware status is stated per version. "PC" means unit, integration and end-to-end tests on a PC;
 it is never evidence that something works on a PS5.
 
+## 1.2.0-beta.1 — 2026-10-18 (beta, not run on a PS5)
+
+### Added
+- **Updater** (docs/PS5_NATIVE_UPDATER.md): Settings → Updates; GitHub releases `native-<semver>`
+  with stable and beta channels; automatic checks at start and every 6 hours with an
+  "Install now?" question; signed manifest (ECDSA P-256), HTTPS to GitHub hosts only, strict ZIP
+  reader; side-by-side install in `update/versions/<v>/`; `homebrew.js` starts the active version
+  and falls back to the previous one after two unconfirmed starts. Installs are refused until a
+  release signing key is configured.
+- Release tools: `tools/make-update.mjs`, `tools/update-keygen.sh`, `akn-update` (PC).
+- Suspend and resume monitor (report section "[Suspend and resume (test F)]").
+- Voice Lab (`clients/ps5-voicelab`, experimental, separate payload): background audio
+  diagnostics A–E for party voice during games.
+
+### Fixed
+- Download read errors were mapped to the wrong status.
+
+### Testing
+- Updater unit tests, `tests/updater/run.mjs` (mock GitHub: corrupt, truncated, stalled and
+  foreign downloads, wrong keys, incompatible releases, an install killed half-way, rollback),
+  `tests/updater/ui.mjs` (the real app with a virtual controller); Voice Lab unit tests.
+
 ## 1.1.0-beta.1 — 2026-10-18 (beta, not run on a PS5)
 
 Requires the native-IPC daemon of the same package (native interface 3) and the AKENO voice

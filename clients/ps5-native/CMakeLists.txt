@@ -57,12 +57,13 @@ if(EXISTS "${AKENO_THIRD_PARTY_DIR}/mbedtls/library/ssl_tls.c" AND EXISTS "${AKE
     "AKENO_CA_BUNDLE_NAME=\"Mozilla CA bundle from certifi 2026.07.22\"")
   set_source_files_properties("${PS5_DIR}/src/transport_mbedtls.c" PROPERTIES OBJECT_DEPENDS "${AKENO_THIRD_PARTY_DIR}/cacert.pem")
   target_link_libraries(akn_akeno PUBLIC akn_mbedtls)
+  # mbedTLS's entropy source (mbedtls_hardware_poll) is defined in transport_mbedtls.c: a cycle
+  # between the two static libraries, so programs that use only the crypto part link too.
+  target_link_libraries(akn_mbedtls PUBLIC akn_akeno)
   set(AKN_TRANSPORT "mbedTLS (console transport)")
 else()
-  find_package(OpenSSL 1.1.1 REQUIRED)
-  add_library(akn_akeno STATIC ${AKENO_CORE_SOURCES} "${PS5_DIR}/src/transport_openssl.c")
-  target_link_libraries(akn_akeno PUBLIC OpenSSL::SSL OpenSSL::Crypto)
-  set(AKN_TRANSPORT "OpenSSL")
+  # The updater verifies signatures with mbedTLS (src/core/update_verify.c), as on the console.
+  message(FATAL_ERROR "mbedTLS and the CA bundle are missing; run clients/ps5-native/scripts/fetch-deps.sh")
 endif()
 message(STATUS "AKENO Native: client library transport ${AKN_TRANSPORT}")
 target_include_directories(akn_akeno PUBLIC "${PS5_DIR}/include" PRIVATE "${PS5_DIR}/src")
@@ -93,8 +94,10 @@ add_library(akn_core STATIC
   src/core/logo.c src/core/png.c src/core/text.c src/core/ui.c src/core/script.c src/core/account.c src/core/social.c
   src/core/image.c src/core/vector.c src/core/badges.c src/core/artwork.c src/core/chat.c src/core/osk.c src/core/party.c
   src/core/voice.c src/core/voice_codec.c src/core/voice_dsp.c src/core/voice_proto.c src/core/jitter.c src/core/mic_test.c
+  src/core/semver.c src/core/update.c src/core/update_verify.c src/core/update_zip.c src/core/update_fs.c
+  src/core/update_install.c src/core/update_net.c src/core/update_engine.c src/core/update_prefs.c src/core/update_view.c src/core/lifecycle.c
   "${PS5_DIR}/app/audio_lab_pcm.c" "${PS5_DIR}/app/game_detect.c")
-target_include_directories(akn_core PUBLIC src/core "${PS5_DIR}/app")
+target_include_directories(akn_core PUBLIC src/core "${PS5_DIR}/app" "${PS5_DIR}/src")
 target_compile_options(akn_core PRIVATE ${AKN_WARNINGS} ${AKN_HARDENING})
 target_link_libraries(akn_core PUBLIC akn_akeno akn_stbimage akn_opus m Threads::Threads)
 
@@ -115,7 +118,7 @@ if(SDL2_FOUND)
   target_compile_options(akn_stb PRIVATE -w) # third-party code
 
   add_executable(akeno-native src/app/main.c src/app/app.c src/app/screens.c src/app/gfx.c src/app/net.c src/app/report.c
-    src/app/ipc.c src/app/social.c src/app/images.c src/app/voice_app.c src/platform/platform_host.c)
+    src/app/ipc.c src/app/social.c src/app/images.c src/app/voice_app.c src/app/update_app.c src/platform/platform_host.c)
   target_include_directories(akeno-native PRIVATE src/app src/platform "${PS5_DIR}/src")
   target_compile_options(akeno-native PRIVATE ${AKN_WARNINGS} ${AKN_HARDENING})
   target_compile_definitions(akeno-native PRIVATE
@@ -133,12 +136,25 @@ endif()
 add_executable(make-icon tools/make_icon.c)
 target_compile_options(make-icon PRIVATE ${AKN_WARNINGS} ${AKN_HARDENING})
 target_link_libraries(make-icon PRIVATE akn_core)
+add_executable(akn-update tools/update_cli.c)
+target_compile_options(akn-update PRIVATE ${AKN_WARNINGS} ${AKN_HARDENING})
+target_link_libraries(akn-update PRIVATE akn_core)
 
 enable_testing()
 add_executable(akn_unit_tests tests/unit/test_main.c tests/unit/test_nav_input.c tests/unit/test_audio.c
   tests/unit/test_redact_context.c tests/unit/test_image_text.c tests/unit/test_ui_script.c tests/unit/test_account.c
-  tests/unit/test_social.c tests/unit/test_pictures.c tests/unit/test_artwork.c tests/unit/test_chat.c tests/unit/test_party.c tests/unit/test_voice.c src/app/net.c src/app/ipc.c)
+  tests/unit/test_social.c tests/unit/test_pictures.c tests/unit/test_artwork.c tests/unit/test_chat.c tests/unit/test_party.c tests/unit/test_voice.c tests/unit/test_update.c tests/unit/test_lifecycle.c src/app/net.c src/app/ipc.c)
 target_include_directories(akn_unit_tests PRIVATE tests/unit src/app src/platform)
 target_compile_options(akn_unit_tests PRIVATE ${AKN_WARNINGS})
 target_link_libraries(akn_unit_tests PRIVATE akn_core)
 add_test(NAME unit COMMAND akn_unit_tests)
+
+# libFuzzer harness for the updater's readers (tests/fuzz/run.sh configures this with clang and
+# -fsanitize=fuzzer-no-link,address,undefined for the whole build).
+option(AKN_FUZZ "Build tests/fuzz/fuzz_update.c (clang, libFuzzer)" OFF)
+if(AKN_FUZZ)
+  add_executable(fuzz_update tests/fuzz/fuzz_update.c)
+  target_compile_options(fuzz_update PRIVATE ${AKN_WARNINGS})
+  target_link_libraries(fuzz_update PRIVATE akn_core)
+  target_link_options(fuzz_update PRIVATE -fsanitize=fuzzer)
+endif()

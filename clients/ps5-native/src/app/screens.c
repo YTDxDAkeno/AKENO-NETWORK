@@ -9,6 +9,7 @@
 
 #include "app.h"
 #include "badges.h"
+#include "update_app.h"
 
 #define C_INK 0xFFE9EDF8u
 #define C_MUTED 0xFF9AA5C4u
@@ -203,7 +204,7 @@ static void top_bar(akn_app *app, const akn_account_view *acc) {
     tracked(g, 177, 74, 14, AKN_FONT_REGULAR, C_MUTED, "NETWORK", 6);
     akn_rect pill = { 360, 46, 210, 36 };
     akn_gfx_rrect(g, pill, 18, C_ACCENT_SOFT);
-    akn_gfx_text_center(g, pill.x, pill.w, 52, 18, AKN_FONT_BOLD, 0xFFB7C8FFu, "BETA \xC2\xB7 1.1");
+    akn_gfx_text_center(g, pill.x, pill.w, 52, 18, AKN_FONT_BOLD, 0xFFB7C8FFu, "BETA \xC2\xB7 1.2");
 
     int x = AKN_SCREEN_W - AKN_MARGIN_X;
     char text[120];
@@ -240,7 +241,7 @@ static void bottom_bar(akn_app *app) {
         prompt(app, &x, y, SYM_CIRCLE, "Close");
     } else if (app->ui.dialog != AKN_DIALOG_NONE) {
         prompt(app, &x, y, SYM_CROSS, "Select");
-        prompt(app, &x, y, SYM_CIRCLE, app->ui.dialog == AKN_DIALOG_HEARD ? "Not sure" : "Cancel");
+        prompt(app, &x, y, SYM_CIRCLE, app->ui.dialog == AKN_DIALOG_HEARD ? "Not sure" : app->ui.confirm_no[0] && app->ui.dialog == AKN_DIALOG_CONFIRM ? app->ui.confirm_no : "Cancel");
     } else if (app->ui.screen == AKN_SCREEN_CONTROLLER) {
         prompt(app, &x, y, SYM_CIRCLE, "Hold 1 s to return");
     } else if (app->ui.screen == AKN_SCREEN_AUDIO && app->ui.audio_busy) {
@@ -275,6 +276,11 @@ static void bottom_bar(akn_app *app) {
     } else if (app->ui.screen == AKN_SCREEN_SETTINGS) {
         prompt(app, &x, y, SYM_CROSS, "Change / Open");
         prompt(app, &x, y, SYM_CIRCLE, "Back");
+    } else if (app->ui.screen == AKN_SCREEN_UPDATES) {
+        prompt(app, &x, y, SYM_CROSS, "Select");
+        prompt(app, &x, y, SYM_SQUARE, "Cancel download");
+        prompt(app, &x, y, SYM_CIRCLE, "Back");
+        prompt(app, &x, y, SYM_TRIANGLE, "Check for updates");
     } else if (app->ui.screen == AKN_SCREEN_PICKER) {
         prompt(app, &x, y, SYM_CROSS, app->ui.picker_purpose == AKN_PICK_INVITE ? "Invite" : "Write");
         prompt(app, &x, y, SYM_CIRCLE, "Back");
@@ -1829,7 +1835,7 @@ static void draw_settings(akn_app *app, const akn_social *s, uint64_t now) {
     const char *status = strcmp(pref, "away") == 0 ? "Away" : strcmp(pref, "dnd") == 0 ? "Busy" : strcmp(pref, "invisible") == 0 ? "Invisible" : "Online";
     static const char *const titles[AKN_SET_COUNT] = { "Message notifications", "Friend and invitation notifications", "Share the game I'm playing",
                                                        "Online status", "Connection", "System and diagnostic report", "Audio test", "Controller test",
-                                                       "Microphone test" };
+                                                       "Microphone test", "Updates" };
     const char *subs[AKN_SET_COUNT] = { "System notifications for new messages (not for the conversation open here).",
                                         "Friend requests, accepted requests and invitations.",
                                         "Your friends see the game this console detects; nothing is shared while it is off.",
@@ -1849,6 +1855,14 @@ static void draw_settings(akn_app *app, const akn_social *s, uint64_t now) {
     else if (v->mic_test) snprintf(mic_line, sizeof(mic_line), "Opening the microphone...");
     else snprintf(mic_line, sizeof(mic_line), "DualSense or headset: level meter on this console only; nothing is sent or stored.");
     subs[AKN_SET_MIC_TEST] = mic_line;
+    char upd_line[200]; /* app->lock is held here: the updater's fields can be read directly */
+    if (app->upd.phase >= AKN_UPD_DOWNLOADING && app->upd.phase <= AKN_UPD_INSTALLING) snprintf(upd_line, sizeof(upd_line), "Version %s \xC2\xB7 installing an update...", AKN_NATIVE_VERSION);
+    else if (app->upd.phase == AKN_UPD_INSTALLED) snprintf(upd_line, sizeof(upd_line), "Version %s \xC2\xB7 %s installed: restart AKENO to use it", AKN_NATIVE_VERSION, app->upd.installed);
+    else if (app->upd.outcome && app->upd.outcome->result == AKN_CHECK_AVAILABLE)
+        snprintf(upd_line, sizeof(upd_line), "Version %s \xC2\xB7 %s is available", AKN_NATIVE_VERSION, app->upd.outcome->release.version);
+    else snprintf(upd_line, sizeof(upd_line), "Version %s \xC2\xB7 %s channel \xC2\xB7 check for updates, changelog, history", AKN_NATIVE_VERSION,
+                  app->upd.prefs.channel == AKN_CHANNEL_BETA ? "beta" : "stable");
+    subs[AKN_SET_UPDATES] = upd_line;
     int focus = app->ui.focus[AKN_SCREEN_SETTINGS];
     akn_rect focus_rect = { 0, 0, 0, 0 };
     for (int i = app->ui.list_top[AKN_SCREEN_SETTINGS]; i < AKN_SET_COUNT && i < app->ui.list_top[AKN_SCREEN_SETTINGS] + AKN_FRIEND_ROWS_VISIBLE; i++) {
@@ -1905,6 +1919,79 @@ static void draw_settings(akn_app *app, const akn_social *s, uint64_t now) {
                       "Pairing, the server address, the console name and your profile, privacy and account stay on the AKENO page and the "
                       "website. AKENO Native never changes them.",
                       w, 30, 6);
+    if (focus_rect.w && !app->ui.dialog) focus_ring(app, focus_rect, 18, now);
+}
+
+/* Settings -> Updates (update_view.h for the texts). Called without app->lock. */
+static void draw_updates(akn_app *app, uint64_t now) {
+    akn_gfx *g = app->gfx;
+    static akn_upd_view v;
+    static char notes[AKN_UPDATE_NOTES_MAX], history[4096];
+    akn_upd_view_get(app, &v, notes, sizeof(notes), history, sizeof(history));
+    screen_title(app, "Updates", "AKENO NETWORK Native from its official GitHub releases, checked with a signature before anything is installed.");
+    int focus = app->ui.focus[AKN_SCREEN_UPDATES];
+    akn_rect focus_rect = { 0, 0, 0, 0 };
+    for (int i = app->ui.list_top[AKN_SCREEN_UPDATES]; i < AKN_UPD_ROW_COUNT && i < app->ui.list_top[AKN_SCREEN_UPDATES] + AKN_FRIEND_ROWS_VISIBLE; i++) {
+        akn_rect r = akn_ui_row_rect(&app->ui, AKN_SCREEN_UPDATES, i);
+        int f = i == focus && !app->ui.dialog;
+        char title[80], line[300];
+        akn_upd_row_text(&v, (akn_upd_row)i, title, sizeof(title), line, sizeof(line));
+        int enabled = akn_upd_row_enabled(&v, (akn_upd_row)i) || i == AKN_UPD_ROW_CURRENT || i == AKN_UPD_ROW_HISTORY;
+        akn_gfx_rrect(g, r, 18, f ? 0xF21A2542u : C_SURFACE2);
+        akn_gfx_rrect_outline(g, r, 18, 1, f ? C_LINE_STRONG : C_LINE);
+        akn_gfx_text_fit(g, r.x + 32, r.y + 12, 27, AKN_FONT_BOLD, enabled ? C_INK : C_SUBTLE, title, r.w - 220);
+        akn_gfx_text_fit(g, r.x + 32, r.y + 48, 20, AKN_FONT_REGULAR, v.phase == AKN_UPD_FAILED && i == AKN_UPD_ROW_INSTALL ? C_DANGER : C_MUTED,
+                         line, r.w - 220);
+        int right = r.x + r.w - 28;
+        if (i == AKN_UPD_ROW_AUTO) toggle(app, right, r.y + 27, v.prefs.auto_check, 1);
+        else if (i == AKN_UPD_ROW_CHANNEL) {
+            const char *ch = v.prefs.channel == AKN_CHANNEL_BETA ? "Beta" : "Stable";
+            int w = akn_gfx_text_width(g, 16, AKN_FONT_BOLD, ch, strlen(ch)) + 28;
+            pill(app, right - w, r.y + 27, C_ACCENT_SOFT, 0xFFB7C8FFu, ch);
+        } else if (i == AKN_UPD_ROW_INSTALL && akn_upd_progress(&v) >= 0) {
+            akn_rect bar = { right - 180, r.y + 34, 180, 14 };
+            akn_gfx_rrect(g, bar, 7, C_LINE);
+            int w = (int)(bar.w * akn_upd_progress(&v));
+            if (w > 0) akn_gfx_rrect(g, (akn_rect){ bar.x, bar.y, w, bar.h }, 7, C_SUCCESS);
+        } else if (i == AKN_UPD_ROW_LATEST && v.checked && v.result == AKN_CHECK_AVAILABLE) {
+            int w = akn_gfx_text_width(g, 16, AKN_FONT_BOLD, "New", 3) + 28;
+            pill(app, right - w, r.y + 27, C_ACCENT_SOFT, 0xFFB7C8FFu, "New");
+        }
+        if (i == focus) focus_rect = r;
+    }
+    scroll_info(app, AKN_SCREEN_UPDATES, AKN_MARGIN_X + 1000, 966, AKN_FRIEND_ROWS_VISIBLE);
+    akn_rect p = { 1136, 290, 688, 660 };
+    panel(app, p);
+    int x = p.x + 36, w = p.w - 72, y;
+    if (focus == AKN_UPD_ROW_HISTORY) {
+        y = section_title(app, x, p.y + 32, "UPDATE HISTORY");
+        akn_gfx_text_wrap(g, x, y, 20, AKN_FONT_REGULAR, C_MUTED, history[0] ? history : "Nothing installed by the updater yet.", w, 28, 18);
+    } else if (v.checked && v.version[0] &&
+               (app->upd.show_notes || focus == AKN_UPD_ROW_LATEST || focus == AKN_UPD_ROW_CHANGELOG || focus == AKN_UPD_ROW_INSTALL)) {
+        char head[96];
+        snprintf(head, sizeof(head), "CHANGES IN %s", v.version);
+        y = section_title(app, x, p.y + 32, head);
+        akn_gfx_text_wrap(g, x, y, 21, AKN_FONT_REGULAR, C_MUTED, notes[0] ? notes : "The release has no description.", w, 30, 18);
+    } else {
+        y = section_title(app, x, p.y + 32, "HOW UPDATES WORK");
+        y += 30 * akn_gfx_text_wrap(g, x, y, 21, AKN_FONT_REGULAR, C_MUTED,
+                              "AKENO asks GitHub for releases of YTDxDAkeno/AKENO-NETWORK and accepts only files from that repository. "
+                              "Every update is signed; AKENO checks the signature, the size and the checksum of every file before it "
+                              "installs anything.",
+                              w, 30, 6);
+        y += 16;
+        y += 30 * akn_gfx_text_wrap(g, x, y, 21, AKN_FONT_REGULAR, C_MUTED,
+                              "The new version is installed next to this one. If it does not start twice, the launcher starts this "
+                              "version again. Your sign-in, settings and messages are not touched.",
+                              w, 30, 5);
+        y += 16;
+        if (!v.has_key)
+            akn_gfx_text_wrap(g, x, y, 21, AKN_FONT_REGULAR, C_WARNING,
+                              "This build has no update signing key: it can show releases but cannot install them.", w, 30, 3);
+        else if (!v.has_root)
+            akn_gfx_text_wrap(g, x, y, 21, AKN_FONT_REGULAR, C_WARNING,
+                              "Not started from the Homebrew Launcher: updates can be checked but not installed.", w, 30, 3);
+    }
     if (focus_rect.w && !app->ui.dialog) focus_ring(app, focus_rect, 18, now);
 }
 
@@ -2047,6 +2134,7 @@ void akn_screens_draw(akn_app *app, uint64_t now) {
     case AKN_SCREEN_AUDIO: draw_audio(app, now); break;
     case AKN_SCREEN_CONNECTION: draw_connection(app, &acc, running, now); break;
     case AKN_SCREEN_SYSTEM: draw_system(app, now); break;
+    case AKN_SCREEN_UPDATES: draw_updates(app, now); break;
     case AKN_SCREEN_FRIENDS:
     case AKN_SCREEN_PROFILE:
     case AKN_SCREEN_ACTIVITY:

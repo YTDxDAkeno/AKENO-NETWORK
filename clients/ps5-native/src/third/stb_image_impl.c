@@ -24,3 +24,7 @@ const char *akn_stbi_failure(void) {
     const char *r = stbi_failure_reason();
     return r ? r : "decode failed";
 }
+
+int akn_stbi_inflate_raw(uint8_t *out, int out_len, const uint8_t *in, int in_len) {
+    return stbi_zlib_decode_noheader_buffer((char *)out, out_len, (const char *)in, in_len);
+}

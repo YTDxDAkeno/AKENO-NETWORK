@@ -32,6 +32,7 @@ typedef enum {
     AKN_SCREEN_INBOX,    /* friend requests, invitations, notifications (rows) */
     AKN_SCREEN_SETTINGS, /* notification, activity and presence settings (rows) */
     AKN_SCREEN_PICKER,   /* choose a friend (to invite to the party, to write to) (rows) */
+    AKN_SCREEN_UPDATES,  /* Settings -> Updates (rows, update_view.h) */
     AKN_SCREEN_COUNT
 } akn_screen;
 
@@ -138,7 +139,7 @@ typedef struct {
     int osk_purpose;
     char osk_title[120];
     int confirm_action;             /* the app's action behind the confirm dialog */
-    char confirm_title[120], confirm_text[240], confirm_yes[40];
+    char confirm_title[120], confirm_text[240], confirm_yes[40], confirm_no[24]; /* confirm_no "" = "Cancel" */
 } akn_ui;
 
 #define AKN_PROFILE_VIEW_Y 120      /* the profile scrolls between the top bar and the prompts */

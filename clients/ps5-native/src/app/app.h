@@ -14,6 +14,8 @@
 #include "context.h"
 #include "gfx.h"
 #include "input.h"
+#include "lifecycle.h"
+#include "update_view.h"
 #include "log.h"
 #include "mic_test.h"
 #include "akn_platform.h"
@@ -24,7 +26,7 @@
 #include "ui.h"
 #include "voice.h"
 
-#define AKN_NATIVE_VERSION "1.1.0-beta.1"
+#define AKN_NATIVE_VERSION "1.2.0-beta.1"
 #ifndef AKN_BUILD_ID
 #define AKN_BUILD_ID "dev"
 #endif
@@ -152,7 +154,8 @@ typedef struct {
 /* Why the keyboard, the friend picker or the confirm dialog is open (akn_ui purposes). */
 enum { AKN_KB_MESSAGE = 1, AKN_KB_PARTY_NAME };
 enum { AKN_PICK_INVITE = 1, AKN_PICK_MESSAGE };
-enum { AKN_CONFIRM_LEAVE_PARTY = 1, AKN_CONFIRM_DECLINE_INVITATION, AKN_CONFIRM_DECLINE_REQUEST, AKN_CONFIRM_JOIN_VOICE, AKN_CONFIRM_MIC_TEST };
+enum { AKN_CONFIRM_LEAVE_PARTY = 1, AKN_CONFIRM_DECLINE_INVITATION, AKN_CONFIRM_DECLINE_REQUEST, AKN_CONFIRM_JOIN_VOICE, AKN_CONFIRM_MIC_TEST,
+       AKN_CONFIRM_UPDATE_INSTALL, AKN_CONFIRM_UPDATE_RESTART };
 
 /* The rows of the Inbox screen. */
 typedef enum { AKN_IROW_REQUEST = 0, AKN_IROW_INVITATION, AKN_IROW_NOTIFICATIONS } akn_inbox_row_kind;
@@ -173,11 +176,13 @@ typedef enum {
     AKN_SET_AUDIO,
     AKN_SET_CONTROLLER,
     AKN_SET_MIC_TEST,           /* the local microphone test (voice) */
+    AKN_SET_UPDATES,            /* opens the Updates screen */
     AKN_SET_COUNT
 } akn_setting_row;
 
 typedef struct {
     int launcher_arg;    /* --launcher (homebrew.js) */
+    const char *install_dir; /* --install-dir <launcher folder> (homebrew.js; updates) */
     const char *script;  /* PC tests: steps (AKENO_NATIVE_SCRIPT) */
     const char *sync_dir; /* PC tests: "sync" steps wait for a file here (AKENO_NATIVE_SYNC_DIR) */
     int window_w, window_h;
@@ -250,6 +255,32 @@ typedef struct {
     double frame_ms_avg, frame_ms_max;
     uint64_t started_ms;
     uint64_t last_frame_ms;
+    akn_lifecycle life;           /* test F: pauses and window events (main thread) */
+
+    /* Updates (update_app.h); fields marked "lock" are shared with the updater thread */
+    struct {
+        char root[256];           /* the launcher folder, "" when not started from it */
+        akn_boot_result boot;
+        int confirmed_now;
+        akn_update_prefs prefs;   /* main thread */
+        akn_upd_phase phase;      /* lock */
+        int checking, checked, automatic; /* lock */
+        akn_check_outcome *outcome; /* lock; the last finished check */
+        long long done, total;    /* lock */
+        double speed;             /* lock; bytes per second */
+        uint64_t speed_at;
+        long long speed_done;
+        char installed[AKN_SEMVER_TEXT_MAX]; /* lock */
+        char error[300];          /* lock */
+        volatile int cancel;
+        int job;                  /* the running job: 1 check, 2 install */
+        SDL_Thread *thread;
+        volatile int thread_done;
+        char prompted[AKN_SEMVER_TEXT_MAX]; /* main thread: the version the "update available" dialog asked about */
+        uint64_t next_auto_ms;    /* main thread */
+        int show_notes;           /* main thread: the panel shows the changelog */
+    } upd;
+    uint64_t life_app_at;         /* when the running app was last sampled */
 
     /* Logging and report */
     akn_log log;

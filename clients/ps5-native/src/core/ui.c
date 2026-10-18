@@ -104,6 +104,7 @@ const char *akn_screen_name(akn_screen screen) {
     case AKN_SCREEN_INBOX: return "inbox";
     case AKN_SCREEN_SETTINGS: return "settings";
     case AKN_SCREEN_PICKER: return "picker";
+    case AKN_SCREEN_UPDATES: return "updates";
     case AKN_SCREEN_COUNT: break;
     }
     return "?";
@@ -125,6 +126,7 @@ const char *akn_screen_title(akn_screen screen) {
     case AKN_SCREEN_INBOX: return "Notifications";
     case AKN_SCREEN_SETTINGS: return "Settings";
     case AKN_SCREEN_PICKER: return "Choose a friend";
+    case AKN_SCREEN_UPDATES: return "Updates";
     case AKN_SCREEN_COUNT: break;
     }
     return "?";
@@ -150,7 +152,8 @@ int akn_ui_is_list(akn_screen screen) {
     case AKN_SCREEN_PARTY:
     case AKN_SCREEN_INBOX:
     case AKN_SCREEN_SETTINGS:
-    case AKN_SCREEN_PICKER: return 1;
+    case AKN_SCREEN_PICKER:
+    case AKN_SCREEN_UPDATES: return 1;
     default: return 0;
     }
 }
@@ -244,7 +247,8 @@ int akn_ui_screen_items(const akn_ui *ui, akn_screen screen, akn_item *out, int 
     case AKN_SCREEN_PARTY:
     case AKN_SCREEN_INBOX:
     case AKN_SCREEN_SETTINGS:
-    case AKN_SCREEN_PICKER: {
+    case AKN_SCREEN_PICKER:
+    case AKN_SCREEN_UPDATES: {
         int end = ui->list_top[screen] + rows_visible(screen);
         if (end > ui->list_count[screen]) end = ui->list_count[screen];
         for (int i = ui->list_top[screen]; i < end; i++) {
@@ -276,7 +280,7 @@ int akn_ui_dialog_items(const akn_ui *ui, akn_item *out, int max) {
         out[n++] = make(AKN_ITEM_HEARD_UNSURE, AKN_KIND_BUTTON, 1120, 578, 280, 88, "Not sure", NULL);
     } else if (ui->dialog == AKN_DIALOG_CONFIRM && max >= 2) {
         out[n++] = make(AKN_ITEM_CONFIRM_YES, AKN_KIND_BUTTON, 640, 600, 300, 88, ui->confirm_yes[0] ? ui->confirm_yes : "Yes", NULL);
-        out[n++] = make(AKN_ITEM_CONFIRM_NO, AKN_KIND_BUTTON, 980, 600, 300, 88, "Cancel", NULL);
+        out[n++] = make(AKN_ITEM_CONFIRM_NO, AKN_KIND_BUTTON, 980, 600, 300, 88, ui->confirm_no[0] ? ui->confirm_no : "Cancel", NULL);
     }
     return n;
 }
@@ -345,6 +349,7 @@ void akn_ui_open_confirm(akn_ui *ui, int action, const char *title, const char *
     snprintf(ui->confirm_title, sizeof(ui->confirm_title), "%s", title ? title : "");
     snprintf(ui->confirm_text, sizeof(ui->confirm_text), "%s", text ? text : "");
     snprintf(ui->confirm_yes, sizeof(ui->confirm_yes), "%s", yes ? yes : "");
+    ui->confirm_no[0] = '\0';
     ui->dialog = AKN_DIALOG_CONFIRM;
     ui->dialog_focus = 1; /* Cancel first: nothing happens by accident */
 }
@@ -556,7 +561,7 @@ akn_cmd akn_ui_handle(akn_ui *ui, const akn_input_event *ev, uint64_t now_ms) {
             return AKN_CMD_NONE;
         }
         if ((ev->button == AKN_BTN_LEFT || ev->button == AKN_BTN_RIGHT) && count > 0 &&
-            (ui->screen == AKN_SCREEN_PARTY || ui->screen == AKN_SCREEN_SETTINGS)) {
+            (ui->screen == AKN_SCREEN_PARTY || ui->screen == AKN_SCREEN_SETTINGS || ui->screen == AKN_SCREEN_UPDATES)) {
             ui->open_row = *focus;
             ui->adjust_dir = ev->button == AKN_BTN_RIGHT ? 1 : -1;
             return AKN_CMD_ROW_ADJUST;
@@ -574,7 +579,9 @@ akn_cmd akn_ui_handle(akn_ui *ui, const akn_input_event *ev, uint64_t now_ms) {
             }
         }
         if (ev->button == AKN_BTN_CIRCLE) {
-            akn_ui_open_screen(ui, ui->screen == AKN_SCREEN_PICKER ? ui->picker_back : AKN_SCREEN_HOME);
+            akn_ui_open_screen(ui, ui->screen == AKN_SCREEN_PICKER    ? ui->picker_back
+                                   : ui->screen == AKN_SCREEN_UPDATES ? AKN_SCREEN_SETTINGS
+                                                                      : AKN_SCREEN_HOME);
             return AKN_CMD_OPENED_SCREEN;
         }
         return AKN_CMD_NONE;

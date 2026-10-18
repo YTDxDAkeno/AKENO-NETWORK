@@ -50,6 +50,8 @@ akn_context_kind akn_platform_context(akn_context_raw *raw) {
     return strcmp(env_or("AKENO_NATIVE_SIM_CONTEXT", ""), "background") == 0 ? AKN_CTX_BACKGROUND : AKN_CTX_DESKTOP;
 }
 
+int32_t akn_platform_running_app(void) { return (int32_t)atoi(env_or("AKENO_NATIVE_SIM_RUNNING_APP", "0")); }
+
 int akn_platform_notify(const char *text) {
     fprintf(stderr, "[notification] %s\n", text);
     return 0;

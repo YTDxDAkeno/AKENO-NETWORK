@@ -48,8 +48,9 @@ CLIENT_SRC  := $(addprefix $(PS5_ROOT)/src/,buf.c json.c json_write.c crypto_uti
 SHARED_SRC  := $(addprefix $(PS5_ROOT)/app/,audio_lab_pcm.c game_detect.c)
 CORE_SRC    := $(addprefix $(ROOT)/src/core/,nav.c input.c audio_test.c redact.c log.c context.c logo.c png.c text.c ui.c \
                script.c account.c social.c image.c vector.c badges.c artwork.c chat.c osk.c party.c \
-               voice.c voice_codec.c voice_dsp.c voice_proto.c jitter.c mic_test.c)
-APP_SRC     := $(addprefix $(ROOT)/src/app/,main.c app.c screens.c gfx.c net.c report.c ipc.c social.c images.c voice_app.c)
+               voice.c voice_codec.c voice_dsp.c voice_proto.c jitter.c mic_test.c \
+               semver.c update.c update_verify.c update_zip.c update_fs.c update_install.c update_net.c update_engine.c update_prefs.c update_view.c lifecycle.c)
+APP_SRC     := $(addprefix $(ROOT)/src/app/,main.c app.c screens.c gfx.c net.c report.c ipc.c social.c images.c voice_app.c update_app.c)
 # libopus 1.5.2: the same portable C files and defines as the PC build (cmake/opus_sources.txt).
 OPUS_DIR    := $(THIRD_PARTY)/opus
 OPUS_SRC    := $(addprefix $(OPUS_DIR)/,$(shell cat $(ROOT)/cmake/opus_sources.txt))

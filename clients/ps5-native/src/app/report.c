@@ -134,6 +134,11 @@ void akn_report_build(akn_app *app, char *out, size_t out_len) {
     for (int i = 0; i < AKN_BTN_COUNT; i++) add(&b, " %s=%lu", akn_button_name((akn_button)i), app->input.presses[i]);
     add(&b, "\nFocus moves:      %lu, confirms %lu, dropped events %lu\n", app->ui.focus_moves, app->ui.confirms, app->queue.dropped);
 
+    add(&b, "\n[Suspend and resume (test F)]\n");
+    char life[1600];
+    akn_lifecycle_report(&app->life, life, sizeof(life));
+    add(&b, "%s", life);
+
     add(&b, "\n[Audio]\n");
     add(&b, "Backend:          %s\n", akn_platform_audio_ops()->backend);
     add(&b, "Tests run:        %d\n", app->audio_count);

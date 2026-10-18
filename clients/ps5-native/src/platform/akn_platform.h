@@ -31,6 +31,9 @@ long long akn_platform_unix_time(void);
 /* Fills the raw process-context answers and returns the classification (PC: AKN_CTX_DESKTOP). */
 akn_context_kind akn_platform_context(akn_context_raw *raw);
 
+/* The app ID of the running foreground application, or a value <= 0 when unknown (test F). */
+int32_t akn_platform_running_app(void);
+
 /* A system notification (PS5) or a line on stderr (PC). Returns 0 on success. */
 int akn_platform_notify(const char *text);
 
