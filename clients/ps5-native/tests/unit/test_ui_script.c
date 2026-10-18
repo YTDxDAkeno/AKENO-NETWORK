@@ -224,6 +224,9 @@ static void test_social_screens(void) {
     press(&ui, AKN_BTN_DOWN, 0);
     CHECK(press(&ui, AKN_BTN_CROSS, 0) == AKN_CMD_ROW_ACTION && ui.open_row == 2 && !ui.row_secondary);
     CHECK(press(&ui, AKN_BTN_SQUARE, 0) == AKN_CMD_ROW_ACTION && ui.open_row == 2 && ui.row_secondary);
+    /* Left/Right on a Party row: adjust (the voice volumes); the focus stays */
+    CHECK(press(&ui, AKN_BTN_LEFT, 0) == AKN_CMD_ROW_ADJUST && ui.open_row == 2 && ui.adjust_dir == -1);
+    CHECK(press(&ui, AKN_BTN_RIGHT, 0) == AKN_CMD_ROW_ADJUST && ui.adjust_dir == 1 && ui.focus[AKN_SCREEN_PARTY] == 2);
     /* the friend picker returns to where it was opened */
     akn_ui_open_picker(&ui, AKN_SCREEN_PARTY, 3);
     CHECK(ui.screen == AKN_SCREEN_PICKER && ui.picker_purpose == 3);

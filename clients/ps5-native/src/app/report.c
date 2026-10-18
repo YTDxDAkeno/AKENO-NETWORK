@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include "app.h"
+#include "voice_codec.h"
 #include "redact.h"
 
 typedef struct {
@@ -129,6 +130,23 @@ void akn_report_build(akn_app *app, char *out, size_t out_len) {
             s->inbox->invitation_count, s->inbox->notifications_unread);
     add(&b, "Requests:         %lu (%lu writes, %lu failed), %lu errors, %lu event polls, %lu events, %lu connects\n", s->requests, s->writes,
         s->write_errors, s->errors, s->event_polls, s->events, s->reconnects);
+    /* Party voice: states, codes and counts only (no names, no audio, no voice pass). */
+    {
+        const akn_voice *v = &app->voice;
+        add(&b, "\n[Voice]\n");
+        add(&b, "State:            %s%s%s\n", akn_voice_state_text(v), v->error[0] ? " - " : "", v->error);
+        add(&b, "Codec:            %s, 48 kHz mono, 20 ms, %d kbit/s\n", akn_voice_codec_version(), AKN_VOICE_BITRATE / 1000);
+        add(&b, "Microphone:       %s (rc 0x%08X, %d Hz)%s%s\n", akn_mic_state_text(v->mic), (unsigned)v->mic_rc, v->mic_rate,
+            v->mic_detail[0] ? " - " : "", v->mic_detail);
+        add(&b, "Mic frames:       %lu, level %d%%, peak %d%%, tone %d Hz%s\n", v->mic_frames, v->mic_level, v->mic_peak * 100 / 32767,
+            v->tx_tone_hz, v->mic_test ? " (microphone test running)" : "");
+        add(&b, "Controls:         %s, %s, output %d%%, microphone %d%%\n", v->muted ? "muted" : "not muted", v->deafened ? "deafened" : "hearing",
+            v->out_volume, v->mic_volume);
+        add(&b, "Packets:          %lu sent, %lu received, %lu concealed, %lu late, %lu dropped (delay bound), %lu rebuffers\n", v->sent,
+            v->received, v->concealed, v->late, v->overflow, v->underruns);
+        add(&b, "Playback:         level %d%%, tone %d Hz, round trip %d ms, %lu reconnects, %d in the room\n", v->rx_level, v->rx_tone_hz,
+            v->latency_ms, v->reconnects, v->people_count);
+    }
     SDL_UnlockMutex(app->lock);
 
     /* Counts only: never which pictures (media IDs or titles). */

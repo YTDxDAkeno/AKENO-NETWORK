@@ -54,6 +54,12 @@ typedef struct {
     int rx_level;             /* 0..100, what is played */
     int rx_tone_hz, tx_tone_hz;  /* single-tone estimate (diagnostics, PC test) */
     int latency_ms;           /* last ping round trip */
+    /* the local microphone test (nothing is sent) */
+    int mic_test;             /* running */
+    int mic_monitor;          /* the test plays the microphone back (headset recommended) */
+    int mic_peak;             /* 0..32767 since the test started */
+    unsigned long mic_frames; /* 20 ms frames captured (voice or test) */
+    char mic_detail[160];     /* why the microphone is unavailable, or the backend */
 } akn_voice;
 
 void akn_voice_init(akn_voice *v);

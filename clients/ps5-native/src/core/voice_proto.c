@@ -112,6 +112,19 @@ int akn_voice_unpack_audio(const uint8_t *frame, size_t len, uint16_t *seq, cons
     return 0;
 }
 
+int akn_voice_credential_from(const akeno_json *root, akn_voice_credential *out) {
+    memset(out, 0, sizeof(*out));
+    if (!root || root->type != AKENO_JSON_OBJECT) return -1;
+    const char *url = akeno_json_get_string(root, "url", "");
+    const char *token = akeno_json_get_string(root, "token", "");
+    if (strncmp(url, "wss://", 6) != 0 || strlen(url) >= sizeof(out->url) || !token[0] || strlen(token) >= sizeof(out->token)) return -1;
+    copy(out->url, sizeof(out->url), url);
+    copy(out->token, sizeof(out->token), token);
+    copy(out->room, sizeof(out->room), akeno_json_get_string(root, "room", ""));
+    copy(out->identity, sizeof(out->identity), akeno_json_get_string(root, "identity", ""));
+    return 0;
+}
+
 int akn_voice_parse_credential(const char *json, size_t len, akn_voice_credential *out) {
     memset(out, 0, sizeof(*out));
     akeno_json_doc *doc = akeno_json_parse(json, len, NULL, 0);
@@ -119,17 +132,9 @@ int akn_voice_parse_credential(const char *json, size_t len, akn_voice_credentia
     const akeno_json *root = akeno_json_root(doc);
     const akeno_json *data = akeno_json_get(root, "data");
     if (data && data->type == AKENO_JSON_OBJECT) root = data;
-    const char *url = akeno_json_get_string(root, "url", "");
-    const char *token = akeno_json_get_string(root, "token", "");
-    int ok = strncmp(url, "wss://", 6) == 0 && strlen(url) < sizeof(out->url) && token[0] && strlen(token) < sizeof(out->token);
-    if (ok) {
-        copy(out->url, sizeof(out->url), url);
-        copy(out->token, sizeof(out->token), token);
-        copy(out->room, sizeof(out->room), akeno_json_get_string(root, "room", ""));
-        copy(out->identity, sizeof(out->identity), akeno_json_get_string(root, "identity", ""));
-    }
+    int rc = akn_voice_credential_from(root, out);
     akeno_json_free(doc);
-    return ok ? 0 : -1;
+    return rc;
 }
 
 /* host of "scheme://[user@]host[:port]/..." into out; 0 on success */

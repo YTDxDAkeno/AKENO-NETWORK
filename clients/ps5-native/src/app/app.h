@@ -21,6 +21,7 @@
 #include "social.h"
 #include "images.h"
 #include "ui.h"
+#include "voice.h"
 
 #define AKN_NATIVE_VERSION "1.0.0-beta.1"
 #ifndef AKN_BUILD_ID
@@ -150,7 +151,7 @@ typedef struct {
 /* Why the keyboard, the friend picker or the confirm dialog is open (akn_ui purposes). */
 enum { AKN_KB_MESSAGE = 1, AKN_KB_PARTY_NAME };
 enum { AKN_PICK_INVITE = 1, AKN_PICK_MESSAGE };
-enum { AKN_CONFIRM_LEAVE_PARTY = 1, AKN_CONFIRM_DECLINE_INVITATION, AKN_CONFIRM_DECLINE_REQUEST };
+enum { AKN_CONFIRM_LEAVE_PARTY = 1, AKN_CONFIRM_DECLINE_INVITATION, AKN_CONFIRM_DECLINE_REQUEST, AKN_CONFIRM_JOIN_VOICE, AKN_CONFIRM_MIC_TEST };
 
 /* The rows of the Inbox screen. */
 typedef enum { AKN_IROW_REQUEST = 0, AKN_IROW_INVITATION, AKN_IROW_NOTIFICATIONS } akn_inbox_row_kind;
@@ -170,6 +171,7 @@ typedef enum {
     AKN_SET_SYSTEM,
     AKN_SET_AUDIO,
     AKN_SET_CONTROLLER,
+    AKN_SET_MIC_TEST,           /* the local microphone test (voice) */
     AKN_SET_COUNT
 } akn_setting_row;
 
@@ -230,6 +232,7 @@ typedef struct {
     SDL_Thread *social_thread;
     SDL_cond *social_cond;
     akn_social social;     /* lock */
+    akn_voice voice;       /* lock: party voice and the microphone test (voice_app.c) */
     char focus_friend_id[40]; /* main thread: keeps the focus on the same friend when the list reorders */
     unsigned long focus_friend_gen;
     unsigned long result_seen;    /* main thread: the last write result shown */

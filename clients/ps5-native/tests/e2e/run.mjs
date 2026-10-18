@@ -11,6 +11,11 @@
 // the native key. A PC run proves the logic only; it is not evidence about PS5 hardware.
 //
 //   node clients/ps5-native/tests/e2e/run.mjs --native <akeno-native> --daemon <akeno-app-native-ipc> --release-daemon <akeno-app>
+//     [--companion <akeno-ingame-check>] [--livekit <livekit-server>]
+//
+// With --livekit, a disposable LiveKit server and the AKENO voice gateway (apps/voice-gateway/dist,
+// behind its own TLS terminator) take part, and AKENO Native talks with a website member in both
+// directions (party voice, docs/PS5_VOICE.md).
 //
 // Requires `pnpm build`, PostgreSQL (TEST_DATABASE_ADMIN_URL) and openssl. AKN_E2E_OUT keeps the
 // screenshots and reports.
@@ -38,6 +43,7 @@ const nativeBinary = arg('--native');
 const daemonBinary = arg('--daemon');
 const releaseBinary = arg('--release-daemon');
 const companionBinary = arg('--companion'); // optional: clients/ps5-ingame akeno-ingame-check
+const livekitBinary = arg('--livekit'); // optional: livekit-server (pinned) for the party voice step
 if (!nativeBinary || !daemonBinary || !releaseBinary) {
   console.error('usage: run.mjs --native <akeno-native> --daemon <akeno-app-native-ipc> --release-daemon <akeno-app>');
   process.exit(2);
@@ -88,12 +94,22 @@ function freePort() {
 
 const backendPort = await freePort();
 const origin = `http://localhost:${backendPort}`;
+// Party voice (optional): LiveKit, the gateway and the gateway's TLS terminator.
+const LK_KEY = 'e2ekey';
+const LK_SECRET = 'native-e2e-livekit-secret-0123456789abcdef';
+const livekitPort = livekitBinary ? await freePort() : 0;
+const gatewayPort = livekitBinary ? await freePort() : 0;
+const gatewayTlsPort = livekitBinary ? await freePort() : 0;
 const databaseUrl = new URL(adminUrl);
 databaseUrl.pathname = `/${databaseName}`;
 const serverEnv = {
   MEDIA_DIR: join(work, 'media'), ...process.env, NODE_ENV: 'production', HOST: '127.0.0.1', PORT: String(backendPort),
   DATABASE_URL: databaseUrl.toString(), PUBLIC_ORIGIN: origin, REGISTRATION_MODE: 'invite', MIGRATE_ON_START: 'true',
   LOG_LEVEL: 'warn', LOG_PRETTY: 'false',
+  ...(livekitBinary
+    ? { LIVEKIT_URL: `ws://127.0.0.1:${livekitPort}`, LIVEKIT_API_KEY: LK_KEY, LIVEKIT_API_SECRET: LK_SECRET,
+        VOICE_GATEWAY_URL: `wss://127.0.0.1:${gatewayTlsPort}/voice-gateway` }
+    : {}),
 };
 
 class WebSession {
@@ -151,23 +167,23 @@ function openssl(args) {
 // Every connection through the TLS terminator is recorded by its first request line, so the test
 // can show that the console holds exactly one realtime session (the daemon's).
 const tlsRequests = [];
-async function startTlsProxy(port) {
-  openssl(['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'ca.key', '-out', 'ca.pem', '-days', '2', '-subj',
-    '/CN=AKENO Native E2E CA', '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=critical,keyCertSign,cRLSign']);
-  openssl(['req', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'server.key', '-out', 'server.csr', '-subj', '/CN=127.0.0.1']);
-  writeFileSync(join(work, 'ext.cnf'), 'subjectAltName=IP:127.0.0.1\nbasicConstraints=CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n');
-  openssl(['x509', '-req', '-in', 'server.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-out', 'server.pem', '-days', '2', '-extfile', 'ext.cnf']);
+const gatewaySockets = new Set();
+async function startTlsProxy(port, upstreamPort = backendPort) {
+  if (!existsSync(join(work, 'server.pem'))) createCertificates();
+  const record = upstreamPort === backendPort;
   const server = tls.createServer({ key: readFileSync(join(work, 'server.key')), cert: readFileSync(join(work, 'server.pem')) }, (socket) => {
-    const upstream = net.connect(backendPort, '127.0.0.1');
+    const upstream = net.connect(upstreamPort, '127.0.0.1');
+    if (!record) gatewaySockets.add(socket);
     let first = true;
     socket.on('data', (chunk) => {
-      if (!first) return;
+      if (!first || !record) return;
       first = false;
       const head = chunk.toString('latin1');
       tlsRequests.push({ line: head.split('\r\n')[0], upgrade: /\r\nupgrade: websocket/i.test(head), at: Date.now() });
     });
     socket.pipe(upstream).pipe(socket);
     const destroy = () => {
+      gatewaySockets.delete(socket);
       socket.destroy();
       upstream.destroy();
     };
@@ -178,6 +194,14 @@ async function startTlsProxy(port) {
   });
   await new Promise((done) => server.listen(port, '127.0.0.1', done));
   return server;
+}
+
+function createCertificates() {
+  openssl(['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'ca.key', '-out', 'ca.pem', '-days', '2', '-subj',
+    '/CN=AKENO Native E2E CA', '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=critical,keyCertSign,cRLSign']);
+  openssl(['req', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'server.key', '-out', 'server.csr', '-subj', '/CN=127.0.0.1']);
+  writeFileSync(join(work, 'ext.cnf'), 'subjectAltName=IP:127.0.0.1\nbasicConstraints=CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n');
+  openssl(['x509', '-req', '-in', 'server.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-out', 'server.pem', '-days', '2', '-extfile', 'ext.cnf']);
 }
 
 // ---- The daemon -------------------------------------------------------------------------------
@@ -286,6 +310,44 @@ await pgAdmin.end();
 assert.equal(spawnSync('node', ['apps/server/dist/cli.js', 'migrate'], { cwd: root, env: serverEnv, encoding: 'utf8' }).status, 0);
 assert.equal(spawnSync('node', ['apps/server/dist/cli.js', 'create-admin', '--online-id', 'it_admin', '--password-stdin'],
   { cwd: root, env: serverEnv, input: ADMIN_PASSWORD, encoding: 'utf8' }).status, 0);
+// LiveKit first: the server creates rooms through its API and receives its signed webhooks.
+if (livekitBinary) {
+  if (!existsSync(resolve(root, 'apps/voice-gateway/dist/main.js'))) throw new Error('Missing apps/voice-gateway/dist/main.js (pnpm build)');
+  const config = join(work, 'livekit.yaml');
+  writeFileSync(config, [
+    `port: ${livekitPort}`, 'bind_addresses: ["127.0.0.1"]', 'rtc:', `  tcp_port: ${await freePort()}`, `  udp_port: ${await freePort()}`,
+    '  use_external_ip: false', '  node_ip: 127.0.0.1', 'keys:', `  ${LK_KEY}: ${LK_SECRET}`, 'room:', '  auto_create: false',
+    'webhook:', `  api_key: ${LK_KEY}`, '  urls:', `    - http://127.0.0.1:${backendPort}/api/v1/voice/webhook`, 'logging:', '  level: warn', '',
+  ].join('\n'));
+  const livekit = spawn(livekitBinary, ['--config', config], { stdio: ['ignore', 'ignore', 'pipe'] });
+  children.add(livekit);
+  await waitFor(async () => {
+    try {
+      return (await fetch(`http://127.0.0.1:${livekitPort}`)).ok;
+    } catch {
+      return false;
+    }
+  }, 'LiveKit');
+  const gateway = spawn('node', ['apps/voice-gateway/dist/main.js'], {
+    cwd: root,
+    env: { ...process.env, GATEWAY_HOST: '127.0.0.1', GATEWAY_PORT: String(gatewayPort), LIVEKIT_URL: `ws://127.0.0.1:${livekitPort}`,
+      LIVEKIT_API_KEY: LK_KEY, LIVEKIT_API_SECRET: LK_SECRET, LOG_LEVEL: 'info' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  children.add(gateway);
+  gateway.log = '';
+  gateway.stdout.on('data', (d) => (gateway.log += d));
+  gateway.stderr.on('data', (d) => (gateway.log += d));
+  globalThis.voiceGateway = gateway;
+  await waitFor(async () => {
+    try {
+      return (await fetch(`http://127.0.0.1:${gatewayPort}/healthz`)).ok;
+    } catch {
+      return false;
+    }
+  }, 'the voice gateway');
+  await startTlsProxy(gatewayTlsPort, gatewayPort);
+}
 const backend = spawn('node', ['apps/server/dist/main.js'], { cwd: root, env: serverEnv, stdio: ['ignore', 'ignore', 'pipe'] });
 children.add(backend);
 await waitFor(async () => {
@@ -329,7 +391,7 @@ await step('native-IPC daemon: starts, writes a private key and announces the in
   assert.match(key, /^[0-9a-f]{64}$/);
   assert.notEqual(key, daemon.token, 'a separate secret from the page');
   const instance = await local(daemon.port, 'GET', '/api/instance');
-  assert.deepEqual(instance.body, { app: 'akeno-network-console', version: '0.5.0-alpha', nativeIpc: 2 });
+  assert.deepEqual(instance.body, { app: 'akeno-network-console', version: '0.5.0-alpha', nativeIpc: 3 });
 });
 
 await step('native-IPC daemon: pairs through its page and the website; one realtime session', async () => {
@@ -347,7 +409,7 @@ await step('native interface: the key opens only the native allow-list', async (
   const K = { 'X-Akeno-Native-Key': key };
   const hello = await local(daemon.port, 'GET', '/api/native/hello', K);
   assert.equal(hello.status, 200, hello.text);
-  assert.equal(hello.body.ipc, 2);
+  assert.equal(hello.body.ipc, 3);
   assert.equal(hello.body.writes, true);
   assert.equal(hello.body.paired, true);
   assert.equal(hello.body.onlineId, 'it_alice');
@@ -416,7 +478,7 @@ await step('native interface: the key opens only the native allow-list', async (
   // The page keeps working as before.
   assert.equal((await local(daemon.port, 'GET', '/api/state', { 'X-Akeno-Token': daemon.token })).status, 200);
   const daemonLog = readFileSync(join(akenoDir, 'akeno.log'), 'utf8');
-  assert.match(daemonLog, /native\.ready Native interface 2 ready/);
+  assert.match(daemonLog, /native\.ready Native interface 3 ready/);
   assert.match(daemonLog, /native\.write PUT \/presence/);
   // native.write names the route only (the client library's existing http.response line logs failed paths, as for the page).
   for (const line of daemonLog.split('\n').filter((l) => l.includes('native.write'))) assert.ok(!line.includes(uuid), line);
@@ -468,7 +530,7 @@ await step('AKENO Native: friends, live presence, a friend request and a profile
   assert.equal(upgrades.length, 1, `realtime sessions: ${upgrades.map((r) => r.line).join(' | ')}`);
   assert.ok(upgrades[0].at < startedAt, 'the session predates AKENO Native');
   const report = readFileSync(join(nativeDir, 'native-report.txt'), 'utf8');
-  assert.match(report, /State:\s+Connected to the AKENO daemon: protocol 2, daemon 0\.5\.0-alpha \([0-9a-f]+-linux-native-ipc\)/);
+  assert.match(report, /State:\s+Connected to the AKENO daemon: protocol 3, daemon 0\.5\.0-alpha \([0-9a-f]+-linux-native-ipc\)/);
   assert.match(report, /Friends:\s+1 \(1 online, 0 playing\), 1 incoming and 0 outgoing requests/);
   // Browsing friends, profiles and activity writes nothing.
   assert.match(report, /Requests:\s+\d+ \(0 writes, 0 failed\), 0 errors, \d+ event polls, [1-9]\d* events, 1 connects/);
@@ -708,6 +770,166 @@ if (companionBinary) await step('In-Game Companion (experimental): the menu from
     'alice away for bob', 10_000);
   assert.equal((await check('--presence', 'online')).status, 0);
   // still the daemon's single realtime session; the companion opened none
+  assert.equal(tlsRequests.filter((x) => x.upgrade).length, 1);
+});
+
+/** Single-tone frequency of a block by zero crossings (0 when quiet). */
+function toneHz(pcm, rate = 48000) {
+  let energy = 0;
+  for (const v of pcm) energy += v * v;
+  if (pcm.length < 64 || Math.sqrt(energy / pcm.length) < 300) return 0;
+  let crossings = 0;
+  let first = -1;
+  let last = -1;
+  for (let i = 1; i < pcm.length; i++) {
+    if ((pcm[i - 1] < 0) !== (pcm[i] < 0)) {
+      if (first < 0) first = i;
+      last = i;
+      crossings++;
+    }
+  }
+  return crossings < 3 ? 0 : Math.round(rate / ((2 * (last - first)) / (crossings - 1)));
+}
+
+if (livekitBinary) await step('Party voice: AKENO Native and a website member talk both ways through the voice gateway; mute, deafen, volume, reconnect, revocation', async () => {
+  const rtc = createRequire(resolve(root, 'apps/voice-gateway/package.json'))('@livekit/rtc-node');
+  // A fresh party: alice (this console's account) creates it on the website, bob joins.
+  for (const who of [alice, bob]) {
+    const current = (await who.request('GET', '/parties/current')).body?.party;
+    if (current) await who.request('POST', `/parties/${current.id}/leave`);
+  }
+  const party = await alice.request('POST', '/parties', { name: 'Voice night', privacy: 'friends' });
+  assert.equal(party.status, 201, JSON.stringify(party.body));
+  assert.equal((await bob.request('POST', `/parties/${party.body.id}/join`)).status, 200);
+  assert.equal(party.body.voice.available, true, 'the server offers party voice');
+
+  // bob joins voice like a browser does (LiveKit directly, his website session's token) and says "600 Hz".
+  const pass = await bob.request('POST', `/parties/${party.body.id}/voice/token`);
+  assert.equal(pass.status, 200, JSON.stringify(pass.body));
+  const room = new rtc.Room();
+  await room.connect(pass.body.url, pass.body.token, { autoSubscribe: true, dynacast: false });
+  const heard = []; // what bob hears from alice: { at, hz }
+  let alicePublished = 0;
+  let aliceUnpublished = 0;
+  room.on(rtc.RoomEvent.TrackPublished, (_p, participant) => participant.identity === alice.user.id && alicePublished++);
+  room.on(rtc.RoomEvent.TrackUnpublished, (_p, participant) => participant.identity === alice.user.id && aliceUnpublished++);
+  room.on(rtc.RoomEvent.TrackSubscribed, (track, _pub, participant) => {
+    if (track.kind !== rtc.TrackKind.KIND_AUDIO || participant.identity !== alice.user.id) return;
+    void (async () => {
+      for await (const frame of new rtc.AudioStream(track, { sampleRate: 48000, numChannels: 1, frameSizeMs: 20 })) heard.push({ at: Date.now(), hz: toneHz(frame.data) });
+    })();
+  });
+  const source = new rtc.AudioSource(48000, 1);
+  const options = new rtc.TrackPublishOptions();
+  options.source = rtc.TrackSource.SOURCE_MICROPHONE;
+  await room.localParticipant.publishTrack(rtc.LocalAudioTrack.createAudioTrack('microphone', source), options);
+  let speaking = true;
+  let phase = 0;
+  const bobVoice = (async () => {
+    while (speaking) {
+      const pcm = new Int16Array(960);
+      for (let i = 0; i < 960; i++) {
+        pcm[i] = Math.round(9000 * Math.sin(phase));
+        phase += (2 * Math.PI * 600) / 48000;
+      }
+      await source.captureFrame(new rtc.AudioFrame(pcm, 48000, 1, 960));
+    }
+  })();
+  const hearsAlice = (since, min = 15) => heard.filter((h) => h.at >= since && Math.abs(h.hz - 300) <= 10).length >= min;
+  const voiceDir = join(work, 'native-voice');
+  const stats = () => {
+    const text = existsSync(join(voiceDir, 'native.log')) ? readFileSync(join(voiceDir, 'native.log'), 'utf8') : '';
+    return [...text.matchAll(/voice\.stats.*$/gm)].map((m) => m[0]);
+  };
+  const device = (await alice.request('GET', '/devices')).body.devices.find((d) => d.platform.includes('PlayStation'));
+  assert.ok(device, 'the console is paired');
+  let mark = 0;
+  const run = await runNative({ AKENO_NATIVE_AKENO_DIR: akenoDir, AKENO_NATIVE_DIR: voiceDir, AKENO_NATIVE_DAEMON_PORT: String(daemon.port),
+    AKENO_NATIVE_SYNC_DIR: syncDir, AKENO_NATIVE_SIM_MIC: 'tone:300' }, [
+    'until ipc 15000', 'until friends 15000', 'wait 300', 'pad right', 'pad right', 'pad cross', 'expect screen party',
+    'until text 15000 Join voice', 'pad down', 'pad down', 'pad down', 'pad cross', 'expect dialog confirm',
+    'expect text Join voice with your microphone?', 'sync voice-consent', 'pad left', 'pad cross',
+    'until text 25000 In voice', 'sync voice-live', `shot ${shots}/e2e-voice.png`,
+    // mute and unmute
+    'pad down', 'expect text Mute microphone', 'pad cross', 'wait 800', 'sync voice-muted', 'pad cross', 'wait 800', 'sync voice-unmuted',
+    // deafen (also mutes), undeafen, unmute
+    'pad down', 'pad cross', 'wait 2500', 'sync voice-deafened', 'pad cross', 'pad up', 'expect text Unmute microphone', 'pad cross', 'wait 500',
+    // the voice volume of the others: 100 % -> 50 %
+    'pad down', 'pad down', 'pad left', 'pad left', 'pad left', 'pad left', 'pad left', 'wait 300', 'expect text Voice volume: 50%',
+    // the connection drops: AKENO Native reconnects with a new voice pass
+    'sync voice-drop', 'until text 30000 In voice', 'sync voice-back',
+    // the console loses "parties:write" on the website: its voice ends at once
+    'sync voice-revoke', 'until text 20000 removed from the voice chat', `shot ${shots}/e2e-voice-removed.png`, 'sync voice-restore',
+    'pad circle', 'pad circle', 'expect dialog exit', 'pad left', 'pad cross',
+  ], {
+    'voice-consent': async () => {
+      // nothing opened before the user agreed
+      assert.ok(!existsSync(join(voiceDir, 'native.log')) || !/voice\.mic/.test(readFileSync(join(voiceDir, 'native.log'), 'utf8')), 'no microphone before consent');
+      assert.equal(JSON.parse((await fetch(`http://127.0.0.1:${gatewayPort}/healthz`).then((r) => r.text()))).sessions, 0);
+    },
+    'voice-live': async () => {
+      mark = Date.now();
+      await waitFor(() => hearsAlice(mark), 'bob hears the console (300 Hz)', 15_000);
+      await waitFor(() => stats().some((l) => /rx_tone=(59\d|60\d|61\d)\b/.test(l)), 'the console plays bob (600 Hz)', 15_000);
+      const members = (await bob.request('GET', `/parties/${party.body.id}`)).body.members;
+      assert.equal(members.find((m) => m.id === alice.user.id)?.voice?.connected, true, 'the server sees alice in voice');
+    },
+    'voice-muted': async () => {
+      await waitFor(() => aliceUnpublished > 0, 'the console microphone track ends', 5000);
+      await sleep(500);
+      mark = Date.now();
+      await sleep(1000);
+      assert.ok(!hearsAlice(mark, 3), 'nobody hears a muted console');
+    },
+    'voice-unmuted': async () => {
+      mark = Date.now();
+      await waitFor(() => alicePublished > 1 && hearsAlice(mark), 'bob hears the console again', 10_000);
+    },
+    'voice-deafened': async () => {
+      const last = stats().at(-1) ?? '';
+      assert.match(last, /deafened=1/);
+      assert.match(last, /rx_level=0\b/, `nothing is played while deafened: ${last}`);
+      assert.match(last, /muted=1/);
+    },
+    'voice-drop': async () => {
+      for (const socket of gatewaySockets) socket.destroy();
+      await sleep(300);
+    },
+    'voice-back': async () => {
+      mark = Date.now();
+      await waitFor(() => hearsAlice(mark), 'bob hears the console after the reconnect', 15_000);
+    },
+    'voice-revoke': async () => {
+      const scopes = device.scopes.filter((scope) => scope !== 'parties:write');
+      assert.equal((await alice.request('PATCH', `/devices/${device.id}`, { scopes })).status, 200);
+    },
+    'voice-restore': async () => {
+      assert.equal((await alice.request('PATCH', `/devices/${device.id}`, { scopes: device.scopes })).status, 200);
+    },
+  });
+  speaking = false;
+  await bobVoice.catch(() => undefined);
+  await room.disconnect();
+  assert.equal(run.code, 0, `native exit ${run.code} ${run.signal}\n${run.output.slice(-4000)}\n${globalThis.voiceGateway?.log.slice(-3000)}`);
+  const report = readFileSync(join(voiceDir, 'native-report.txt'), 'utf8');
+  const logText = readFileSync(join(voiceDir, 'native.log'), 'utf8');
+  assert.match(report, /\[Voice\]/);
+  assert.match(report, /Codec:\s+libopus 1\.5\.2/);
+  assert.match(report, /State:\s+Voice stopped - You were removed from the voice chat\./);
+  const packets = /Packets:\s+(\d+) sent, (\d+) received/.exec(report);
+  assert.ok(packets && Number(packets[1]) > 200 && Number(packets[2]) > 200, `audio went both ways: ${packets?.[0]}`);
+  assert.match(report, /Controls:\s+not muted, hearing, output 50%, microphone 100%/);
+  assert.match(logText, /voice\.mic: Microphone open \(simulated microphone \(PC test\), 16000 Hz/);
+  assert.match(logText, /voice\.mic: Microphone closed/);
+  assert.match(logText, /voice\.closed: .*code 4003/);
+  // no voice pass, token or key in what AKENO Native writes
+  assert.doesNotMatch(report + logText, /eyJ[A-Za-z0-9_-]{10,}/);
+  assert.ok(!logText.includes(key) && !report.includes(key));
+  // the daemon passed exactly the voice route through its write list, logging the route only
+  const daemonLog = readFileSync(join(akenoDir, 'akeno.log'), 'utf8');
+  assert.match(daemonLog, /native\.write POST \/parties\/:id\/voice\/device-token/);
+  for (const line of daemonLog.split('\n').filter((l) => /native\.write/.test(l))) assert.ok(!line.includes(party.body.id), line);
+  // still one realtime session to the AKENO server (voice uses the gateway, not the server)
   assert.equal(tlsRequests.filter((x) => x.upgrade).length, 1);
 });
 

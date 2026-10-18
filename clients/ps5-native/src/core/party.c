@@ -212,6 +212,11 @@ int akn_party_create_json(const char *name, int invite_only, char *out, size_t l
 }
 
 int akn_party_rows(const akn_party *party, const akn_inbox *inbox, const akn_party_list *joinable, akn_party_row *out, int max) {
+    return akn_party_rows_ex(party, inbox, joinable, 0, out, max);
+}
+
+int akn_party_rows_ex(const akn_party *party, const akn_inbox *inbox, const akn_party_list *joinable, int voice_controls,
+                      akn_party_row *out, int max) {
     int n = 0;
 #define ROW(k, i)                                       \
     do {                                                \
@@ -222,6 +227,15 @@ int akn_party_rows(const akn_party *party, const akn_inbox *inbox, const akn_par
         if (party->conversation_id[0]) ROW(AKN_PROW_CHAT, 0);
         ROW(AKN_PROW_INVITE, 0);
         ROW(AKN_PROW_LEAVE, 0);
+        if (party->voice_available) {
+            ROW(AKN_PROW_VOICE, 0);
+            if (voice_controls) {
+                ROW(AKN_PROW_VOICE_MUTE, 0);
+                ROW(AKN_PROW_VOICE_DEAFEN, 0);
+                ROW(AKN_PROW_VOICE_OUTPUT, 0);
+                ROW(AKN_PROW_VOICE_MIC, 0);
+            }
+        }
         for (int i = 0; i < party->members_shown; i++) ROW(AKN_PROW_MEMBER, i);
     } else {
         ROW(AKN_PROW_CREATE, 0);

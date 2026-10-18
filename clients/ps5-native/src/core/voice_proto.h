@@ -95,6 +95,9 @@ typedef struct {
 } akn_voice_credential;
 
 int akn_voice_parse_credential(const char *json, size_t len, akn_voice_credential *out);
+struct akeno_json;
+/* The same from an already parsed object (the "data" member of a daemon proxy answer). */
+int akn_voice_credential_from(const struct akeno_json *node, akn_voice_credential *out);
 /* The gateway must be on the AKENO server's own host (the token is never sent elsewhere). */
 int akn_voice_same_host(const char *gateway_url, const char *server_url);
 

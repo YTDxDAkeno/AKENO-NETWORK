@@ -115,7 +115,7 @@ if(SDL2_FOUND)
   target_compile_options(akn_stb PRIVATE -w) # third-party code
 
   add_executable(akeno-native src/app/main.c src/app/app.c src/app/screens.c src/app/gfx.c src/app/net.c src/app/report.c
-    src/app/ipc.c src/app/social.c src/app/images.c src/platform/platform_host.c)
+    src/app/ipc.c src/app/social.c src/app/images.c src/app/voice_app.c src/platform/platform_host.c)
   target_include_directories(akeno-native PRIVATE src/app src/platform "${PS5_DIR}/src")
   target_compile_options(akeno-native PRIVATE ${AKN_WARNINGS} ${AKN_HARDENING})
   target_compile_definitions(akeno-native PRIVATE

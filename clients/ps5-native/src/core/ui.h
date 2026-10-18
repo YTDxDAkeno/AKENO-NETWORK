@@ -95,6 +95,7 @@ typedef enum {
     AKN_CMD_REFRESH,       /* triangle on a social screen: load it again */
     AKN_CMD_OPEN_CHAT,     /* Messages: the conversation of row ui->open_row */
     AKN_CMD_ROW_ACTION,    /* Party, Inbox, Settings, Picker: row ui->open_row, ui->row_secondary for Square */
+    AKN_CMD_ROW_ADJUST,    /* Party, Settings: Left/Right on row ui->open_row, direction ui->adjust_dir */
     AKN_CMD_MESSAGE_FRIEND,/* Square on Friends (row ui->open_row) or a profile (open_row -1): write to them */
     AKN_CMD_COMPOSE,       /* Cross in a conversation: open the keyboard */
     AKN_CMD_KEYBOARD_SUBMIT, /* the keyboard's text (ui->osk) for ui->osk_purpose; the dialog stays open */
@@ -127,6 +128,7 @@ typedef struct {
     int profile_scroll;             /* pixels the profile is scrolled down */
     int profile_content_h;          /* height of the profile's content (set by the screen) */
     int row_secondary;              /* AKN_CMD_ROW_ACTION: 1 when Square chose it */
+    int adjust_dir;                 /* AKN_CMD_ROW_ADJUST: -1 Left, +1 Right */
     akn_screen chat_back;           /* where circle in a conversation returns to */
     int chat_scroll;                /* pixels scrolled up from the newest message */
     int chat_content_h;             /* height of the conversation's messages (set by the screen) */

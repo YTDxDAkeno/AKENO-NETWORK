@@ -77,6 +77,14 @@ static void test_party(void) {
     CHECK(rows[3].kind == AKN_PROW_MEMBER && rows[4].kind == AKN_PROW_MEMBER && rows[4].index == 1);
     CHECK(rows[5].kind == AKN_PROW_INVITATION && rows[5].index == 1); /* only party invitations */
     CHECK(rows[6].kind == AKN_PROW_JOINABLE);
+    /* party voice: a Join row after Leave when the server offers voice; the controls while in voice */
+    p->voice_available = 1;
+    n = akn_party_rows_ex(p, in, l, 0, rows, AKN_PARTY_ROWS_MAX);
+    CHECK(n == 8 && rows[3].kind == AKN_PROW_VOICE && rows[4].kind == AKN_PROW_MEMBER);
+    n = akn_party_rows_ex(p, in, l, 1, rows, AKN_PARTY_ROWS_MAX);
+    CHECK(n == 12 && rows[3].kind == AKN_PROW_VOICE && rows[4].kind == AKN_PROW_VOICE_MUTE && rows[5].kind == AKN_PROW_VOICE_DEAFEN &&
+          rows[6].kind == AKN_PROW_VOICE_OUTPUT && rows[7].kind == AKN_PROW_VOICE_MIC && rows[8].kind == AKN_PROW_MEMBER);
+    CHECK(akn_party_rows(p, in, l, rows, AKN_PARTY_ROWS_MAX) == 8); /* the plain list never shows the controls */
     memset(p, 0, sizeof(*p));
     n = akn_party_rows(p, in, NULL, rows, AKN_PARTY_ROWS_MAX);
     CHECK(n == 2 && rows[0].kind == AKN_PROW_CREATE);

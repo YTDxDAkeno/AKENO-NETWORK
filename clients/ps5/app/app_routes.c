@@ -804,6 +804,7 @@ static const char *const NATIVE_WRITES[] = {
     "POST /parties/:id/join",
     "POST /parties/:id/leave",
     "POST /parties/:id/invitations",
+    "POST /parties/:id/voice/device-token", /* party voice pass for this console (protocol 3, docs/PS5_VOICE.md) */
     "POST /friends/requests/:id/accept",
     "POST /friends/requests/:id/decline",
     "POST /invitations/:id/accept",

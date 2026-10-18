@@ -555,6 +555,12 @@ akn_cmd akn_ui_handle(akn_ui *ui, const akn_input_event *ev, uint64_t now_ms) {
             ui->focus_moves++;
             return AKN_CMD_NONE;
         }
+        if ((ev->button == AKN_BTN_LEFT || ev->button == AKN_BTN_RIGHT) && count > 0 &&
+            (ui->screen == AKN_SCREEN_PARTY || ui->screen == AKN_SCREEN_SETTINGS)) {
+            ui->open_row = *focus;
+            ui->adjust_dir = ev->button == AKN_BTN_RIGHT ? 1 : -1;
+            return AKN_CMD_ROW_ADJUST;
+        }
         if (ev->button == AKN_BTN_CROSS && count > 0) {
             akn_item it;
             if (akn_ui_focused(ui, &it)) return activate(ui, &it, now_ms);

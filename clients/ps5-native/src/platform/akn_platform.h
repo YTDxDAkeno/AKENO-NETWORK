@@ -6,6 +6,7 @@
 #ifndef AKN_PLATFORM_H
 #define AKN_PLATFORM_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "audio_test.h"
@@ -35,6 +36,25 @@ int akn_platform_notify(const char *text);
 
 /* The audio test backend: direct sceAudioOut on the PS5, an SDL audio device on the PC. */
 const akn_audio_ops *akn_platform_audio_ops(void);
+
+/*
+ * Microphone input for party voice (docs/PS5_VOICE.md). Nothing here runs until the user starts
+ * voice or the microphone test (after a confirmation): the PS5 implementation then loads
+ * libSceAudioIn.sprx with dlopen and opens the foreground user's microphone (DualSense or a
+ * headset the system routes to that user): S16 mono, 256 frames per read, 16 kHz (48 kHz as the
+ * fallback). PC: a simulated microphone from AKENO_NATIVE_SIM_MIC (tests only).
+ */
+typedef struct {
+    /* Returns a handle (>= 0) or the system error code (< 0); *rate receives the rate opened. */
+    int32_t (*open)(unsigned grain, unsigned *rate);
+    /* Reads one grain of S16 mono samples (blocks for about one grain). >= 0 on success. */
+    int32_t (*read)(int32_t handle, int16_t *samples);
+    int32_t (*close)(int32_t handle);
+    const char *backend;
+} akn_mic_ops;
+
+/* The microphone functions, loaded on first use; NULL with the reason in why when there are none. */
+const akn_mic_ops *akn_platform_mic(char *why, size_t why_len);
 
 /*
  * Read-only state of the foreground user's controller as the system reports it, independent of
