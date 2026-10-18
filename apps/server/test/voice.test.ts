@@ -11,6 +11,7 @@ import { createTestServer, login, makeFriends, registerUser, sleep, type TestCli
 
 const API_KEY = 'akeno-test-key';
 const API_SECRET = 'akeno-test-secret-that-is-long-enough-0123456789';
+const GATEWAY_URL = 'wss://akeno.test/voice-gateway';
 
 /**
  * A stand-in for LiveKit's room service API (Twirp/JSON), recording what AKENO asks for. The real
@@ -112,7 +113,7 @@ beforeAll(async () => {
   livekit = new FakeLiveKit();
   await livekit.start();
   configuredUrl = livekit.url;
-  server = await createTestServer({ LIVEKIT_URL: livekit.url, LIVEKIT_API_KEY: API_KEY, LIVEKIT_API_SECRET: API_SECRET });
+  server = await createTestServer({ LIVEKIT_URL: livekit.url, LIVEKIT_API_KEY: API_KEY, LIVEKIT_API_SECRET: API_SECRET, VOICE_GATEWAY_URL: GATEWAY_URL });
   leader = await registerUser(server, 'voice_leader');
   friend = await registerUser(server, 'voice_friend');
   outsider = await registerUser(server, 'voice_outsider');
@@ -166,6 +167,116 @@ describe('voice tokens', () => {
     const device = await server.app.inject({ method: 'POST', url: `/api/v1/parties/${party.id}/voice/token`, headers: { authorization: `Bearer ${accessToken}` } });
     expect([401, 403]).toContain(device.statusCode);
     await leader.post(`/parties/${party.id}/close`);
+  });
+});
+
+/** Pairs a console for a user (the device flow the daemon uses) and returns its bearer token and ID. */
+async function pairDevice(owner: TestClient): Promise<{ token: string; id: string }> {
+  const start = await server.app.inject({ method: 'POST', url: '/api/v1/devices/pairings', payload: { deviceName: 'PS5', platform: 'PlayStation 5 (homebrew)', clientVersion: '0.5.0-alpha' } });
+  const started = JSON.parse(start.body) as { userCode: string; deviceCode: string };
+  expect((await owner.post('/devices/pairings/approve', { userCode: started.userCode })).status).toBe(204);
+  await server.database.db.update(devicePairings).set({ lastPolledAt: new Date(Date.now() - 60_000) });
+  const redeemed = await server.app.inject({ method: 'POST', url: '/api/v1/devices/pairings/token', payload: { deviceCode: started.deviceCode } });
+  const { accessToken } = JSON.parse(redeemed.body) as { accessToken: string };
+  const current = await server.app.inject({ method: 'GET', url: '/api/v1/devices/current', headers: { authorization: `Bearer ${accessToken}` } });
+  return { token: accessToken, id: (JSON.parse(current.body) as { device: { id: string } }).device.id };
+}
+
+function deviceToken(device: { token: string }, partyId: string) {
+  return server.app.inject({ method: 'POST', url: `/api/v1/parties/${partyId}/voice/device-token`, headers: { authorization: `Bearer ${device.token}` } });
+}
+
+describe('console voice (paired devices through the voice gateway)', () => {
+  it('issues a gateway voice pass to the paired console of a member, with the same limits as browsers', async () => {
+    const party = await startParty();
+    const ps5 = await pairDevice(friend);
+    const response = await deviceToken(ps5, party.id);
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body) as VoiceTokenResponse;
+    expect(body).toMatchObject({ url: GATEWAY_URL, room: `akeno-party-${party.id}`, identity: friend.id });
+    const claims = await new TokenVerifier(API_KEY, API_SECRET).verify(body.token);
+    expect(claims.sub).toBe(friend.id);
+    expect(claims.video).toMatchObject({ room: `akeno-party-${party.id}`, roomJoin: true, canSubscribe: true, canPublishData: false });
+    expect(claims.video?.canPublishSources).toEqual(['microphone']);
+    expect(claims.video?.roomAdmin).toBeFalsy();
+    expect(claims.attributes).toEqual({ 'akeno.client': 'console-gateway' });
+    expect((claims.exp as number) - (claims.nbf as number)).toBeLessThanOrEqual(120);
+    // The device ID is not in the token (other participants can read its claims).
+    expect(JSON.stringify(claims)).not.toContain(ps5.id);
+
+    // Browsers use their own route; consoles cannot use the browser route.
+    expect((await friend.post(`/parties/${party.id}/voice/device-token`)).status).toBe(400);
+    const browserRoute = await server.app.inject({ method: 'POST', url: `/api/v1/parties/${party.id}/voice/token`, headers: { authorization: `Bearer ${ps5.token}` } });
+    expect(browserRoute.statusCode).toBe(403);
+    // Not a member: refused like a browser.
+    const stranger = await pairDevice(outsider);
+    const denied = await deviceToken(stranger, party.id);
+    expect(denied.statusCode).toBe(403);
+    expect(JSON.parse(denied.body).error.code).toBe('NOT_MEMBER');
+    // Without "parties:write" the console has no voice.
+    const devices = (await friend.get<{ devices: Array<{ id: string; scopes: string[] }> }>('/devices')).body.devices;
+    const scopes = devices.find((d) => d.id === ps5.id)!.scopes.filter((scope) => scope !== 'parties:write');
+    expect((await friend.patch(`/devices/${ps5.id}`, { scopes })).status).toBe(200);
+    const noScope = await deviceToken(ps5, party.id);
+    expect(noScope.statusCode).toBe(403);
+    expect(JSON.parse(noScope.body).error.code).toBe('DEVICE_SCOPE_DENIED');
+    await leader.post(`/parties/${party.id}/close`);
+  });
+
+  it('ends console voice when the console is unpaired or loses "parties:write"; refuses joins from such a pass', async () => {
+    const party = await startParty();
+    const ps5 = await pairDevice(friend);
+    expect((await deviceToken(ps5, party.id)).statusCode).toBe(200);
+    await connect(party.id, friend.id);
+    livekit.calls.length = 0;
+    expect((await friend.delete(`/devices/${ps5.id}`)).status).toBe(204);
+    await waitFor(() => livekit.removed(friend.id));
+    // A join reported with the pass of the unpaired console is refused.
+    livekit.calls.length = 0;
+    await connect(party.id, friend.id);
+    await waitFor(() => livekit.removed(friend.id));
+
+    const second = await pairDevice(friend);
+    expect((await deviceToken(second, party.id)).statusCode).toBe(200);
+    livekit.calls.length = 0;
+    await connect(party.id, friend.id);
+    await sleep(100);
+    expect(livekit.removed(friend.id)).toBe(false); // a valid console stays
+    const devices = (await friend.get<{ devices: Array<{ id: string; scopes: string[] }> }>('/devices')).body.devices;
+    const scopes = devices.find((d) => d.id === second.id)!.scopes.filter((scope) => scope !== 'parties:write');
+    expect((await friend.patch(`/devices/${second.id}`, { scopes })).status).toBe(200);
+    await waitFor(() => livekit.removed(friend.id));
+    // Leaving the party removes the console's voice like a browser's.
+    const third = await pairDevice(friend);
+    expect((await deviceToken(third, party.id)).statusCode).toBe(200);
+    await connect(party.id, friend.id);
+    livekit.calls.length = 0;
+    expect([200, 204]).toContain((await friend.post(`/parties/${party.id}/leave`)).status);
+    await waitFor(() => livekit.removed(friend.id));
+    await leader.post(`/parties/${party.id}/close`);
+  });
+
+  it('answers 503 when console voice is not set up, and validates the gateway URL', async () => {
+    const plain = await createTestServer({ LIVEKIT_URL: livekit.url, LIVEKIT_API_KEY: API_KEY, LIVEKIT_API_SECRET: API_SECRET });
+    const previous = server;
+    try {
+      server = plain;
+      const a = await registerUser(plain, 'nogateway_a');
+      const party = (await a.post<PartyDto>('/parties', {})).body;
+      const ps5 = await pairDevice(a);
+      const response = await deviceToken(ps5, party.id);
+      expect(response.statusCode).toBe(503);
+      expect(JSON.parse(response.body).error.code).toBe('VOICE_GATEWAY_UNAVAILABLE');
+    } finally {
+      server = previous;
+      await plain.close();
+    }
+    const base = { NODE_ENV: 'production', DATABASE_URL: 'postgres://a:b@127.0.0.1:5432/c', PUBLIC_ORIGIN: 'https://akeno.example.com' };
+    const voice = { LIVEKIT_URL: 'wss://akeno.example.com/livekit', LIVEKIT_API_KEY: 'akeno1', LIVEKIT_API_SECRET: 'a'.repeat(40) };
+    expect(loadConfig({ ...base, ...voice, VOICE_GATEWAY_URL: 'wss://akeno.example.com/voice-gateway' }).voice.gatewayUrl).toBe('wss://akeno.example.com/voice-gateway');
+    expect(() => loadConfig({ ...base, ...voice, VOICE_GATEWAY_URL: 'https://akeno.example.com/voice-gateway' })).toThrow(/wss:\/\//);
+    expect(() => loadConfig({ ...base, ...voice, VOICE_GATEWAY_URL: 'wss://akeno.example.com/x?y=1' })).toThrow(/wss:\/\//);
+    expect(() => loadConfig({ ...base, VOICE_GATEWAY_URL: 'wss://akeno.example.com/voice-gateway' })).toThrow(/needs voice/);
   });
 });
 

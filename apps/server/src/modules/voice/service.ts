@@ -12,6 +12,16 @@ interface VoiceParticipant {
   joinedAt: number;
 }
 
+/** What authorized a user's latest voice token: a browser session or a paired device. */
+interface VoiceCredential {
+  kind: 'session' | 'device';
+  id: string;
+}
+
+/** Participant attribute that marks a console connected through the voice gateway. */
+export const CONSOLE_CLIENT_ATTRIBUTE = 'akeno.client';
+export const CONSOLE_CLIENT_VALUE = 'console-gateway';
+
 /** LiveKit answers 404 / "not_found" for rooms or participants that do not exist (already gone). */
 function isNotFound(error: unknown): boolean {
   const twirp = error as { status?: number; code?: string; message?: string };
@@ -19,6 +29,7 @@ function isNotFound(error: unknown): boolean {
 }
 
 const NOT_CONFIGURED = 'Voice chat is not set up on this server. Use party chat to talk with your party.';
+const GATEWAY_NOT_CONFIGURED = 'Console voice is not set up on this server. Voice works on the website and the apps.';
 
 /**
  * Voice parties. Audio flows through a self-hosted LiveKit SFU; this service only decides who may
@@ -40,8 +51,8 @@ const NOT_CONFIGURED = 'Voice chat is not set up on this server. Use party chat 
  */
 export class VoiceService {
   private readonly rooms = new Map<string, Map<string, VoiceParticipant>>();
-  /** Browser session that requested each user's latest voice token (identity = user ID). */
-  private readonly tokenSessions = new Map<string, string>();
+  /** Browser session or paired device that requested each user's latest voice token (identity = user ID). */
+  private readonly tokenCredentials = new Map<string, VoiceCredential>();
   private readonly client: RoomServiceClient | null;
   private readonly receiver: WebhookReceiver | null;
 
@@ -93,8 +104,31 @@ export class VoiceService {
     return this.client;
   }
 
-  /** Issues a join token after checking membership and blocks. */
+  /** Issues a join token for a browser session after checking membership and blocks. */
   async issueToken(userId: string, partyId: string, sessionId?: string): Promise<VoiceTokenResponse> {
+    return this.issue(userId, partyId, sessionId ? { kind: 'session', id: sessionId } : null, this.ctx.config.voice.publicUrl, null);
+  }
+
+  /**
+   * Issues a join token for a paired console, which connects through the AKENO voice gateway
+   * (apps/voice-gateway) instead of WebRTC. Same rules as for browsers; the token is marked for
+   * the gateway, and the voice connection ends when the device is unpaired or loses the
+   * "parties:write" permission.
+   */
+  async issueDeviceToken(userId: string, partyId: string, deviceId: string): Promise<VoiceTokenResponse> {
+    this.requireClient();
+    const gatewayUrl = this.ctx.config.voice.gatewayUrl;
+    if (!gatewayUrl) throw new AppError(503, 'VOICE_GATEWAY_UNAVAILABLE', GATEWAY_NOT_CONFIGURED);
+    return this.issue(userId, partyId, { kind: 'device', id: deviceId }, gatewayUrl, { [CONSOLE_CLIENT_ATTRIBUTE]: CONSOLE_CLIENT_VALUE });
+  }
+
+  private async issue(
+    userId: string,
+    partyId: string,
+    credential: VoiceCredential | null,
+    url: string,
+    attributes: Record<string, string> | null,
+  ): Promise<VoiceTokenResponse> {
     const client = this.requireClient();
     if ((await this.ctx.parties.currentPartyId(userId)) !== partyId) {
       throw new AppError(403, 'NOT_MEMBER', 'Only members of this party can join its voice chat.');
@@ -122,6 +156,7 @@ export class VoiceService {
       name: user.displayName,
       ttl,
       metadata: JSON.stringify({ onlineId: user.onlineId, avatar: user.avatar, avatarImage: user.avatarImage }),
+      ...(attributes ? { attributes } : {}),
     });
     token.addGrant({
       room,
@@ -132,9 +167,9 @@ export class VoiceService {
       canPublishData: false,
       canUpdateOwnMetadata: false,
     });
-    if (sessionId) this.tokenSessions.set(userId, sessionId);
+    if (credential) this.tokenCredentials.set(userId, credential);
     return {
-      url: this.ctx.config.voice.publicUrl,
+      url,
       token: await token.toJwt(),
       room,
       identity: userId,
@@ -203,9 +238,19 @@ export class VoiceService {
    * by one of them, it ends now (another tab or device of the same user is not affected).
    */
   onSessionsRevoked(userId: string, revoked: (sessionId: string) => boolean): void {
-    const sessionId = this.tokenSessions.get(userId);
-    if (!sessionId || !revoked(sessionId)) return;
+    const credential = this.tokenCredentials.get(userId);
+    if (credential?.kind !== 'session' || !revoked(credential.id)) return;
     // The entry stays (until the next token) so a join with that token is refused as well.
+    this.removeUserEverywhere(userId);
+  }
+
+  /**
+   * Paired devices were unpaired, or lost the "parties:write" permission: if the user's voice
+   * connection was authorized by one of them, it ends now.
+   */
+  onDevicesRevoked(userId: string, revoked: (deviceId: string) => boolean): void {
+    const credential = this.tokenCredentials.get(userId);
+    if (credential?.kind !== 'device' || !revoked(credential.id)) return;
     this.removeUserEverywhere(userId);
   }
 
@@ -214,8 +259,9 @@ export class VoiceService {
     if (!UUID.test(userId)) return false;
     if ((await this.ctx.parties.currentPartyId(userId)) !== partyId) return false;
     // Known after a token was issued by this process (the map is not kept across restarts).
-    const sessionId = this.tokenSessions.get(userId);
-    if (sessionId && !(await this.ctx.auth.isSessionValid(sessionId))) return false;
+    const credential = this.tokenCredentials.get(userId);
+    if (credential?.kind === 'session' && !(await this.ctx.auth.isSessionValid(credential.id))) return false;
+    if (credential?.kind === 'device' && !(await this.ctx.devices.hasScope(credential.id, userId, 'parties:write'))) return false;
     const status = (await this.ctx.users.loadCards([userId])).get(userId)?.status;
     if (status !== 'active') return false;
     const rest = others.filter((id) => id !== userId);

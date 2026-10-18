@@ -40,6 +40,7 @@ export const ERROR_CODES = [
   'MEDIA_STORAGE_FULL',
   'MEDIA_UNAVAILABLE',
   'VOICE_UNAVAILABLE',
+  'VOICE_GATEWAY_UNAVAILABLE',
   'INTERNAL_ERROR',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
