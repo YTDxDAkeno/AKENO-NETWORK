@@ -133,6 +133,9 @@ endif()
 add_executable(make-icon tools/make_icon.c)
 target_compile_options(make-icon PRIVATE ${AKN_WARNINGS} ${AKN_HARDENING})
 target_link_libraries(make-icon PRIVATE akn_core)
+add_executable(akn-update tools/update_cli.c)
+target_compile_options(akn-update PRIVATE ${AKN_WARNINGS} ${AKN_HARDENING})
+target_link_libraries(akn-update PRIVATE akn_core)
 
 enable_testing()
 add_executable(akn_unit_tests tests/unit/test_main.c tests/unit/test_nav_input.c tests/unit/test_audio.c

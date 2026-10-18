@@ -217,11 +217,15 @@ akn_dl_result akn_update_get(const akn_dl_config *cfg, const char *url, const ch
         akeno_status st = akeno_conn_open(&u, cfg->ca_file, connect_ms, &conn, err, sizeof(err));
         if (st != AKENO_OK) return net_error(st, host, why, why_len);
         akeno_buf req;
+        /* RFC 9110 7.2: the port belongs in Host when it is not the scheme's default. */
+        char host_header[300];
+        if (port == (tls ? 443 : 80)) snprintf(host_header, sizeof(host_header), "%s", host);
+        else snprintf(host_header, sizeof(host_header), "%s:%d", host, port);
         akeno_buf_init(&req, 4096);
         akeno_buf_printf(&req,
                          "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: %s\r\nAccept: %s\r\nAccept-Encoding: identity\r\n"
                          "X-GitHub-Api-Version: 2022-11-28\r\nConnection: close\r\n\r\n",
-                         target, host, cfg->user_agent ? cfg->user_agent : "AKENO-Native", accept ? accept : "*/*");
+                         target, host_header, cfg->user_agent ? cfg->user_agent : "AKENO-Native", accept ? accept : "*/*");
         st = req.data ? akeno_conn_write_all(conn, req.data, req.len, idle_ms) : AKENO_ERR_NO_MEMORY;
         akeno_buf_free(&req);
         if (st != AKENO_OK) {
