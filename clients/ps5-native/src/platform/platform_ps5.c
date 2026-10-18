@@ -109,6 +109,10 @@ uint64_t akn_platform_now_ms(void) { return akn_platform_now_us() / 1000u; }
 
 long long akn_platform_unix_time(void) { return (long long)time(NULL); }
 
+int32_t akn_platform_running_app(void) {
+    return sceSystemServiceGetAppIdOfRunningBigApp ? sceSystemServiceGetAppIdOfRunningBigApp() : -1;
+}
+
 akn_context_kind akn_platform_context(akn_context_raw *raw) {
     memset(raw, 0, sizeof(*raw));
     raw->have_appinfo_fn = sceKernelGetAppInfo != NULL;

@@ -230,6 +230,11 @@ static akn_button map_key(SDL_Keycode k) {
 
 static void run_command(akn_app *app, akn_cmd cmd, uint64_t now);
 
+static void life_event(akn_app *app, akn_life_event e) {
+    akn_lifecycle_event(&app->life, e);
+    akn_logf(&app->log, AKN_LOG_INFO, "life.event", "%s", akn_lifecycle_event_name(e));
+}
+
 static void handle_event(akn_app *app, const SDL_Event *e, uint64_t now) {
     switch (e->type) {
     case SDL_QUIT: app->quit = 1; break;
@@ -292,8 +297,35 @@ static void handle_event(akn_app *app, const SDL_Event *e, uint64_t now) {
         break;
     case SDL_WINDOWEVENT:
         if (e->window.event == SDL_WINDOWEVENT_FOCUS_LOST) akn_input_release_source(&app->input, &app->queue, AKN_SRC_KEYBOARD, now);
+        switch (e->window.event) {
+        case SDL_WINDOWEVENT_FOCUS_LOST: life_event(app, AKN_LIFE_FOCUS_LOST); break;
+        case SDL_WINDOWEVENT_FOCUS_GAINED: life_event(app, AKN_LIFE_FOCUS_GAINED); break;
+        case SDL_WINDOWEVENT_HIDDEN: life_event(app, AKN_LIFE_HIDDEN); break;
+        case SDL_WINDOWEVENT_SHOWN: life_event(app, AKN_LIFE_SHOWN); break;
+        case SDL_WINDOWEVENT_MINIMIZED: life_event(app, AKN_LIFE_MINIMIZED); break;
+        case SDL_WINDOWEVENT_RESTORED: life_event(app, AKN_LIFE_RESTORED); break;
+        default: break;
+        }
         break;
+    case SDL_APP_WILLENTERBACKGROUND:
+    case SDL_APP_DIDENTERBACKGROUND: life_event(app, AKN_LIFE_APP_BACKGROUND); break;
+    case SDL_APP_WILLENTERFOREGROUND:
+    case SDL_APP_DIDENTERFOREGROUND: life_event(app, AKN_LIFE_APP_FOREGROUND); break;
     default: break;
+    }
+}
+
+/* Test F: one main-loop iteration; a long gap is logged with the voice state around it. */
+static void life_tick(akn_app *app, uint64_t now) {
+    if (akn_lifecycle_tick(&app->life, now, app->voice.state, app->voice.mic)) {
+        const akn_life_pause *p = akn_lifecycle_last(&app->life);
+        akn_lifecycle_bigapp(&app->life, akn_platform_running_app());
+        app->life_app_at = now;
+        akn_logf(&app->log, AKN_LOG_INFO, "life.pause", "the main loop was paused for %.1f s; voice %s, running app 0x%x",
+                 p->gap_ms / 1000.0, akn_voice_state_text(&app->voice), (unsigned)app->life.bigapp_last);
+    } else if (now - app->life_app_at >= 5000) {
+        akn_lifecycle_bigapp(&app->life, akn_platform_running_app());
+        app->life_app_at = now;
     }
 }
 
@@ -1367,8 +1399,11 @@ int akn_app_run(const akn_options *options, int *opened_devices) {
     if (options->script) akn_gfx_capture_enable(app->gfx);
 
     app->last_frame_ms = akn_platform_now_ms();
+    akn_lifecycle_init(&app->life, app->last_frame_ms, akn_platform_running_app());
+    app->life_app_at = app->last_frame_ms;
     while (!app->quit) {
         uint64_t now = akn_platform_now_ms();
+        life_tick(app, now);
         SDL_Event e;
         while (SDL_PollEvent(&e)) handle_event(app, &e, now);
         sync_social(app);

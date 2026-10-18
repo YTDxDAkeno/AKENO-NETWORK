@@ -14,6 +14,7 @@
 #include "context.h"
 #include "gfx.h"
 #include "input.h"
+#include "lifecycle.h"
 #include "log.h"
 #include "mic_test.h"
 #include "akn_platform.h"
@@ -250,6 +251,8 @@ typedef struct {
     double frame_ms_avg, frame_ms_max;
     uint64_t started_ms;
     uint64_t last_frame_ms;
+    akn_lifecycle life;           /* test F: pauses and window events (main thread) */
+    uint64_t life_app_at;         /* when the running app was last sampled */
 
     /* Logging and report */
     akn_log log;
