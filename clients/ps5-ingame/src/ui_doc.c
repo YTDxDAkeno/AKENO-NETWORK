@@ -84,32 +84,41 @@ static onion_status add_nodes(onion_ui_document *d, const akn_companion *c, cons
         if (!c->convs_shown) TRY(label(d, "conv_none", "unread", "No unread messages", ""));
         TRY(label(d, "unread_hint", "unread", "Reading and answering", "Open AKENO NETWORK Native when you are not playing."));
 
-        /* actions, only when the daemon takes changes */
-        n = node(ONION_UI_NODE_GROUP, "actions", "main", "Quick actions");
-        TRY(onion_ui_document_add_node(d, &n));
-        n = node(ONION_UI_NODE_LIST, "presence", "actions", "Status");
-        n.value_type = ONION_UI_VALUE_STRING;
-        n.binding = ONION_UI_BINDING_EVENT;
-        snprintf(n.binding_key, sizeof(n.binding_key), AKN_EV_PRESENCE);
-        snprintf(n.value, sizeof(n.value), "%s", c->presence[0] ? c->presence : "online");
-        if (!c->writes) n.flags |= ONION_UI_NODE_FLAG_DISABLED;
-        TRY(onion_ui_document_add_node(d, &n));
-        static const char *const values[] = { "online", "away", "dnd", "invisible" };
-        static const char *const titles[] = { "Online", "Away", "Busy", "Invisible" };
-        for (int i = 0; i < 4; i++) {
-            char id[24];
-            snprintf(id, sizeof(id), "presence_%s", values[i]);
-            n = node(ONION_UI_NODE_LIST_ITEM, id, "presence", titles[i]);
-            n.value_type = ONION_UI_VALUE_STRING;
-            snprintf(n.value, sizeof(n.value), "%s", values[i]);
+        /* Only render controls the daemon can actually execute. The v0.9.0
+         * Toolbox renderer does not implement DISABLED nodes, even though
+         * the SDK validator accepts the flag. Use labels instead. */
+        if (c->writes) {
+            n = node(ONION_UI_NODE_GROUP, "actions", "main", "Quick actions");
             TRY(onion_ui_document_add_node(d, &n));
+            n = node(ONION_UI_NODE_LIST, "presence", "actions", "Status");
+            n.value_type = ONION_UI_VALUE_STRING;
+            n.binding = ONION_UI_BINDING_EVENT;
+            snprintf(n.binding_key, sizeof(n.binding_key), AKN_EV_PRESENCE);
+            snprintf(n.value, sizeof(n.value), "%s", c->presence[0] ? c->presence : "online");
+            TRY(onion_ui_document_add_node(d, &n));
+            static const char *const values[] = { "online", "away", "dnd", "invisible" };
+            static const char *const titles[] = { "Online", "Away", "Busy", "Invisible" };
+            for (int i = 0; i < 4; i++) {
+                char id[24];
+                snprintf(id, sizeof(id), "presence_%s", values[i]);
+                n = node(ONION_UI_NODE_LIST_ITEM, id, "presence", titles[i]);
+                n.value_type = ONION_UI_VALUE_STRING;
+                snprintf(n.value, sizeof(n.value), "%s", values[i]);
+                TRY(onion_ui_document_add_node(d, &n));
+            }
+            if (c->invite_id[0]) {
+                n = node(ONION_UI_NODE_ACTION, "accept_invite", "actions", "Accept the party invitation");
+                n.binding = ONION_UI_BINDING_EVENT;
+                snprintf(n.binding_key, sizeof(n.binding_key), AKN_EV_ACCEPT);
+                fit(n.description, sizeof(n.description), c->invite_line);
+                n.flags = ONION_UI_NODE_FLAG_CONFIRM;
+                TRY(onion_ui_document_add_node(d, &n));
+            } else {
+                TRY(label(d, "invite_none", "actions", "Party invitations", "No invitation waiting"));
+            }
+        } else {
+            TRY(label(d, "readonly", "main", "Quick actions unavailable", "The daemon's native interface is read-only."));
         }
-        n = node(ONION_UI_NODE_ACTION, "accept_invite", "actions", "Accept the party invitation");
-        n.binding = ONION_UI_BINDING_EVENT;
-        snprintf(n.binding_key, sizeof(n.binding_key), AKN_EV_ACCEPT);
-        fit(n.description, sizeof(n.description), c->invite_line[0] ? c->invite_line : "No party invitation waiting");
-        n.flags = ONION_UI_NODE_FLAG_CONFIRM | (c->invite_id[0] && c->writes ? 0 : ONION_UI_NODE_FLAG_DISABLED);
-        TRY(onion_ui_document_add_node(d, &n));
     }
     n = node(ONION_UI_NODE_ACTION, "refresh", "main", "Refresh");
     n.binding = ONION_UI_BINDING_EVENT;
