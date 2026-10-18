@@ -131,6 +131,19 @@ static void test_model(void) {
     akn_companion_build(m, AKN_COMP_READY, &d, f, c, &p, in, "online", 1000);
     CHECK(!m->writes);
     CHECK(akn_companion_document(m, NULL, &doc) == ONION_OK);
+    CHECK(page_has(doc, "Quick actions unavailable"));
+    CHECK(!page_has(doc, AKN_EV_PRESENCE));
+    CHECK(!page_has(doc, AKN_EV_ACCEPT));
+    onion_ui_document_destroy(doc);
+
+    /* IPC 2 is writable, but an absent invitation must not create a
+     * disabled action (unsupported by the real OnionHEN renderer). */
+    d.ipc = 2;
+    akn_companion_build(m, AKN_COMP_READY, &d, f, c, &p, NULL, "online", 1000);
+    CHECK(akn_companion_document(m, NULL, &doc) == ONION_OK);
+    CHECK(page_has(doc, AKN_EV_PRESENCE));
+    CHECK(!page_has(doc, AKN_EV_ACCEPT));
+    CHECK(page_has(doc, "No invitation waiting"));
     onion_ui_document_destroy(doc);
 
     /* not ready: one line that says why, and Refresh */
