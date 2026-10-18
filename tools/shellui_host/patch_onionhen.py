@@ -164,6 +164,9 @@ def patch(root: Path) -> None:
     )
     replace_once(root, util, '  "${ONION_CURL_ROOT}/lib"\n', "")
     replace_once(root, util, "    curl\n    psl\n    ssl\n    crypto\n", "")
+    # The minimal SDK omits optional compression libraries too. The util
+    # component vendors miniz and does not reference external zlib/zstd APIs.
+    replace_once(root, util, "    zstd\n    z\n", "")
 
     # Fail closed on the safety-critical bootstrap and UI call sites.
     edited_fs = (root / filesystem).read_text()
