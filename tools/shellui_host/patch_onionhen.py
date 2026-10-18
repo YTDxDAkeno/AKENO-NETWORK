@@ -22,6 +22,18 @@ def replace_once(root: Path, path: str, before: str, after: str) -> None:
     target.write_text(text.replace(before, after, 1), encoding="utf-8")
 
 
+def replace_block(root: Path, path: str, start: str, end: str, replacement: str) -> None:
+    target = root / path
+    text = target.read_text(encoding="utf-8-sig")
+    if text.count(start) != 1 or text.count(end) != 1:
+        raise RuntimeError(f"{path}: known span missing or duplicated")
+    first = text.index(start)
+    last = text.index(end, first)
+    if first >= last:
+        raise RuntimeError(f"{path}: invalid source span ordering")
+    target.write_text(text[:first] + replacement + text[last:], encoding="utf-8")
+
+
 def replace_function(root: Path, path: str, signature: str, replacement: str) -> None:
     target = root / path
     text = target.read_text(encoding="utf-8-sig")
@@ -117,6 +129,41 @@ def patch(root: Path) -> None:
         '  (void)kstuff_autoload;\n'
         '  launch_kstuff(&context, firmware_version, false); /* signal pre-existing kstuff */',
     )
+
+
+    # This minimal host does not need OnionHEN's optional cheat catalog HTTP.
+    # SDK v0.44 does not bundle libcurl/CA; disable the feature instead of
+    # downloading an unrelated system component or using fake libraries.
+    transport = "source/util/source/cheats/sync/http_transport_ps5.cpp"
+    replace_once(
+        root, transport,
+        "#if !defined(ONION_HOST_TEST)",
+        "#if !defined(ONION_HOST_TEST) && !defined(AKENO_DISABLE_CHEAT_HTTP)",
+    ) if False else None
+    # Two guards on this upstream file; match the expected count explicitly.
+    file = root / transport
+    code = file.read_text()
+    if code.count("#if !defined(ONION_HOST_TEST)") != 2:
+        raise RuntimeError("unexpected PS5 curl guard count in HTTP transport")
+    if code.count("#if defined(ONION_HOST_TEST)") != 1:
+        raise RuntimeError("unexpected host HTTP fallback guard count")
+    code = code.replace(
+        "#if !defined(ONION_HOST_TEST)",
+        "#if !defined(ONION_HOST_TEST) && !defined(AKENO_DISABLE_CHEAT_HTTP)"
+    ).replace(
+        "#if defined(ONION_HOST_TEST)",
+        "#if defined(ONION_HOST_TEST) || defined(AKENO_DISABLE_CHEAT_HTTP)"
+    )
+    file.write_text(code)
+    util = "source/util/CMakeLists.txt"
+    replace_block(
+        root, util,
+        'set(ONION_CURL_ROOT "${PS5_PAYLOAD_SDK}/target/user/homebrew")',
+        "target_link_directories(${PROJECT_NAME} PUBLIC",
+        "target_compile_definitions(${PROJECT_NAME} PRIVATE AKENO_DISABLE_CHEAT_HTTP=1)\n",
+    )
+    replace_once(root, util, '  "${ONION_CURL_ROOT}/lib"\\n', "")
+    replace_once(root, util, "    curl\\n    psl\\n    ssl\\n    crypto\\n", "")
 
     # Fail closed on the safety-critical bootstrap and UI call sites.
     edited_fs = (root / filesystem).read_text()
