@@ -10,6 +10,9 @@ build="${1:?build directory}"
 elf="$build/AKEN00001.elf"
 nm="${PS5_PAYLOAD_SDK:?}/bin/prospero-nm"
 test -f "$elf"
+# The SDK inspector alone is insufficient: the v0.9.0 host rejects
+# AUTO_START even though the SDK header defines the bit.
+python3 -I "$(dirname "$0")/check-host-descriptor.py" "$elf"
 allowed='^(__error|__isfinite|__stderrp|__stdoutp|abort|calloc|clock_gettime|close|connect|fcntl|fflush|fprintf|free|fstat|getsockopt|isalnum|isxdigit|lstat|malloc|memchr|memcmp|memcpy|memmove|memset|open|poll|printf|pthread_mutex_destroy|pthread_mutex_init|pthread_mutex_lock|pthread_mutex_unlock|qsort|read|realloc|recv|send|setsockopt|signal|snprintf|socket|sscanf|strcmp|strcspn|strlen|strncasecmp|strncmp|strpbrk|strrchr|strstr|strtod|strtoll|strtoul|time|tolower|toupper|usleep|vsnprintf|fputs|puts|putchar|fwrite|strchr|strtol|memrchr|nanosleep)$'
 bad=$("$nm" -D --undefined-only "$elf" | awk '{print $2}' | grep -Ev "$allowed" || true)
 if [[ -n "$bad" ]]; then
