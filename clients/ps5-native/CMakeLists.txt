@@ -57,6 +57,9 @@ if(EXISTS "${AKENO_THIRD_PARTY_DIR}/mbedtls/library/ssl_tls.c" AND EXISTS "${AKE
     "AKENO_CA_BUNDLE_NAME=\"Mozilla CA bundle from certifi 2026.07.22\"")
   set_source_files_properties("${PS5_DIR}/src/transport_mbedtls.c" PROPERTIES OBJECT_DEPENDS "${AKENO_THIRD_PARTY_DIR}/cacert.pem")
   target_link_libraries(akn_akeno PUBLIC akn_mbedtls)
+  # mbedTLS's entropy source (mbedtls_hardware_poll) is defined in transport_mbedtls.c: a cycle
+  # between the two static libraries, so programs that use only the crypto part link too.
+  target_link_libraries(akn_mbedtls PUBLIC akn_akeno)
   set(AKN_TRANSPORT "mbedTLS (console transport)")
 else()
   # The updater verifies signatures with mbedTLS (src/core/update_verify.c), as on the console.
@@ -145,3 +148,13 @@ target_include_directories(akn_unit_tests PRIVATE tests/unit src/app src/platfor
 target_compile_options(akn_unit_tests PRIVATE ${AKN_WARNINGS})
 target_link_libraries(akn_unit_tests PRIVATE akn_core)
 add_test(NAME unit COMMAND akn_unit_tests)
+
+# libFuzzer harness for the updater's readers (tests/fuzz/run.sh configures this with clang and
+# -fsanitize=fuzzer-no-link,address,undefined for the whole build).
+option(AKN_FUZZ "Build tests/fuzz/fuzz_update.c (clang, libFuzzer)" OFF)
+if(AKN_FUZZ)
+  add_executable(fuzz_update tests/fuzz/fuzz_update.c)
+  target_compile_options(fuzz_update PRIVATE ${AKN_WARNINGS})
+  target_link_libraries(fuzz_update PRIVATE akn_core)
+  target_link_options(fuzz_update PRIVATE -fsanitize=fuzzer)
+endif()

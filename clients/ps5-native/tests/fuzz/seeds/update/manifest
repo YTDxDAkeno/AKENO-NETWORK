@@ -1,0 +1,31 @@
+{
+  "format": 1,
+  "product": "akeno-network-native",
+  "version": "1.2.0",
+  "tag": "native-1.2.0",
+  "channel": "stable",
+  "package": {
+    "name": "akeno-native-1.2.0.zip",
+    "size": 3226,
+    "sha256": "a2d0e10f36db2b35b9c4637198451d5473802887b7b44701b5e0a8c0aab6e8ce"
+  },
+  "files": [
+    {
+      "path": "eboot.elf",
+      "size": 3000,
+      "sha256": "60bb3fff776606aea8b631cd127e44fa6ae60c865b7822b91d0f92826f145890"
+    },
+    {
+      "path": "sce_sys/icon0.png",
+      "size": 1000,
+      "sha256": "411624ba90119d6b1e8acb7d086772109675ecf2bfae109cb7c3f800471c284c"
+    }
+  ],
+  "requires": {
+    "firmware_min": "12.00",
+    "firmware_max": "12.99",
+    "daemon_protocol_min": 1,
+    "min_installed_version": "1.0.0"
+  },
+  "notes": "Fixes"
+}

@@ -25,8 +25,8 @@ env:
   # LiveKit server for the end-to-end voice test: the release tarball of the pinned version.
   LIVEKIT_VERSION: 1.12.0
   LIVEKIT_SHA256: 9b89eb169c6c5795393bad6b52a9d0c73640a5993b37162558b4e249e5fe3aee
-  RELEASE_NAME: akeno-network-native-1.1.0-beta.1
-  NATIVE_VERSION: 1.1.0-beta.1
+  RELEASE_NAME: akeno-network-native-1.2.0-beta.1
+  NATIVE_VERSION: 1.2.0-beta.1
   # The Alpha 0.5 RC daemon that ran on a PS5 with 12.20 (see ps5.yml): shipped as the daemon
   # fallback next to the native-IPC daemon, rebuilt and verified byte for byte.
   RC_COMMIT: 7e28255c63baa528e28866cda53db1dedb3954a6
@@ -96,6 +96,12 @@ jobs:
       - name: Native UI integration tests (headless SDL, virtual controller, fake server and daemon)
         run: AKN_IT_OUT="$RUNNER_TEMP/ui-screenshots" node clients/ps5-native/tests/integration/run.mjs clients/ps5-native/build-asan/akeno-native
 
+      - name: Updater end to end against a mock GitHub (signatures, corrupt and foreign downloads, rollback, launcher)
+        run: node clients/ps5-native/tests/updater/run.mjs clients/ps5-native/build-asan/akn-update
+
+      - name: Updates screen and update question driven through the real app (mock GitHub, virtual controller)
+        run: node clients/ps5-native/tests/updater/ui.mjs clients/ps5-native/build-asan/akeno-native
+
       - name: Release build with Clang (-Werror) and unit tests under Valgrind
         run: |
           cmake -S clients/ps5-native -B clients/ps5-native/build-clang -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-18 \
@@ -110,9 +116,10 @@ jobs:
           checks='-*,clang-analyzer-*,bugprone-*,-bugprone-easily-swappable-parameters,-bugprone-narrowing-conversions,-bugprone-implicit-widening-of-multiplication-result,-bugprone-reserved-identifier,-bugprone-assignment-in-if-condition,-bugprone-branch-clone,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-bugprone-multi-level-implicit-pointer-conversion,-clang-analyzer-valist.Uninitialized'
           clang-tidy-18 -p build-clang --quiet --warnings-as-errors='*' --checks="$checks" \
             src/core/*.c src/app/app.c src/app/screens.c src/app/gfx.c src/app/net.c src/app/report.c src/app/main.c \
-            src/app/ipc.c src/app/social.c src/app/voice_app.c src/platform/platform_host.c tools/make_icon.c
+            src/app/ipc.c src/app/social.c src/app/voice_app.c src/app/update_app.c src/platform/platform_host.c \
+            tools/make_icon.c tools/update_cli.c
 
-      - name: Fuzz the picture decoder and the badge paths (libFuzzer, ASan + UBSan, committed regression seeds)
+      - name: Fuzz the picture decoder, the badge paths and the updater readers (ZIP, release list, manifest; libFuzzer, ASan + UBSan)
         run: AKN_FUZZ_OUT="$RUNNER_TEMP/fuzz" clients/ps5-native/tests/fuzz/run.sh 90 clang-18
 
       - name: In-Game Companion (experimental) - menu model and OnionHEN page tests (sanitizers)
@@ -121,6 +128,19 @@ jobs:
           cmake -S clients/ps5-ingame -B clients/ps5-ingame/build -DAKN_SANITIZE=ON -DCMAKE_BUILD_TYPE=Debug
           cmake --build clients/ps5-ingame/build -j"$(nproc)"
           ctest --test-dir clients/ps5-ingame/build --output-on-failure
+
+      - name: Voice Lab (experimental) - lab logic against a simulated console (sanitizers, Valgrind, analyzer)
+        run: |
+          cmake -S clients/ps5-voicelab -B clients/ps5-voicelab/build-asan -DAKN_LAB_SANITIZE=ON -DCMAKE_BUILD_TYPE=Debug
+          cmake --build clients/ps5-voicelab/build-asan -j"$(nproc)"
+          ctest --test-dir clients/ps5-voicelab/build-asan --output-on-failure
+          cmake -S clients/ps5-voicelab -B clients/ps5-voicelab/build-clang -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-18 \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          cmake --build clients/ps5-voicelab/build-clang -j"$(nproc)"
+          valgrind --leak-check=full --error-exitcode=99 -q clients/ps5-voicelab/build-clang/akn_lab_tests
+          checks='-*,clang-analyzer-*,bugprone-*,-bugprone-easily-swappable-parameters,-bugprone-narrowing-conversions,-bugprone-implicit-widening-of-multiplication-result,-bugprone-reserved-identifier,-bugprone-assignment-in-if-condition,-bugprone-branch-clone,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-bugprone-multi-level-implicit-pointer-conversion,-clang-analyzer-valist.Uninitialized'
+          cd clients/ps5-voicelab
+          clang-tidy-18 -p build-clang --quiet --warnings-as-errors='*' --checks="$checks" src/main.c src/lab.c src/lab_pcm.c src/lab_net.c src/backend_host.c
 
       - name: Upload fuzzer findings
         if: failure()
@@ -369,6 +389,15 @@ jobs:
           cmp "$RUNNER_TEMP/ingame-repro/AKEN00001.elf" clients/ps5-ingame/build-ps5/AKEN00001.elf
           clients/ps5-ingame/console/check-plugin.sh clients/ps5-ingame/build-ps5 | tee gate-ingame.txt
 
+      - name: Build the Voice Lab twice (reproducible) and gate its imports (EXPERIMENTAL diagnostics)
+        shell: bash
+        run: |
+          export PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk"
+          make -C clients/ps5-voicelab/console -j"$(nproc)" BUILD="$RUNNER_TEMP/repro-voicelab"
+          make -C clients/ps5-voicelab/console -j"$(nproc)" package
+          cmp "$RUNNER_TEMP/repro-voicelab/akeno-voicelab.elf" clients/ps5-voicelab/build-ps5/akeno-voicelab.elf
+          clients/ps5-voicelab/console/check-voicelab.sh clients/ps5-voicelab/build-ps5 | tee gate-voicelab.txt
+
       - name: Rebuild the hardware-tested Alpha 0.5 RC daemon (7e28255) as the daemon fallback
         shell: bash
         run: |
@@ -385,7 +414,7 @@ jobs:
           rc_elf="fallback/akeno-network-ps5-alpha-0.5-rc-7e28255.elf"
           n02="fallback/native-0.2-preview-$NATIVE_02_BUILD_ID"
           n100="fallback/native-1.0.0-beta.1-$NATIVE_100_BUILD_ID"
-          mkdir -p "$out/debug" "$out/daemon" "$out/docs" "$out/licenses" "$out/experimental/in-game-companion" "$out/$n02/daemon" "$out/$n100/daemon"
+          mkdir -p "$out/debug" "$out/daemon" "$out/docs" "$out/licenses" "$out/experimental/in-game-companion" "$out/experimental/voice-lab" "$out/$n02/daemon" "$out/$n100/daemon"
           # AKENO Native 1.0.0-beta.1 and the native-IPC daemon (protocol 2) of this commit
           cp -r clients/ps5-native/build-ps5/AKENONative "$out/"
           cp clients/ps5-native/build-ps5/akeno-native.elf "$out/"
@@ -420,10 +449,17 @@ jobs:
             echo "OnionHEN plugin SDK: https://github.com/OnionBuddies/onionHEN-plugin-sdk commit $(git -C clients/ps5-ingame/third_party/onion-sdk rev-parse HEAD)"
             echo "PS5 payload SDK:     https://github.com/ps5-payload-dev/sdk commit $PS5_SDK_COMMIT"
           } > "$out/experimental/in-game-companion/README.txt"
+          # Experimental Voice Lab (background audio diagnostics; separate from the release)
+          cp -r clients/ps5-voicelab/build-ps5/AKENOVoiceLab "$out/experimental/voice-lab/"
+          cp clients/ps5-voicelab/build-ps5/akeno-voicelab.debug.elf "$out/debug/"
+          cp clients/ps5-voicelab/README.md "$out/experimental/voice-lab/README.md"
           # Documentation
           cp docs/native/INSTALL.md docs/native/FIRST_RUN.md docs/native/CONTROLLER.md docs/native/TROUBLESHOOTING.md docs/native/ROLLBACK.md "$out/docs/"
           cp docs/IN_GAME_ACCESS.md "$out/docs/IN_GAME_ACCESS.md"
-          cp docs/HARDWARE_TEST_PLAN_PS5_NATIVE_1.1.0-beta.1.md "$out/docs/HARDWARE_TEST_PLAN.md"
+          cp docs/HARDWARE_TEST_PLAN_PS5_NATIVE_1.2.0-beta.1.md "$out/docs/HARDWARE_TEST_PLAN.md"
+          cp docs/HARDWARE_TEST_PLAN_PS5_NATIVE_1.1.0-beta.1.md "$out/docs/HARDWARE_TEST_PLAN_1.1.md"
+          cp docs/PS5_NATIVE_UPDATER.md "$out/docs/UPDATER.md"
+          cp docs/PS5_BACKGROUND_VOICE.md "$out/docs/BACKGROUND_VOICE.md"
           cp docs/HARDWARE_TEST_PLAN_PS5_NATIVE_1.0.0-beta.1.md "$out/docs/HARDWARE_TEST_PLAN_1.0.md"
           cp docs/PS5_VOICE.md "$out/docs/VOICE.md"
           cp docs/DEPLOYMENT_REVIEW_PS5_VOICE.md "$out/docs/SERVER_DEPLOYMENT.md"
@@ -434,7 +470,7 @@ jobs:
           cp docs/PS5_NATIVE_ADR.md "$out/docs/ARCHITECTURE_DECISION.md"
           cp docs/GAME_ARTWORK.md "$out/docs/GAME_ARTWORK.md"
           cp clients/ps5-native/CHANGELOG.md "$out/CHANGELOG.md"
-          cp docs/RELEASE_NOTES_PS5_NATIVE_1.1.0-beta.1.md "$out/RELEASE_NOTES.md"
+          cp docs/RELEASE_NOTES_PS5_NATIVE_1.2.0-beta.1.md "$out/RELEASE_NOTES.md"
           # Licences: LICENSES.md (with the stb MIT and Lucide ISC notices) and the full texts
           cp docs/LICENSES.md "$out/LICENSES.md"
           cp clients/ps5-native/third_party/inter/OFL.txt "$out/licenses/Inter-OFL-1.1.txt"
@@ -456,7 +492,9 @@ jobs:
             readelf -h "$elf" | grep -q 'DYN (Position-Independent Executable file)'
           done < <(find "$out" -name '*.elf')
           cmp "$out/akeno-native.elf" "$out/AKENONative/eboot.elf"
-          grep -q "Native $NATIVE_VERSION" "$out/AKENONative/homebrew.js"
+          # The launcher entry reads the version from update/active.json; it must be the reviewed file
+          cmp clients/ps5-native/package/homebrew.js "$out/AKENONative/homebrew.js"
+          grep -q 'update/active.json' "$out/AKENONative/homebrew.js"
           grep -qa "$NATIVE_VERSION" "$out/AKENONative/eboot.elf"
           # Fallbacks are the recorded bytes
           (cd "$out" && {
@@ -488,11 +526,15 @@ jobs:
             echo "Reproducible:    AKENO Native, the native-IPC daemon and the companion built twice in this run, byte-identical"
             echo
             echo "Hardware status (read before installing):"
-            echo "  AKENONative/ (Native $NATIVE_VERSION with two-way party voice, this commit): NOT run on a PS5. PC tests only"
-            echo "    (unit, UI integration, end-to-end with the real server, a real LiveKit server and the voice gateway)."
-            echo "    The earlier build 196ca13c71d1-ps5 of this version ran on 12.20 (owner report): the microphone"
-            echo "    (libSceAudioIn, loaded at run time after the user confirms) opened at 16 kHz and its test level followed"
-            echo "    speech; two-way voice has NOT run on a PS5 (docs/HARDWARE_RESULTS_NATIVE_1.1.md)."
+            echo "  AKENONative/ (Native $NATIVE_VERSION: built-in updater, suspend/resume monitor, two-way party voice,"
+            echo "    this commit): NOT run on a PS5. PC tests only (unit, UI integration, updater against a mock GitHub,"
+            echo "    end-to-end with the real server, a real LiveKit server and the voice gateway)."
+            echo "    The updater refuses every install until the owner builds with the release signing key"
+            echo "    (docs/UPDATER.md); this package carries no key. Party voice still stops when a game starts."
+            echo "    Native 1.1 build 196ca13c71d1-ps5 ran on 12.20 (owner report): the microphone opened at 16 kHz and"
+            echo "    its test level followed speech; two-way voice has NOT run on a PS5 (docs/HARDWARE_RESULTS_NATIVE_1.1.md)."
+            echo "  experimental/voice-lab/: EXPERIMENTAL background audio diagnostics A-E, NOT part of this release,"
+            echo "    NOT run on a PS5 in this form; writes /data/akeno-voicelab/report.txt (docs/BACKGROUND_VOICE.md)."
             echo "    Voice needs the AKENO server's voice gateway (docs/VOICE.md). Start it only from a homebrew launcher,"
             echo "    following docs/INSTALL.md and docs/HARDWARE_TEST_PLAN.md."
             echo "  daemon/akeno-network-ps5-native-ipc.elf (this commit, native interface protocol 3): NOT run on a PS5."
@@ -528,6 +570,9 @@ jobs:
             echo "  built twice, byte-identical; imports exactly what the hardware-tested release daemon imports"
             echo "  (same NEEDED libraries); this commit's release daemon is still the RC file ($RC_RELEASE_SHA256)."
             sed 's/^/  /' gate-daemon.txt
+            echo
+            echo "Voice Lab (experimental), built twice, byte-identical:"
+            sed 's/^/  /' gate-voicelab.txt
             echo
             echo "In-Game Companion (experimental):"
             sed 's/^/  /' gate-ingame.txt
