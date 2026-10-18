@@ -398,6 +398,7 @@ describe('revocation', () => {
     livekit.calls.length = 0;
     await connect(party.id, friend.id, tabletToken);
     await waitFor(() => livekit.removed(friend.id));
+    await server.ctx.voice.settle(); // the sign-out's own check of the room has finished too
     // A fresh token from a valid session is accepted again.
     livekit.calls.length = 0;
     await join(party.id, friend);
@@ -472,6 +473,36 @@ function restartVoice(): VoiceService {
 }
 
 describe('revocation follows the connection that is in the room', () => {
+  it('a late refusal of a replaced connection leaves the newer, valid connection in the room', async () => {
+    const party = await startParty();
+    const room = `akeno-party-${party.id}`;
+    const tablet = await login(server, 'voice_friend');
+    const staleToken = (await tablet.post<VoiceTokenResponse>(`/parties/${party.id}/voice/token`)).body.token;
+    const sessions = (await tablet.get<{ sessions: Array<{ id: string; current: boolean }> }>('/auth/sessions')).body.sessions;
+    expect((await friend.delete(`/auth/sessions/${sessions.find((session) => session.current)!.id}`)).status).toBe(204);
+    await server.ctx.voice.settle();
+
+    // The user reconnects with a valid token; LiveKit replaces the old connection (same identity).
+    await join(party.id, friend);
+    livekit.calls.length = 0;
+    // The join of the old connection (signed-out session) is reported late: refused, but only that one.
+    await webhook({
+      event: 'participant_joined',
+      room: { name: room, sid: `RM_${room}` },
+      participant: { identity: friend.id, sid: 'PA_replaced', attributes: participantFrom(staleToken).attributes },
+    });
+    await server.ctx.voice.settle();
+    expect(livekit.calls.some((call) => call.method === 'GetParticipant')).toBe(true);
+    expect(livekit.removed(friend.id)).toBe(false);
+
+    // The same refusal for the connection that is actually in the room removes it (fail closed).
+    const current = livekit.rooms.get(room)!.participants.get(friend.id)!;
+    current.attributes = participantFrom(staleToken).attributes;
+    await webhook({ event: 'participant_joined', room: { name: room, sid: `RM_${room}` }, participant: { identity: friend.id, ...current } });
+    expect(livekit.removed(friend.id)).toBe(true);
+    await leader.post(`/parties/${party.id}/close`);
+  });
+
   it('revoking the connected console ends voice even after another credential asked for a newer token', async () => {
     const party = await startParty();
     const a = await pairDevice(friend);

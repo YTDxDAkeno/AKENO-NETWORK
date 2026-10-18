@@ -65,6 +65,7 @@ export class VoiceService {
   private readonly client: RoomServiceClient | null;
   private readonly receiver: WebhookReceiver | null;
   private readonly grants: VoiceGrantSealer | null;
+  private readonly pending = new Set<Promise<void>>();
 
   constructor(private readonly ctx: AppContext) {
     const voice = ctx.config.voice;
@@ -196,11 +197,23 @@ export class VoiceService {
    * never delays or fails the core action. Reconciliation retries anything that failed.
    */
   revoke(partyId: string, userId: string): void {
-    void this.removeParticipant(partyId, userId).catch((error: unknown) => this.ctx.log.warn({ err: error }, 'Voice revoke failed'));
+    this.background(this.removeParticipant(partyId, userId), 'Voice revoke failed');
   }
 
   closeRoomLater(partyId: string): void {
-    void this.closeRoom(partyId).catch((error: unknown) => this.ctx.log.warn({ err: error }, 'Voice room close failed'));
+    this.background(this.closeRoom(partyId), 'Voice room close failed');
+  }
+
+  /** Waits for the removals and room closes started in the background (shutdown, tests). */
+  async settle(): Promise<void> {
+    while (this.pending.size > 0) await Promise.all([...this.pending]);
+  }
+
+  private background(task: Promise<void>, failure: string): void {
+    const tracked: Promise<void> = task
+      .catch((error: unknown) => this.ctx.log.warn({ err: error }, failure))
+      .finally(() => this.pending.delete(tracked));
+    this.pending.add(tracked);
   }
 
   /** Removes a user from a party's voice room (best effort; unknown participants are fine). */
@@ -273,7 +286,7 @@ export class VoiceService {
       const participant = participants.get(userId);
       if (participant && matches(participant.credential)) this.revoke(partyId, userId);
     }
-    void this.revokeConnected(userId, matches).catch((error: unknown) => this.ctx.log.warn({ err: error }, 'Voice revoke failed'));
+    this.background(this.revokeConnected(userId, matches), 'Voice revoke failed');
   }
 
   private async revokeConnected(userId: string, matches: (credential: VoiceCredential) => boolean): Promise<void> {
@@ -289,7 +302,25 @@ export class VoiceService {
       throw error;
     }
     const credential = this.credentialOf(partyId, participant);
-    if (!credential || matches(credential)) await this.removeParticipant(partyId, userId);
+    if (!credential || matches(credential)) await this.removeConnection(partyId, userId, participant.sid);
+  }
+
+  /**
+   * Removes the connection that was checked (by its sid), not a newer one of the same identity:
+   * LiveKit removes by identity, and a user who reconnects with a new, valid token replaces the
+   * old connection; the new one is checked on its own join. Without a sid, or when LiveKit cannot
+   * say who is connected, the identity is removed (fail closed).
+   */
+  private async removeConnection(partyId: string, identity: string, sid: string | undefined): Promise<void> {
+    if (sid && this.client) {
+      try {
+        const current = await this.client.getParticipant(this.roomName(partyId), identity);
+        if (current.sid && current.sid !== sid) return;
+      } catch (error) {
+        if (isNotFound(error)) return;
+      }
+    }
+    await this.removeParticipant(partyId, identity);
   }
 
   /** The credential sealed into the token a reported participant joined with (null: none or invalid). */
@@ -339,7 +370,7 @@ export class VoiceService {
         const credential = await this.allowed(partyId, reported, [...room.keys()]);
         if (!credential) {
           this.ctx.log.warn({ partyId }, 'Removed a voice participant who is not allowed in the room');
-          await this.removeParticipant(partyId, identity);
+          await this.removeConnection(partyId, identity, reported.sid);
           return;
         }
         room.set(identity, { joinedAt: Date.now(), sid: reported.sid || null, credential });
@@ -392,7 +423,7 @@ export class VoiceService {
           const known = previous?.get(participant.identity);
           next.set(participant.identity, { joinedAt: known?.joinedAt ?? Date.now(), sid: participant.sid || null, credential });
         } else {
-          await this.removeParticipant(partyId, participant.identity);
+          await this.removeConnection(partyId, participant.identity, participant.sid);
         }
       }
       const changed = !previous || previous.size !== next.size || [...next.keys()].some((id) => !previous.has(id));
