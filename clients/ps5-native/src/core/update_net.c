@@ -169,6 +169,13 @@ static int chunk_feed(chunker *c, const char *in, size_t len, sink *s) {
     return 0;
 }
 
+/* akeno_conn_read returns a negated akeno_status on errors. */
+static akeno_status read_error(long n) {
+    if (n == -(long)AKENO_ERR_TIMEOUT) return AKENO_ERR_TIMEOUT;
+    if (n == -(long)AKENO_ERR_TLS) return AKENO_ERR_TLS;
+    return AKENO_ERR_NETWORK;
+}
+
 static akn_dl_result net_error(akeno_status st, const char *host, char *why, size_t why_len) {
     if (st == AKENO_ERR_TLS)
         WHY("The secure connection to %s could not be verified (TLS). Check the console's date and time.", host);
@@ -251,7 +258,7 @@ akn_dl_result akn_update_get(const akn_dl_config *cfg, const char *url, const ch
             long n = akeno_conn_read(conn, headbuf + hlen, AKENO_HTTP_MAX_HEAD - hlen, idle_ms);
             if (n <= 0) {
                 akeno_conn_close(conn);
-                return net_error(n == 0 ? AKENO_ERR_NETWORK : (akeno_status)n, host, why, why_len);
+                return net_error(n == 0 ? AKENO_ERR_NETWORK : read_error(n), host, why, why_len);
             }
             hlen += (size_t)n;
             int r = akeno_http_parse_head(headbuf, hlen, &head);
@@ -326,7 +333,7 @@ akn_dl_result akn_update_get(const akn_dl_config *cfg, const char *url, const ch
                 }
                 long r = akeno_conn_read(conn, buf, sizeof(buf), idle_ms);
                 if (r < 0) {
-                    res = net_error((akeno_status)r, host, why, why_len);
+                    res = net_error(read_error(r), host, why, why_len);
                     if (s.done > 0) WHY("The connection to %s was lost after %lld bytes. Retry to download again.", host, s.done);
                     break;
                 }
@@ -369,7 +376,7 @@ akn_dl_result akn_update_get(const akn_dl_config *cfg, const char *url, const ch
                 res = AKN_DL_STORAGE;
             }
             close(s.fd);
-            if (res != AKN_DL_OK) unlink(file);
+            if (res != AKN_DL_OK && file) unlink(file);
         }
         return res;
     }

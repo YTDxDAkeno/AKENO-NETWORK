@@ -2,6 +2,7 @@
 
 #include "app.h"
 #include "voice_app.h"
+#include "update_app.h"
 
 #include <errno.h>
 #include <stdarg.h>
@@ -393,6 +394,7 @@ static void sync_social(akn_app *app) {
     akn_inbox_row irows[AKN_INBOX_ROWS_MAX];
     akn_ui_set_list_count(ui, AKN_SCREEN_INBOX, akn_social_inbox_rows(s, irows, AKN_INBOX_ROWS_MAX));
     akn_ui_set_list_count(ui, AKN_SCREEN_SETTINGS, AKN_SET_COUNT);
+    akn_ui_set_list_count(ui, AKN_SCREEN_UPDATES, AKN_UPD_ROW_COUNT);
     /* the outcome of a write */
     if (s->result_seq != app->result_seen) {
         app->result_seen = s->result_seq;
@@ -466,6 +468,11 @@ static void open_own_profile(akn_app *app) {
 }
 
 static void refresh_screen(akn_app *app, uint64_t now) {
+    if (app->ui.screen == AKN_SCREEN_UPDATES) {
+        char why[120];
+        if (akn_upd_check(app, 0, why, sizeof(why)) != 0) akn_ui_toast(&app->ui, why, now, 2500);
+        return;
+    }
     unsigned want = AKN_WANT_RECONNECT;
     if (app->ui.screen == AKN_SCREEN_FRIENDS) want |= AKN_WANT_FRIENDS;
     else if (app->ui.screen == AKN_SCREEN_PROFILE) want |= AKN_WANT_PROFILE;
@@ -677,6 +684,17 @@ static void confirmed(akn_app *app, uint64_t now) {
         if (akn_voice_mic_test(app, why, sizeof(why)) != 0) akn_ui_toast(&app->ui, why, now, 4000);
         break;
     }
+    case AKN_CONFIRM_UPDATE_INSTALL: {
+        char why[300];
+        akn_ui_open_screen(&app->ui, AKN_SCREEN_UPDATES);
+        app->ui.focus[AKN_SCREEN_UPDATES] = AKN_UPD_ROW_INSTALL;
+        if (akn_upd_install(app, why, sizeof(why)) != 0) akn_ui_toast(&app->ui, why, now, 4000);
+        break;
+    }
+    case AKN_CONFIRM_UPDATE_RESTART:
+        akn_logf(&app->log, AKN_LOG_INFO, "update.restart", "closing so the launcher starts %s", app->upd.installed);
+        app->quit = 1;
+        break;
     default: break;
     }
 }
@@ -785,7 +803,16 @@ static void party_row(akn_app *app, uint64_t now) {
 }
 
 /* Left/Right on a volume row of the Party screen. */
+static void updates_row(akn_app *app, uint64_t now);
+
 static void row_adjust(akn_app *app) {
+    if (app->ui.screen == AKN_SCREEN_UPDATES) {
+        if (app->ui.open_row == AKN_UPD_ROW_CHANNEL || app->ui.open_row == AKN_UPD_ROW_AUTO) {
+            app->ui.row_secondary = 0;
+            updates_row(app, akn_platform_now_ms());
+        }
+        return;
+    }
     if (app->ui.screen != AKN_SCREEN_PARTY) return;
     akn_party_row rows[AKN_PARTY_ROWS_MAX];
     SDL_LockMutex(app->lock);
@@ -890,7 +917,65 @@ static void settings_row(akn_app *app, uint64_t now) {
                     "Start the test");
         }
         break;
+    case AKN_SET_UPDATES: akn_ui_open_screen(&app->ui, AKN_SCREEN_UPDATES); break;
     case AKN_SET_COUNT: break;
+    }
+}
+
+/* Settings -> Updates. */
+static void updates_row(akn_app *app, uint64_t now) {
+    akn_upd_view v;
+    akn_upd_view_get(app, &v, NULL, 0, NULL, 0);
+    akn_upd_row row = (akn_upd_row)app->ui.open_row;
+    char why[300] = "";
+    int downloading = v.phase >= AKN_UPD_DOWNLOADING && v.phase <= AKN_UPD_INSTALLING;
+    if (row == AKN_UPD_ROW_INSTALL && downloading) {
+        if (app->ui.row_secondary) {
+            akn_upd_cancel(app);
+            akn_ui_toast(&app->ui, "Cancelling the update...", now, 2000);
+        } else {
+            akn_ui_toast(&app->ui, "The update is running. Square cancels it.", now, 2500);
+        }
+        return;
+    }
+    if (!akn_upd_row_enabled(&v, row)) {
+        if (row == AKN_UPD_ROW_HISTORY || row == AKN_UPD_ROW_CURRENT) {
+            app->upd.show_notes = 0;
+            return;
+        }
+        char title[80], sub[300];
+        akn_upd_row_text(&v, row, title, sizeof(title), sub, sizeof(sub));
+        akn_ui_toast(&app->ui, sub, now, 3000);
+        return;
+    }
+    switch (row) {
+    case AKN_UPD_ROW_CHANNEL:
+        akn_upd_set_channel(app, v.prefs.channel == AKN_CHANNEL_BETA ? AKN_CHANNEL_STABLE : AKN_CHANNEL_BETA);
+        akn_ui_toast(&app->ui, app->upd.prefs.channel == AKN_CHANNEL_BETA ? "Beta channel: pre-releases are offered too." : "Stable channel.", now, 2500);
+        break;
+    case AKN_UPD_ROW_AUTO:
+        akn_upd_set_auto(app, !v.prefs.auto_check);
+        akn_ui_toast(&app->ui, app->upd.prefs.auto_check ? "Automatic update checks on." : "Automatic update checks off.", now, 2500);
+        break;
+    case AKN_UPD_ROW_CHECK:
+        if (akn_upd_check(app, 0, why, sizeof(why)) != 0) akn_ui_toast(&app->ui, why, now, 3000);
+        break;
+    case AKN_UPD_ROW_LATEST:
+    case AKN_UPD_ROW_CHANGELOG: app->upd.show_notes = !app->upd.show_notes; break;
+    case AKN_UPD_ROW_INSTALL: {
+        char text[240], size[32];
+        akn_update_format_size(v.size, size, sizeof(size));
+        snprintf(text, sizeof(text), "AKENO downloads %s (%s), checks its signature and installs it next to this version. "
+                 "Your data and sign-in stay as they are.", v.version, size);
+        confirm(app, AKN_CONFIRM_UPDATE_INSTALL, "", "", "Install the update?", text, "Install");
+        break;
+    }
+    case AKN_UPD_ROW_RESTART:
+        confirm(app, AKN_CONFIRM_UPDATE_RESTART, "", "", "Close AKENO now?",
+                "Then start AKENO NETWORK again from the Homebrew Launcher: it starts the new version. If it does not start "
+                "twice, the launcher goes back to this one.", "Close AKENO");
+        break;
+    default: break;
     }
 }
 
@@ -924,6 +1009,7 @@ static void row_action(akn_app *app, uint64_t now) {
     case AKN_SCREEN_INBOX: inbox_row(app, now); break;
     case AKN_SCREEN_SETTINGS: settings_row(app, now); break;
     case AKN_SCREEN_PICKER: picker_row(app, now); break;
+    case AKN_SCREEN_UPDATES: updates_row(app, now); break;
     default: break;
     }
 }
@@ -1317,6 +1403,7 @@ int akn_app_run(const akn_options *options, int *opened_devices) {
         free(app);
         return rc;
     }
+    akn_upd_init(app); /* trial starts and rollback are counted before anything else can fail */
     if (app->context == AKN_CTX_BACKGROUND || app->context == AKN_CTX_UNKNOWN)
         akn_logf(&app->log, AKN_LOG_WARN, "app.context_disagrees", "started with --launcher but the process check says %s",
                  akn_context_name(app->context));
@@ -1408,6 +1495,7 @@ int akn_app_run(const akn_options *options, int *opened_devices) {
         while (SDL_PollEvent(&e)) handle_event(app, &e, now);
         sync_social(app);
         akn_voice_poll(app);
+        akn_upd_poll(app, now);
         const char *shot = app->step_count ? run_script(app, now) : NULL;
         akn_input_tick(&app->input, &app->queue, now);
         akn_input_event ev;
@@ -1438,6 +1526,7 @@ int akn_app_run(const akn_options *options, int *opened_devices) {
 
     /* Clean shutdown: leave voice (closes the microphone), stop the tone, close the port, the controller and the screen. */
     akn_voice_shutdown(app);
+    akn_upd_shutdown(app);
     app->audio_cancel = 1;
     if (app->audio_thread) SDL_WaitThread(app->audio_thread, NULL);
     app->audio_thread = NULL;

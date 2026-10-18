@@ -48,8 +48,10 @@ int akn_semver_parse(const char *text, akn_semver *out) {
     if (!text || !out) return -1;
     memset(out, 0, sizeof(*out));
     const char *p = text;
-    if (parse_number(&p, &out->major) || *p++ != '.') return -1;
-    if (parse_number(&p, &out->minor) || *p++ != '.') return -1;
+    if (parse_number(&p, &out->major) || *p != '.') return -1;
+    p++;
+    if (parse_number(&p, &out->minor) || *p != '.') return -1;
+    p++;
     if (parse_number(&p, &out->patch)) return -1;
     if (*p == '-') {
         p++;

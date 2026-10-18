@@ -16,6 +16,8 @@
 #include "update_fs.h"
 #include "update_install.h"
 #include "update_net.h"
+#include "update_prefs.h"
+#include "update_view.h"
 #include "update_verify.h"
 #include "update_zip.h"
 #include "png.h"
@@ -710,7 +712,125 @@ static void test_urls(void) {
     CHECK_STR(size, "5.3 MB");
 }
 
+static void test_prefs_view(void) {
+    char dir[] = "/tmp/akn-prefs-XXXXXX";
+    CHECK(mkdtemp(dir) != NULL);
+    akn_update_prefs p;
+    akn_update_prefs_load(dir, "1.2.0-beta.1", &p);
+    CHECK(p.channel == AKN_CHANNEL_BETA && p.auto_check == 1 && p.last_check == 0);
+    akn_update_prefs_load(dir, "1.2.0", &p);
+    CHECK(p.channel == AKN_CHANNEL_STABLE);
+    CHECK(akn_update_prefs_due(&p, 1000));
+    p.last_check = 1000;
+    CHECK(!akn_update_prefs_due(&p, 1000 + AKN_UPDATE_AUTO_INTERVAL_S - 1));
+    CHECK(akn_update_prefs_due(&p, 1000 + AKN_UPDATE_AUTO_INTERVAL_S));
+    CHECK(akn_update_prefs_due(&p, 10)); /* the clock went back: check again */
+    p.auto_check = 0;
+    CHECK(!akn_update_prefs_due(&p, 1000000));
+    p.channel = AKN_CHANNEL_BETA;
+    snprintf(p.last_seen, sizeof(p.last_seen), "1.2.1");
+    CHECK(akn_update_prefs_save(dir, &p) == 0);
+    akn_update_prefs q;
+    akn_update_prefs_load(dir, "1.2.0", &q);
+    CHECK(q.channel == AKN_CHANNEL_BETA && q.auto_check == 0 && q.last_check == 1000);
+    CHECK_STR(q.last_seen, "1.2.1");
+    char path[64];
+    snprintf(path, sizeof(path), "%s/updater.json", dir);
+    FILE *f = fopen(path, "w");
+    if (f) {
+        fputs("{\"channel\":\"nightly\",\"auto_check\":\"yes\",\"last_check\":-5,\"last_seen\":\"../x\"}", f);
+        fclose(f);
+    }
+    akn_update_prefs_load(dir, "1.2.0", &q);
+    CHECK(q.channel == AKN_CHANNEL_STABLE && q.auto_check == 1 && q.last_check == 0 && q.last_seen[0] == '\0');
+    akn_fs_remove_tree(dir);
+
+    char ago[32];
+    akn_upd_ago(0, 100, ago, sizeof(ago));
+    CHECK_STR(ago, "never");
+    akn_upd_ago(100, 130, ago, sizeof(ago));
+    CHECK_STR(ago, "just now");
+    akn_upd_ago(100, 100 + 60, ago, sizeof(ago));
+    CHECK_STR(ago, "1 minute ago");
+    akn_upd_ago(100, 100 + 7300, ago, sizeof(ago));
+    CHECK_STR(ago, "2 hours ago");
+    akn_upd_ago(100, 100 + 3 * 86400, ago, sizeof(ago));
+    CHECK_STR(ago, "3 days ago");
+
+    akn_upd_view v;
+    memset(&v, 0, sizeof(v));
+    v.own_version = "1.2.0-beta.1";
+    v.build = "abc";
+    v.now_unix = 5000;
+    char t[80], sub[300];
+    akn_upd_row_text(&v, AKN_UPD_ROW_CURRENT, t, sizeof(t), sub, sizeof(sub));
+    CHECK_STR(t, "Current version");
+    CHECK_CONTAINS(sub, "1.2.0-beta.1");
+    akn_upd_row_text(&v, AKN_UPD_ROW_CHECK, t, sizeof(t), sub, sizeof(sub));
+    CHECK_STR(sub, "Last checked: never");
+    akn_upd_row_text(&v, AKN_UPD_ROW_INSTALL, t, sizeof(t), sub, sizeof(sub));
+    CHECK_CONTAINS(sub, "Homebrew Launcher");
+    CHECK(!akn_upd_row_enabled(&v, AKN_UPD_ROW_INSTALL) && !akn_upd_row_enabled(&v, AKN_UPD_ROW_RESTART));
+    CHECK(akn_upd_row_enabled(&v, AKN_UPD_ROW_CHECK) && akn_upd_row_enabled(&v, AKN_UPD_ROW_CHANNEL));
+    /* available */
+    v.has_root = 1;
+    v.checked = 1;
+    v.result = AKN_CHECK_AVAILABLE;
+    snprintf(v.version, sizeof(v.version), "1.2.0");
+    v.size = 5 * 1024 * 1024;
+    snprintf(v.published, sizeof(v.published), "2026-10-18");
+    v.prefs.last_check = 5000 - 120;
+    akn_upd_row_text(&v, AKN_UPD_ROW_CHECK, t, sizeof(t), sub, sizeof(sub));
+    CHECK_STR(sub, "Version 1.2.0 is available (checked 2 minutes ago).");
+    akn_upd_row_text(&v, AKN_UPD_ROW_LATEST, t, sizeof(t), sub, sizeof(sub));
+    CHECK_STR(sub, "1.2.0 \xC2\xB7 5.0 MB \xC2\xB7 2026-10-18");
+    CHECK(akn_upd_row_enabled(&v, AKN_UPD_ROW_INSTALL) && akn_upd_row_enabled(&v, AKN_UPD_ROW_CHANGELOG));
+    /* downloading: progress, speed, remaining; the check and the channel wait */
+    v.phase = AKN_UPD_DOWNLOADING;
+    v.done = 1024 * 1024;
+    v.total = 4 * 1024 * 1024;
+    v.bytes_per_s = 512 * 1024;
+    CHECK(akn_upd_progress(&v) > 0.24 && akn_upd_progress(&v) < 0.26);
+    akn_upd_row_text(&v, AKN_UPD_ROW_INSTALL, t, sizeof(t), sub, sizeof(sub));
+    CHECK_STR(sub, "Downloading 1.0 MB of 4.0 MB \xC2\xB7 512 KB/s \xC2\xB7 3.0 MB left \xC2\xB7 Square: cancel");
+    CHECK(!akn_upd_row_enabled(&v, AKN_UPD_ROW_CHECK) && !akn_upd_row_enabled(&v, AKN_UPD_ROW_CHANNEL));
+    CHECK(akn_upd_row_enabled(&v, AKN_UPD_ROW_INSTALL)); /* Square cancels */
+    v.total = -1; /* no length from the server */
+    CHECK(akn_upd_progress(&v) == 0);
+    v.phase = AKN_UPD_VERIFYING;
+    CHECK(akn_upd_progress(&v) < 0);
+    akn_upd_row_text(&v, AKN_UPD_ROW_INSTALL, t, sizeof(t), sub, sizeof(sub));
+    CHECK_CONTAINS(sub, "signed checksum");
+    /* failed: the reason, and Cross retries */
+    v.phase = AKN_UPD_FAILED;
+    snprintf(v.error, sizeof(v.error), "The connection was lost.");
+    akn_upd_row_text(&v, AKN_UPD_ROW_INSTALL, t, sizeof(t), sub, sizeof(sub));
+    CHECK_STR(sub, "Cross: try again \xC2\xB7 The connection was lost.");
+    /* installed: restart */
+    v.phase = AKN_UPD_INSTALLED;
+    snprintf(v.installed_version, sizeof(v.installed_version), "1.2.0");
+    CHECK(akn_upd_row_enabled(&v, AKN_UPD_ROW_RESTART) && !akn_upd_row_enabled(&v, AKN_UPD_ROW_INSTALL) && !akn_upd_row_enabled(&v, AKN_UPD_ROW_CHECK));
+    akn_upd_row_text(&v, AKN_UPD_ROW_RESTART, t, sizeof(t), sub, sizeof(sub));
+    CHECK_CONTAINS(sub, "Homebrew Launcher to use 1.2.0");
+    /* trial and rollback starts */
+    v.boot = AKN_BOOT_TRIAL;
+    v.boot_attempt = 1;
+    akn_upd_row_text(&v, AKN_UPD_ROW_CURRENT, t, sizeof(t), sub, sizeof(sub));
+    CHECK_CONTAINS(sub, "newly installed, start 1 of 2");
+    v.boot = AKN_BOOT_ROLLED_BACK;
+    snprintf(v.failed_version, sizeof(v.failed_version), "1.3.0");
+    akn_upd_row_text(&v, AKN_UPD_ROW_CURRENT, t, sizeof(t), sub, sizeof(sub));
+    CHECK_CONTAINS(sub, "1.3.0 did not start");
+    /* every row has a title, also in tiny buffers */
+    for (int r = 0; r < AKN_UPD_ROW_COUNT; r++) {
+        char tt[6], ss[6];
+        akn_upd_row_text(&v, (akn_upd_row)r, tt, sizeof(tt), ss, sizeof(ss));
+        CHECK(strlen(tt) > 0 && strlen(tt) < sizeof(tt) && strlen(ss) < sizeof(ss));
+    }
+}
+
 void run_update_tests(void) {
+    test_prefs_view();
     test_semver();
     test_pick();
     test_manifest();

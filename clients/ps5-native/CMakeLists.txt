@@ -92,7 +92,7 @@ add_library(akn_core STATIC
   src/core/image.c src/core/vector.c src/core/badges.c src/core/artwork.c src/core/chat.c src/core/osk.c src/core/party.c
   src/core/voice.c src/core/voice_codec.c src/core/voice_dsp.c src/core/voice_proto.c src/core/jitter.c src/core/mic_test.c
   src/core/semver.c src/core/update.c src/core/update_verify.c src/core/update_zip.c src/core/update_fs.c
-  src/core/update_install.c src/core/update_net.c src/core/update_engine.c src/core/lifecycle.c
+  src/core/update_install.c src/core/update_net.c src/core/update_engine.c src/core/update_prefs.c src/core/update_view.c src/core/lifecycle.c
   "${PS5_DIR}/app/audio_lab_pcm.c" "${PS5_DIR}/app/game_detect.c")
 target_include_directories(akn_core PUBLIC src/core "${PS5_DIR}/app" "${PS5_DIR}/src")
 target_compile_options(akn_core PRIVATE ${AKN_WARNINGS} ${AKN_HARDENING})
@@ -115,7 +115,7 @@ if(SDL2_FOUND)
   target_compile_options(akn_stb PRIVATE -w) # third-party code
 
   add_executable(akeno-native src/app/main.c src/app/app.c src/app/screens.c src/app/gfx.c src/app/net.c src/app/report.c
-    src/app/ipc.c src/app/social.c src/app/images.c src/app/voice_app.c src/platform/platform_host.c)
+    src/app/ipc.c src/app/social.c src/app/images.c src/app/voice_app.c src/app/update_app.c src/platform/platform_host.c)
   target_include_directories(akeno-native PRIVATE src/app src/platform "${PS5_DIR}/src")
   target_compile_options(akeno-native PRIVATE ${AKN_WARNINGS} ${AKN_HARDENING})
   target_compile_definitions(akeno-native PRIVATE

@@ -50,11 +50,11 @@ static int write_file(const char *path, const char *text, size_t len) {
 int main(int argc, char **argv) {
     akn_lab_options opt;
     memset(&opt, 0, sizeof(opt));
-    const char *out_dir = "/data/akeno-voicelab";
     akn_lab_backend be;
 #ifdef AKN_LAB_PS5
     (void)argc;
     (void)argv;
+    const char *out_dir = "/data/akeno-voicelab";
     akn_lab_backend_ps5(&be);
 #else
     static akn_lab_sim sim;
@@ -68,7 +68,7 @@ int main(int argc, char **argv) {
         sim.fail_port_types = (1 << 2) | (1 << 3);
     }
     opt.quick = getenv("AKN_LAB_QUICK") != NULL;
-    out_dir = argc > 1 ? argv[1] : ".";
+    const char *out_dir = argc > 1 ? argv[1] : ".";
     akn_lab_backend_host(&be, &sim);
 #endif
     int lock = single_instance();

@@ -164,7 +164,7 @@ int akn_updater_install(const akn_updater_cfg *cfg, const akn_check_outcome *che
     akn_sha256(data, len, digest);
     akn_update_hex(digest, hex);
     if ((long long)len != m->package_size || strcmp(hex, m->package_sha256) != 0) {
-        WHY("The downloaded package does not match the signed checksum (damaged download). Retry.");
+        WHY("The downloaded package does not match the signed checksum (damaged download).");
         free(data);
         akn_update_recover(cfg->root);
         return -1;
