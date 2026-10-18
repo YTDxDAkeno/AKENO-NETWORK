@@ -91,7 +91,7 @@ the website) who can message you, invite you to a party and send a friend reques
 | --- | --- | --- |
 | B6.1 | Home → **Party** → Create a party | Party with you as LEADER; visible on the website 📷 |
 | B6.2 | Invite friends → pick a friend | They receive the invitation (website) |
-| B6.3 | Friend joins on the website | Member appears; "IN PARTY" badge on Home |
+| B6.3 | Friend joins on the website | Member appears; "2 IN PARTY" badge on Home |
 | B6.4 | Party chat: write | Arrives in the party chat on the website |
 | B6.5 | VOICE panel | Says AKENO Native has no voice yet; shows members in voice on other devices. **No microphone, no sound from the party** 📷 |
 | B6.6 | Leave the party (confirm) | "You left the party."; website agrees |
@@ -111,7 +111,7 @@ the website) who can message you, invite you to a party and send a friend reques
 
 | # | Step | Expected |
 | --- | --- | --- |
-| B8.1 | Home → **Settings** | Toggles show the same values as the AKENO page; NOT CHANGED HERE lists server, pairing, console name 📷 |
+| B8.1 | Home → **Settings** | Toggles show the same values as the AKENO page; NOT CHANGED HERE names pairing, server address, console name, profile, privacy and account 📷 |
 | B8.2 | Message notifications off; friend messages you (AKENO Native closed) | No notification; turn it on again → notification |
 | B8.3 | Online status → Away (✕), Busy, Invisible, Online (□ goes back) | The website shows each status |
 | B8.4 | Share the game I'm playing: off, then on | The AKENO page shows the same value |

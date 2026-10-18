@@ -129,7 +129,7 @@ games stays research (`docs/VOICE.md`, V5).
    daemon) — they do not change.
 2. Copy `/data/akeno/` (pairing, settings) to a PC with FTP or a USB stick.
 3. Make sure the current AKENO release and fallback files are on the PC
-   (`AKENO-NETWORK-NATIVE-RELEASE/fallback/`).
+   (`akeno-network-native-1.0.0-beta.1/fallback/`).
 4. Do not change any game, account or system setting.
 
 ### Install (only after approval)
@@ -140,7 +140,7 @@ games stays research (`docs/VOICE.md`, V5).
    OnionHEN Toolbox**. In `/data/OnionHEN/OnionHEN.log` look for
    `kstuff already running / mprotect OK -- skip launch`. If instead it loaded kstuff, stop and
    report it (rest mode / restart clears it).
-3. Copy `experimental/AKEN00001.elf` to `/data/OnionHEN/plugins/AKEN00001.elf` (FTP or USB).
+3. Copy `experimental/in-game-companion/AKEN00001.elf` (from the release package) to `/data/OnionHEN/plugins/AKEN00001.elf` (FTP or USB).
 4. Let OnionHEN reconcile its plugins (Toolbox → Plugins, or restart OnionHEN). An **AKENO
    NETWORK** page appears in the Toolbox.
 

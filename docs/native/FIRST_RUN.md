@@ -10,8 +10,8 @@ daemon running.
 - "Welcome back, <your name>" and "signed in through this console's AKENO pairing" — AKENO Native
   uses the console's existing pairing; there is no separate login.
 - **AKENO SOCIAL — Live from the AKENO daemon on this console**: Friends, Messages, Party, Inbox,
-  Profile, Activity, Settings. Badges show live counts ("3 ONLINE", "2 NEW", "IN PARTY",
-  invitations, "PLAYING").
+  Profile, Activity, Settings. Badges show live counts ("3 ONLINE", "2 NEW" messages,
+  "3 IN PARTY" or "1 INVITE", "1 NEW" in the inbox, "PLAYING").
 - **NATIVE PLATFORM CHECKS**: Controller test, Audio test, Connection, System, Exit.
 - Bottom right: version, build ID and firmware. Use them in every report.
 
@@ -42,9 +42,9 @@ If the social line says something else instead:
    game that is not installed still shows its cover; otherwise the installed icon; otherwise a
    neutral placeholder. AKENO never guesses a cover from a game's name.
 6. **Settings** — message notifications, friend and invitation notifications, sharing the game you
-   play, your online status (Online, Away, Busy, Invisible), and the platform checks. Shown under
-   **NOT CHANGED HERE**: the server, pairing, console name and the daemon's own settings stay on
-   the AKENO page.
+   play, your online status (Online, Away, Busy, Invisible), and the platform checks. Under
+   **NOT CHANGED HERE**: pairing, the server address, the console name and your profile, privacy
+   and account stay on the AKENO page and the website.
 
 ## What AKENO Native writes to the server
 
