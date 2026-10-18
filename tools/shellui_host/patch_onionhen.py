@@ -162,8 +162,8 @@ def patch(root: Path) -> None:
         "target_link_directories(${PROJECT_NAME} PUBLIC",
         "target_compile_definitions(${PROJECT_NAME} PRIVATE AKENO_DISABLE_CHEAT_HTTP=1)\n",
     )
-    replace_once(root, util, '  "${ONION_CURL_ROOT}/lib"\\n', "")
-    replace_once(root, util, "    curl\\n    psl\\n    ssl\\n    crypto\\n", "")
+    replace_once(root, util, '  "${ONION_CURL_ROOT}/lib"\n', "")
+    replace_once(root, util, "    curl\n    psl\n    ssl\n    crypto\n", "")
 
     # Fail closed on the safety-critical bootstrap and UI call sites.
     edited_fs = (root / filesystem).read_text()
