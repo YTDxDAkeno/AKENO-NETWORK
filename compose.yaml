@@ -79,6 +79,9 @@ services:
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
       VOICE_TOKEN_TTL_SECONDS: ${VOICE_TOKEN_TTL_SECONDS:-120}
+      # Console voice through the voice gateway (voice profile): wss://<domain>/voice-gateway.
+      # Empty keeps consoles out of voice; browsers are not affected.
+      VOICE_GATEWAY_URL: ${VOICE_GATEWAY_URL:-}
     ports:
       # Bound to localhost by default; Caddy (or an SSH tunnel) is the public entry point.
       - '${APP_BIND_ADDRESS:-127.0.0.1}:${APP_PORT:-8080}:3000'
@@ -158,6 +161,37 @@ services:
       - '7881:7881/tcp'
       - '7882:7882/udp'
     user: '65532:65532'
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    networks:
+      - frontend
+    logging: *logging
+
+  # Console voice: paired consoles join LiveKit rooms through this gateway (docs/PS5_VOICE.md).
+  # It holds no data; audio passes through memory only and is never recorded.
+  voice-gateway:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/voice-gateway.Dockerfile
+    image: ${VOICE_GATEWAY_IMAGE:-akeno-voice-gateway:latest}
+    profiles:
+      - voice
+    restart: unless-stopped
+    depends_on:
+      - livekit
+    environment:
+      LIVEKIT_URL: ws://livekit:7880
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+      GATEWAY_MAX_SESSIONS: ${VOICE_GATEWAY_MAX_SESSIONS:-50}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    user: '1000:1000'
     read_only: true
     tmpfs:
       - /tmp

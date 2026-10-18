@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "app.h"
+#include "voice_app.h"
 
 #include <errno.h>
 #include <stdarg.h>
@@ -91,6 +92,10 @@ static void start_audio(akn_app *app, uint64_t now) {
     int busy = app->audio_running || app->audio_done;
     SDL_UnlockMutex(app->lock);
     if (busy) return;
+    if (akn_voice_busy(app)) {
+        akn_ui_toast(&app->ui, "Leave voice (or stop the microphone test) before the audio test.", now, 3000);
+        return;
+    }
     if (app->audio_count >= AKN_AUDIO_MAX_TESTS) {
         akn_ui_toast(&app->ui, "That was the last audio test for this launch (30). Start AKENO Native again for more.", now, 4000);
         return;
@@ -347,7 +352,12 @@ static void sync_social(akn_app *app) {
     akn_ui_set_list_count(ui, AKN_SCREEN_ACTIVITY, akn_social_playing_count(s));
     akn_ui_set_list_count(ui, AKN_SCREEN_MESSAGES, s->convs ? s->convs->count : 0);
     akn_party_row prows[AKN_PARTY_ROWS_MAX];
-    akn_ui_set_list_count(ui, AKN_SCREEN_PARTY, akn_party_rows(&s->party, s->inbox, s->joinable, prows, AKN_PARTY_ROWS_MAX));
+    akn_ui_set_list_count(ui, AKN_SCREEN_PARTY,
+                          akn_party_rows_ex(&s->party, s->inbox, s->joinable, app->voice.state != AKN_VOICE_OFF && app->voice.state != AKN_VOICE_FAILED,
+                                            prows, AKN_PARTY_ROWS_MAX));
+    /* voice belongs to a party: leaving it (or being removed) ends voice here at once */
+    int voice_orphaned = app->voice.state != AKN_VOICE_OFF && app->voice.state != AKN_VOICE_FAILED && app->voice.party_id[0] &&
+                         s->party_load == AKN_LOAD_OK && (!s->party.present || strcmp(s->party.id, app->voice.party_id) != 0);
     akn_inbox_row irows[AKN_INBOX_ROWS_MAX];
     akn_ui_set_list_count(ui, AKN_SCREEN_INBOX, akn_social_inbox_rows(s, irows, AKN_INBOX_ROWS_MAX));
     akn_ui_set_list_count(ui, AKN_SCREEN_SETTINGS, AKN_SET_COUNT);
@@ -372,6 +382,7 @@ static void sync_social(akn_app *app) {
     if (s->friends && f >= 0 && f < s->friends->count) snprintf(app->focus_friend_id, sizeof(app->focus_friend_id), "%s", s->friends->items[f].id);
     else app->focus_friend_id[0] = '\0';
     SDL_UnlockMutex(app->lock);
+    if (voice_orphaned) akn_voice_leave(app, "You are no longer in that party.");
 }
 
 static void opened_social_screen(akn_app *app) {
@@ -623,6 +634,17 @@ static void confirmed(akn_app *app, uint64_t now) {
     case AKN_CONFIRM_DECLINE_REQUEST:
         act(app, AKN_ACT_REQUEST_DECLINE, "POST", "/api/v1/friends/requests/%s/decline", app->confirm_target, NULL, app->confirm_label, now);
         break;
+    case AKN_CONFIRM_JOIN_VOICE: {
+        char why[200];
+        if (akn_voice_join(app, app->confirm_target, app->confirm_label, why, sizeof(why)) != 0) akn_ui_toast(&app->ui, why, now, 4000);
+        else akn_ui_toast(&app->ui, "Joining voice...", now, 1500);
+        break;
+    }
+    case AKN_CONFIRM_MIC_TEST: {
+        char why[200];
+        if (akn_voice_mic_test(app, why, sizeof(why)) != 0) akn_ui_toast(&app->ui, why, now, 4000);
+        break;
+    }
     default: break;
     }
 }
@@ -634,11 +656,17 @@ static void party_row(akn_app *app, uint64_t now) {
     int secondary = app->ui.row_secondary, members = 0, valid = 0, self = 0;
     SDL_LockMutex(app->lock);
     akn_social *s = &app->social;
-    int n = akn_party_rows(&s->party, s->inbox, s->joinable, rows, AKN_PARTY_ROWS_MAX);
+    int in_voice = app->voice.state != AKN_VOICE_OFF && app->voice.state != AKN_VOICE_FAILED;
+    int n = akn_party_rows_ex(&s->party, s->inbox, s->joinable, in_voice, rows, AKN_PARTY_ROWS_MAX);
     if (app->ui.open_row >= 0 && app->ui.open_row < n) {
         r = rows[app->ui.open_row];
         valid = 1;
         switch (r.kind) {
+        case AKN_PROW_VOICE:
+        case AKN_PROW_VOICE_MUTE:
+        case AKN_PROW_VOICE_DEAFEN:
+        case AKN_PROW_VOICE_OUTPUT:
+        case AKN_PROW_VOICE_MIC:
         case AKN_PROW_CHAT:
         case AKN_PROW_INVITE:
         case AKN_PROW_LEAVE:
@@ -706,7 +734,36 @@ static void party_row(akn_app *app, uint64_t now) {
     case AKN_PROW_JOINABLE:
         if (!secondary) act(app, AKN_ACT_PARTY_JOIN, "POST", "/api/v1/parties/%s/join", id, NULL, name, now);
         break;
+    case AKN_PROW_VOICE:
+        if (akn_voice_busy(app) && !app->voice.mic_test) {
+            akn_voice_leave(app, "You left voice.");
+            akn_ui_toast(&app->ui, "You left voice.", now, 2000);
+        } else if (!secondary) {
+            confirm(app, AKN_CONFIRM_JOIN_VOICE, id, name, "Join voice with your microphone?",
+                    "AKENO opens your microphone (DualSense or headset) for this party's voice chat only, after you press Join. "
+                    "Nothing is recorded or stored. You can mute or leave at any time.",
+                    "Join voice");
+        }
+        break;
+    case AKN_PROW_VOICE_MUTE: akn_voice_toggle_mute(app); break;
+    case AKN_PROW_VOICE_DEAFEN: akn_voice_toggle_deafen(app); break;
+    case AKN_PROW_VOICE_OUTPUT:
+    case AKN_PROW_VOICE_MIC: akn_voice_adjust(app, r.kind == AKN_PROW_VOICE_MIC, secondary ? -1 : 1); break;
     }
+}
+
+/* Left/Right on a volume row of the Party screen. */
+static void row_adjust(akn_app *app) {
+    if (app->ui.screen != AKN_SCREEN_PARTY) return;
+    akn_party_row rows[AKN_PARTY_ROWS_MAX];
+    SDL_LockMutex(app->lock);
+    akn_social *s = &app->social;
+    int in_voice = app->voice.state != AKN_VOICE_OFF && app->voice.state != AKN_VOICE_FAILED;
+    int n = akn_party_rows_ex(&s->party, s->inbox, s->joinable, in_voice, rows, AKN_PARTY_ROWS_MAX);
+    int row = app->ui.open_row;
+    akn_party_row_kind kind = row >= 0 && row < n ? rows[row].kind : AKN_PROW_CREATE;
+    SDL_UnlockMutex(app->lock);
+    if (kind == AKN_PROW_VOICE_OUTPUT || kind == AKN_PROW_VOICE_MIC) akn_voice_adjust(app, kind == AKN_PROW_VOICE_MIC, app->ui.adjust_dir);
 }
 
 static void inbox_row(akn_app *app, uint64_t now) {
@@ -788,6 +845,19 @@ static void settings_row(akn_app *app, uint64_t now) {
     case AKN_SET_SYSTEM: akn_ui_open_screen(&app->ui, AKN_SCREEN_SYSTEM); break;
     case AKN_SET_AUDIO: akn_ui_open_screen(&app->ui, AKN_SCREEN_AUDIO); break;
     case AKN_SET_CONTROLLER: akn_ui_open_screen(&app->ui, AKN_SCREEN_CONTROLLER); break;
+    case AKN_SET_MIC_TEST:
+        if (app->voice.mic_test) {
+            if (app->ui.row_secondary) akn_voice_toggle_monitor(app);
+            else akn_voice_leave(app, "Microphone test stopped.");
+        } else if (akn_voice_busy(app)) {
+            akn_ui_toast(&app->ui, "Leave voice first.", now, 2500);
+        } else {
+            confirm(app, AKN_CONFIRM_MIC_TEST, "", "", "Test your microphone?",
+                    "AKENO opens your microphone (DualSense or headset) on this console only and shows its level. Nothing is sent, "
+                    "recorded or stored. Press Cross again to stop.",
+                    "Start the test");
+        }
+        break;
     case AKN_SET_COUNT: break;
     }
 }
@@ -900,6 +970,7 @@ static void run_command(akn_app *app, akn_cmd cmd, uint64_t now) {
     case AKN_CMD_REFRESH: refresh_screen(app, now); break;
     case AKN_CMD_OPEN_CHAT: open_chat_row(app); break;
     case AKN_CMD_ROW_ACTION: row_action(app, now); break;
+    case AKN_CMD_ROW_ADJUST: row_adjust(app); break;
     case AKN_CMD_MESSAGE_FRIEND: message_friend(app, now); break;
     case AKN_CMD_COMPOSE: compose(app, now); break;
     case AKN_CMD_KEYBOARD_SUBMIT: keyboard_submit(app, now); break;
@@ -1196,6 +1267,7 @@ int akn_app_run(const akn_options *options, int *opened_devices) {
     int log_ok = akn_log_open(&app->log, app->log_path, 512 * 1024, akn_platform_now_ms) == 0;
     app->log.echo_stderr = options->script != NULL;
     app->lock = SDL_CreateMutex();
+    akn_voice_init(&app->voice);
     akn_logf(&app->log, AKN_LOG_INFO, "app.start", "AKENO NETWORK Native %s, build %s, %s firmware %s (0x%08x)%s",
              AKN_NATIVE_VERSION, AKN_BUILD_ID, app->platform.name, app->platform.firmware, app->platform.firmware_raw,
              log_ok ? "" : "; log file unavailable");
@@ -1300,6 +1372,7 @@ int akn_app_run(const akn_options *options, int *opened_devices) {
         SDL_Event e;
         while (SDL_PollEvent(&e)) handle_event(app, &e, now);
         sync_social(app);
+        akn_voice_poll(app);
         const char *shot = app->step_count ? run_script(app, now) : NULL;
         akn_input_tick(&app->input, &app->queue, now);
         akn_input_event ev;
@@ -1328,7 +1401,8 @@ int akn_app_run(const akn_options *options, int *opened_devices) {
         if (app->frames == 1) akn_logf(&app->log, AKN_LOG_INFO, "video.first_frame", "first frame presented (%.1f ms to draw)", ms);
     }
 
-    /* Clean shutdown: stop the tone, close the port, the controller and the screen. */
+    /* Clean shutdown: leave voice (closes the microphone), stop the tone, close the port, the controller and the screen. */
+    akn_voice_shutdown(app);
     app->audio_cancel = 1;
     if (app->audio_thread) SDL_WaitThread(app->audio_thread, NULL);
     app->audio_thread = NULL;

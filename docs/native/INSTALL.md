@@ -18,6 +18,10 @@ hardware test ([HARDWARE_TEST_PLAN.md](HARDWARE_TEST_PLAN.md)). The hardware-tes
 
 Nothing in this package installs a HEN, a kstuff, a launcher or a system file.
 
+**Party voice (1.1.0-beta.1)** additionally needs the AKENO server's **voice gateway**
+(`VOICE_GATEWAY_URL`, compose `voice` profile — docs/VOICE.md) and the console's "parties"
+permission. The microphone opens only after you confirm Join voice or the microphone test.
+
 ## What is in the package
 
 | Path | What | Hardware status |

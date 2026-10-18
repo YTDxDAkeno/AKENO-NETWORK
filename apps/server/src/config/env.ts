@@ -77,6 +77,12 @@ const envSchema = z
     LIVEKIT_API_SECRET: z.string().default(''),
     /** Lifetime of a voice join token. Connected participants are kept connected by LiveKit. */
     VOICE_TOKEN_TTL_SECONDS: z.coerce.number().int().min(30).max(600).default(120),
+    /**
+     * Public wss:// URL of the AKENO voice gateway (apps/voice-gateway) that lets paired consoles
+     * take part in party voice (wss://<domain>/voice-gateway behind Caddy). Empty: consoles cannot
+     * join voice; browsers are not affected. Needs voice (LiveKit) to be configured.
+     */
+    VOICE_GATEWAY_URL: z.string().default(''),
 
     /** Directory containing the built web client (apps/web/dist). Empty disables static hosting. */
     WEB_DIST_DIR: z.string().default(''),
@@ -105,6 +111,13 @@ const envSchema = z
       if (env[key] && !/^[A-Za-z0-9_-]+$/.test(env[key])) {
         ctx.addIssue({ code: 'custom', path: [key], message: `${key} may only contain letters, digits, "-" and "_".` });
       }
+    }
+    const gateway = env.VOICE_GATEWAY_URL.trim();
+    if (gateway && !/^wss:\/\/[^\s/?#]+(\/[^\s?#]*)?$/.test(gateway)) {
+      ctx.addIssue({ code: 'custom', path: ['VOICE_GATEWAY_URL'], message: 'VOICE_GATEWAY_URL must be a wss:// URL without query or fragment.' });
+    }
+    if (gateway && voice.length < 3) {
+      ctx.addIssue({ code: 'custom', path: ['VOICE_GATEWAY_URL'], message: 'VOICE_GATEWAY_URL needs voice (LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET).' });
     }
     if (env.LIVEKIT_API_SECRET && env.LIVEKIT_API_SECRET.length < 32) {
       ctx.addIssue({ code: 'custom', path: ['LIVEKIT_API_SECRET'], message: 'LIVEKIT_API_SECRET must be at least 32 characters.' });
@@ -167,6 +180,8 @@ export interface AppConfig {
     apiKey: string;
     apiSecret: string;
     tokenTtlSeconds: number;
+    /** wss:// URL of the console voice gateway; empty when consoles cannot join voice. */
+    gatewayUrl: string;
   };
   media: {
     dir: string;
@@ -248,6 +263,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
       apiKey: env.LIVEKIT_API_KEY.trim(),
       apiSecret: env.LIVEKIT_API_SECRET.trim(),
       tokenTtlSeconds: env.VOICE_TOKEN_TTL_SECONDS,
+      gatewayUrl: env.VOICE_GATEWAY_URL.trim(),
     },
     media: {
       dir: env.MEDIA_DIR.trim(),

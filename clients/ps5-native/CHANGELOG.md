@@ -3,6 +3,34 @@
 Hardware status is stated per version. "PC" means unit, integration and end-to-end tests on a PC;
 it is never evidence that something works on a PS5.
 
+## 1.1.0-beta.1 — 2026-10-18 (beta, not run on a PS5)
+
+Requires the native-IPC daemon of the same package (native interface 3) and the AKENO voice
+gateway on the server (docs/PS5_VOICE.md).
+
+### Added
+- **Two-way party voice**: Join/Leave voice on the Party screen (with a microphone confirmation),
+  listening and talking through the AKENO voice gateway (Opus 48 kHz mono, 20 ms, 32 kbit/s,
+  FEC), mute, deafen, voice and microphone volume (Left/Right), speaking indicators, the VOICE
+  panel with who is in voice, a "Voice" chip in the top bar, reconnects with a new voice pass,
+  cleanup on leave/removal/exit.
+- **Microphone test** in Settings: level, peak, rate, optional playback to a headset; nothing sent.
+- Microphone: libSceAudioIn loaded at run time only after the user confirms (16 kHz, 48 kHz
+  fallback); errors shown with their code. No new linked system import.
+- Report section [Voice] and `voice.stats` log lines (states, codes, counts, levels only).
+
+### Daemon (native-IPC build)
+- Native interface 3: `POST /parties/:id/voice/device-token` on the write list.
+
+### Server and gateway (not deployed)
+- Device voice pass (`parties:write`), revocation on unpairing/permission removal/password change.
+- `apps/voice-gateway`, compose `voice` profile service, Caddy route `/voice-gateway`.
+
+### Testing
+- Unit (codec, jitter, resampler, DSP, protocol, rows), server tests, gateway tests with a real
+  LiveKit server, end to end with a website member through LiveKit (both directions by frequency,
+  mute, deafen, volume, reconnect, revocation).
+
 ## 1.0.0-beta.1 — 2026-10-17 (beta, not run on a PS5)
 
 Requires the native-IPC daemon of the same package (protocol 2).

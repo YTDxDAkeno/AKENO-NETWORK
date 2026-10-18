@@ -5,6 +5,8 @@
  *   AKENO_NATIVE_DIR         this app's own directory (default ./akeno-native-data)
  *   AKENO_NATIVE_DAEMON_PORT the daemon's port (default 8642)
  *   AKENO_NATIVE_SIM_AUDIO   init|open|output|unpaced: simulate an audio failure / no pacing
+ *   AKENO_NATIVE_SIM_MIC     tone:<Hz>|silence|fail: a simulated microphone (unset: none)
+ *   AKENO_NATIVE_SIM_CONTEXT background: start as if launched as a background payload (opens nothing)
  * Audio goes to SDL's default output device (SDL_AUDIODRIVER=dummy in CI).
  */
 #define _POSIX_C_SOURCE 200809L
@@ -12,6 +14,7 @@
 #include "akn_platform.h"
 
 #include <SDL.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -44,7 +47,7 @@ long long akn_platform_unix_time(void) { return (long long)time(NULL); }
 
 akn_context_kind akn_platform_context(akn_context_raw *raw) {
     memset(raw, 0, sizeof(*raw));
-    return AKN_CTX_DESKTOP;
+    return strcmp(env_or("AKENO_NATIVE_SIM_CONTEXT", ""), "background") == 0 ? AKN_CTX_BACKGROUND : AKN_CTX_DESKTOP;
 }
 
 int akn_platform_notify(const char *text) {
@@ -120,5 +123,51 @@ static uint64_t host_now_us(void *user) {
 
 const akn_audio_ops *akn_platform_audio_ops(void) {
     static const akn_audio_ops ops = { host_init, host_open, host_output, host_close, host_now_us, NULL, "SDL audio device (PC)" };
+    return &ops;
+}
+
+/* ---- Microphone: simulated (tests); a real PC has no microphone support in this build ---------- */
+
+static struct {
+    int hz;
+    double phase;
+    uint64_t next_us;
+    unsigned grain;
+} g_mic;
+
+static int32_t sim_mic_open(unsigned grain, unsigned *rate) {
+    const char *mode = env_or("AKENO_NATIVE_SIM_MIC", "");
+    if (strcmp(mode, "fail") == 0) return (int32_t)0x80260105; /* simulated failure code */
+    g_mic.hz = strncmp(mode, "tone:", 5) == 0 ? atoi(mode + 5) : 0;
+    g_mic.phase = 0;
+    g_mic.grain = grain;
+    g_mic.next_us = akn_platform_now_us();
+    *rate = 16000;
+    return 1;
+}
+
+static int32_t sim_mic_read(int32_t handle, int16_t *samples) {
+    if (handle != 1) return (int32_t)0x80260103;
+    for (unsigned i = 0; i < g_mic.grain; i++) {
+        samples[i] = g_mic.hz > 0 ? (int16_t)(9000.0 * sin(g_mic.phase)) : 0;
+        g_mic.phase += 2.0 * 3.14159265358979323846 * g_mic.hz / 16000.0;
+        if (g_mic.phase > 2.0 * 3.14159265358979323846) g_mic.phase -= 2.0 * 3.14159265358979323846;
+    }
+    /* paced like a real device: one grain per grain duration */
+    g_mic.next_us += (uint64_t)g_mic.grain * 1000000u / 16000u;
+    uint64_t now = akn_platform_now_us();
+    if (g_mic.next_us > now) SDL_Delay((Uint32)((g_mic.next_us - now) / 1000u));
+    else if (now - g_mic.next_us > 200000u) g_mic.next_us = now;
+    return 0;
+}
+
+static int32_t sim_mic_close(int32_t handle) { return handle == 1 ? 0 : (int32_t)0x80260103; }
+
+const akn_mic_ops *akn_platform_mic(char *why, size_t why_len) {
+    static const akn_mic_ops ops = { sim_mic_open, sim_mic_read, sim_mic_close, "simulated microphone (PC test)" };
+    if (!env_or("AKENO_NATIVE_SIM_MIC", "")[0]) {
+        if (why && why_len) snprintf(why, why_len, "The PC build has no microphone (AKENO_NATIVE_SIM_MIC is not set).");
+        return NULL;
+    }
     return &ops;
 }

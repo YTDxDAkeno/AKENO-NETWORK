@@ -5,8 +5,8 @@
  * daemon's native write list: create, join, leave, invite (POST /parties...), accept or decline
  * invitations and friend requests, mark notifications read.
  *
- * Voice: the server reports whether party voice is available; AKENO Native shows the members' voice
- * state (connected, muted) but has no voice of its own yet (docs/VOICE.md, milestones V2-V5).
+ * Voice: the server reports whether party voice is available and each member's voice state
+ * (connected, muted); AKENO Native joins voice through the AKENO voice gateway (docs/PS5_VOICE.md).
  * Portable and unit-tested.
  */
 #ifndef AKN_PARTY_H
@@ -114,7 +114,12 @@ typedef enum {
     AKN_PROW_LEAVE,       /* in a party: leave it */
     AKN_PROW_MEMBER,      /* index: member */
     AKN_PROW_INVITATION,  /* index: party invitation */
-    AKN_PROW_JOINABLE     /* index: a friend's party you may join */
+    AKN_PROW_JOINABLE,    /* index: a friend's party you may join */
+    AKN_PROW_VOICE,       /* in a party with voice: join or leave voice */
+    AKN_PROW_VOICE_MUTE,  /* in voice: microphone on/off */
+    AKN_PROW_VOICE_DEAFEN,/* in voice: hear nobody */
+    AKN_PROW_VOICE_OUTPUT,/* in voice: volume of the others (Left/Right) */
+    AKN_PROW_VOICE_MIC    /* in voice: microphone volume (Left/Right) */
 } akn_party_row_kind;
 
 typedef struct {
@@ -122,8 +127,12 @@ typedef struct {
     int index;
 } akn_party_row;
 
-#define AKN_PARTY_ROWS_MAX (4 + AKN_PARTY_MEMBERS + AKN_INVITES_MAX + AKN_JOINABLE_MAX)
+#define AKN_PARTY_ROWS_MAX (9 + AKN_PARTY_MEMBERS + AKN_INVITES_MAX + AKN_JOINABLE_MAX)
 
 int akn_party_rows(const akn_party *party, const akn_inbox *inbox, const akn_party_list *joinable, akn_party_row *out, int max);
+/* The same with party voice: a Join/Leave voice row after Leave when the server offers voice, and
+ * the voice controls below it while voice_controls is set (connected or connecting). */
+int akn_party_rows_ex(const akn_party *party, const akn_inbox *inbox, const akn_party_list *joinable, int voice_controls,
+                      akn_party_row *out, int max);
 
 #endif

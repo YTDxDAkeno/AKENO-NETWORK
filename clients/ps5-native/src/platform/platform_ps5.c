@@ -13,13 +13,23 @@
  *   sceUserServiceGetForegroundUser    weak; websrv hbldr.c (read-only)
  *   scePadGetHandle, scePadReadState   GetHandle weak; ps5-payload-dev/SDL src/joystick/ps5 and the
  *                                      daemon's shortcut: reads the state of the pad SDL opened
+ *   dlopen / dlsym                     SDK samples/hello_dlfcn (the daemon loads libSceNotification.sprx and
+ *                                      libSceAudioOut.sprx this way on 12.20); here ONLY libSceAudioIn.sprx,
+ *                                      only after the user started voice or the microphone test
+ *   sceAudioInOpen/Input/Close         resolved with dlsym (no import): sceAudioInOpen(user, type 1 "general",
+ *                                      index 0, grain 256, 16000 Hz, format 0 = S16 mono), sceAudioInInput(handle,
+ *                                      buffer), sceAudioInClose(handle) - the declarations of the
+ *                                      PS5-Audio-Passthrough-Research sample (DualSense capture validated there,
+ *                                      foreground app, firmware 12.70; emulators agree); NOT yet seen on 12.20
  *
- * Not used, by rule (docs/PS5_NATIVE_ADR.md, CI-enforced): microphone (sceAudioIn*), pad focus or
- * privilege functions, app launch/kill, title registration, mounting, ptrace, the SDK's kernel
- * memory helpers. Every audio call here is AKENO's own port; nothing touches routing or volume.
+ * Not used, by rule (docs/PS5_NATIVE_ADR.md, CI-enforced): pad focus or privilege functions, app
+ * launch/kill, title registration, mounting, ptrace, the SDK's kernel memory helpers, any other
+ * run-time loaded library. Every audio call here is AKENO's own port; nothing touches routing or
+ * volume. Nothing is recorded: microphone samples go to the voice encoder or the local meter only.
  */
 #include "akn_platform.h"
 
+#include <dlfcn.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/types.h>
@@ -178,5 +188,61 @@ static uint64_t ps5_now_us(void *user) {
 const akn_audio_ops *akn_platform_audio_ops(void) {
     static const akn_audio_ops ops = { ps5_init, ps5_open, ps5_output, ps5_close, ps5_now_us, NULL,
                                        "sceAudioOut, direct (PS5)" };
+    return &ops;
+}
+
+/* ---- Microphone (party voice): libSceAudioIn.sprx, loaded on first use ------------------------ */
+
+#define AUDIO_IN_TYPE_GENERAL 1
+#define AUDIO_IN_FORMAT_S16_MONO 0
+
+static struct {
+    int loaded;
+    void *lib;
+    int32_t (*open)(int32_t user, uint32_t type, uint32_t index, uint32_t grain, uint32_t freq, uint32_t format);
+    int32_t (*input)(int32_t handle, void *dest);
+    int32_t (*close)(int32_t handle);
+    char why[160];
+} g_mic;
+
+static int32_t mic_open(unsigned grain, unsigned *rate) {
+    uint32_t user = 0;
+    if (sceUserServiceGetForegroundUser == NULL) return (int32_t)0x80000001;
+    int32_t rc = sceUserServiceGetForegroundUser(&user);
+    if (rc != 0) return rc;
+    static const unsigned rates[] = { 16000, 48000 };
+    for (size_t i = 0; i < sizeof(rates) / sizeof(rates[0]); i++) {
+        rc = g_mic.open((int32_t)user, AUDIO_IN_TYPE_GENERAL, 0, grain, rates[i], AUDIO_IN_FORMAT_S16_MONO);
+        if (rc >= 0) {
+            *rate = rates[i];
+            return rc;
+        }
+    }
+    return rc;
+}
+
+static int32_t mic_read(int32_t handle, int16_t *samples) { return g_mic.input(handle, samples); }
+static int32_t mic_close(int32_t handle) { return g_mic.close(handle); }
+
+const akn_mic_ops *akn_platform_mic(char *why, size_t why_len) {
+    static const akn_mic_ops ops = { mic_open, mic_read, mic_close, "sceAudioIn via dlopen(libSceAudioIn.sprx) (PS5)" };
+    if (!g_mic.loaded) {
+        g_mic.loaded = 1;
+        g_mic.lib = dlopen("libSceAudioIn.sprx", RTLD_LAZY);
+        if (!g_mic.lib) {
+            const char *e = dlerror();
+            snprintf(g_mic.why, sizeof(g_mic.why), "dlopen(libSceAudioIn.sprx) failed: %s", e ? e : "unknown error");
+        } else {
+            *(void **)&g_mic.open = dlsym(g_mic.lib, "sceAudioInOpen");
+            *(void **)&g_mic.input = dlsym(g_mic.lib, "sceAudioInInput");
+            *(void **)&g_mic.close = dlsym(g_mic.lib, "sceAudioInClose");
+            if (!g_mic.open || !g_mic.input || !g_mic.close)
+                snprintf(g_mic.why, sizeof(g_mic.why), "libSceAudioIn.sprx has no sceAudioInOpen/Input/Close");
+        }
+    }
+    if (!g_mic.open || !g_mic.input || !g_mic.close) {
+        if (why && why_len) snprintf(why, why_len, "%s", g_mic.why);
+        return NULL;
+    }
     return &ops;
 }

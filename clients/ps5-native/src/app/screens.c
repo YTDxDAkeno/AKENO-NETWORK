@@ -203,7 +203,7 @@ static void top_bar(akn_app *app, const akn_account_view *acc) {
     tracked(g, 177, 74, 14, AKN_FONT_REGULAR, C_MUTED, "NETWORK", 6);
     akn_rect pill = { 360, 46, 210, 36 };
     akn_gfx_rrect(g, pill, 18, C_ACCENT_SOFT);
-    akn_gfx_text_center(g, pill.x, pill.w, 52, 18, AKN_FONT_BOLD, 0xFFB7C8FFu, "BETA \xC2\xB7 1.0");
+    akn_gfx_text_center(g, pill.x, pill.w, 52, 18, AKN_FONT_BOLD, 0xFFB7C8FFu, "BETA \xC2\xB7 1.1");
 
     int x = AKN_SCREEN_W - AKN_MARGIN_X;
     char text[120];
@@ -214,6 +214,11 @@ static void top_bar(akn_app *app, const akn_account_view *acc) {
         uint32_t dot = acc->state == AKN_ACC_CHECKING || acc->state == AKN_ACC_UNCHECKED ? C_OFFLINE : C_WARNING;
         chip(app, x, 40, dot, akn_account_state_text(acc->state), &x);
     }
+    if (app->voice.state == AKN_VOICE_CONNECTED)
+        chip(app, x, 40, app->voice.muted ? C_WARNING : C_SUCCESS, app->voice.deafened ? "Voice (deafened)" : app->voice.muted ? "Voice (muted)" : "Voice", &x);
+    else if (app->voice.state == AKN_VOICE_RECONNECTING || app->voice.state == AKN_VOICE_CONNECTING || app->voice.state == AKN_VOICE_REQUESTING)
+        chip(app, x, 40, C_WARNING, "Voice...", &x);
+    else if (app->voice.mic_test) chip(app, x, 40, C_WARNING, "Microphone test", &x);
     if (app->pad) chip(app, x, 40, app->pad_disconnected ? C_WARNING : C_SUCCESS, "Controller", &x);
     else if (app->pad_error[0]) chip(app, x, 40, C_DANGER, "Controller error", &x);
     else chip(app, x, 40, C_OFFLINE, "No controller", &x);
@@ -1598,8 +1603,10 @@ static void draw_party(akn_app *app, const akn_social *s, uint64_t now) {
         else centered_note(app, area, "Loading your party...", NULL);
         return;
     }
+    const akn_voice *v = &app->voice;
+    int in_voice = v->state != AKN_VOICE_OFF && v->state != AKN_VOICE_FAILED;
     akn_party_row rows[AKN_PARTY_ROWS_MAX];
-    int n = akn_party_rows(p, s->inbox, s->joinable, rows, AKN_PARTY_ROWS_MAX);
+    int n = akn_party_rows_ex(p, s->inbox, s->joinable, in_voice, rows, AKN_PARTY_ROWS_MAX);
     int focus = app->ui.focus[AKN_SCREEN_PARTY];
     akn_rect focus_rect = { 0, 0, 0, 0 };
     int party_unread = 0;
@@ -1619,22 +1626,54 @@ static void draw_party(akn_app *app, const akn_social *s, uint64_t now) {
             break;
         case AKN_PROW_INVITE: action_row(app, r, f, AKN_ITEM_FRIENDS, C_SUCCESS, "Invite friends", "Choose a friend; they get an invitation.", 0); break;
         case AKN_PROW_LEAVE: action_row(app, r, f, AKN_ITEM_EXIT, C_DANGER, "Leave the party", "You can join again while it is open.", 0); break;
+        case AKN_PROW_VOICE:
+            if (v->mic_test) action_row(app, r, f, AKN_ITEM_AUDIO, C_MUTED, "Join voice", "Stop the microphone test in Settings first.", 0);
+            else if (in_voice) {
+                snprintf(line, sizeof(line), "%s%s%s", akn_voice_state_text(v), v->error[0] ? "  \xC2\xB7  " : "", v->error);
+                action_row(app, r, f, AKN_ITEM_AUDIO, C_DANGER, "Leave voice", line, 0);
+            } else {
+                snprintf(line, sizeof(line), "%s", v->state == AKN_VOICE_FAILED && v->error[0] ? v->error : "Talk and listen with your party (asks before the microphone opens).");
+                action_row(app, r, f, AKN_ITEM_AUDIO, C_SUCCESS, "Join voice", line, 0);
+            }
+            break;
+        case AKN_PROW_VOICE_MUTE:
+            if (v->mic == AKN_MIC_OPEN) snprintf(line, sizeof(line), "%s  \xC2\xB7  level %d%%", v->muted ? "Nobody hears you" : "Your party hears you", v->mic_level);
+            else if (v->mic == AKN_MIC_FAILED) snprintf(line, sizeof(line), "Microphone failed (0x%08X)", (unsigned)v->mic_rc);
+            else if (v->mic == AKN_MIC_UNAVAILABLE) snprintf(line, sizeof(line), "%s", v->mic_detail[0] ? v->mic_detail : "No microphone");
+            else snprintf(line, sizeof(line), "Opening the microphone...");
+            action_row(app, r, f, AKN_ITEM_AUDIO, v->muted ? C_DANGER : C_SUCCESS, v->muted ? "Unmute microphone" : "Mute microphone", line, 0);
+            break;
+        case AKN_PROW_VOICE_DEAFEN:
+            action_row(app, r, f, AKN_ITEM_AUDIO, v->deafened ? C_DANGER : C_ACCENT, v->deafened ? "Undeafen" : "Deafen",
+                       v->deafened ? "You hear nobody and nobody hears you." : "Hear nobody (also mutes your microphone).", 0);
+            break;
+        case AKN_PROW_VOICE_OUTPUT:
+            snprintf(title, sizeof(title), "Voice volume: %d%%", v->out_volume);
+            action_row(app, r, f, AKN_ITEM_AUDIO, C_ACCENT, title, "Left/Right to change (TV or headset, as the console plays it).", 0);
+            break;
+        case AKN_PROW_VOICE_MIC:
+            snprintf(title, sizeof(title), "Microphone volume: %d%%", v->mic_volume);
+            action_row(app, r, f, AKN_ITEM_AUDIO, C_ACCENT, title, "Left/Right to change how loud you are for the others.", 0);
+            break;
         case AKN_PROW_MEMBER: {
             const akn_party_member *m = &p->members[rows[i].index];
             char pres[160];
             akn_presence_line(&m->presence, unix_now, pres, sizeof(pres));
             const char *voice = m->voice_connected ? (m->voice_muted == 1 ? "in voice (muted)" : "in voice") : "not in voice";
+            if (v->state == AKN_VOICE_CONNECTED && akn_voice_in_room(v, m->id))
+                voice = akn_voice_is_speaking(v, m->id) ? "speaking" : "in voice";
             snprintf(line, sizeof(line), "%s  \xC2\xB7  %s", pres, voice);
             int self = strcmp(m->id, s->me.id) == 0;
-            person_row(app, r, f, m->id, m->display_name, m->display_name, m->online_id, m->avatar, 1, m->presence.status, line, C_MUTED,
+            person_row(app, r, f, m->id, m->display_name, m->display_name, m->online_id, m->avatar, 1, m->presence.status, line,
+                       akn_voice_is_speaking(v, m->id) ? C_SUCCESS : C_MUTED,
                        m->leader ? (self ? "LEADER \xC2\xB7 YOU" : "LEADER") : self ? "YOU" : "");
             break;
         }
         case AKN_PROW_INVITATION: {
-            const akn_invitation *v = &s->inbox->invitations[rows[i].index];
-            snprintf(title, sizeof(title), "%s invited you", v->inviter_name);
-            snprintf(line, sizeof(line), "Party \"%s\"  \xC2\xB7  Cross: accept  \xC2\xB7  Square: decline", v->target_name);
-            person_row(app, r, f, v->inviter_handle, v->inviter_name, title, v->inviter_handle, v->inviter_avatar, 0, AKN_PRES_OFFLINE, line, 0xFFB7C8FFu,
+            const akn_invitation *inv = &s->inbox->invitations[rows[i].index];
+            snprintf(title, sizeof(title), "%s invited you", inv->inviter_name);
+            snprintf(line, sizeof(line), "Party \"%s\"  \xC2\xB7  Cross: accept  \xC2\xB7  Square: decline", inv->target_name);
+            person_row(app, r, f, inv->inviter_handle, inv->inviter_name, title, inv->inviter_handle, inv->inviter_avatar, 0, AKN_PRES_OFFLINE, line, 0xFFB7C8FFu,
                        "INVITATION");
             break;
         }
@@ -1674,14 +1713,36 @@ static void draw_party(akn_app *app, const akn_social *s, uint64_t now) {
     }
     y = section_title(app, x, y, "VOICE");
     char voice[600];
-    if (p->present && p->voice_available)
-        snprintf(voice, sizeof(voice),
-                 "Party voice runs on this server for the website and the desktop and mobile apps. AKENO Native cannot join voice yet: "
-                 "PS5 voice is still in research (listening first, then the microphone only with your approval). Members in voice are marked.");
-    else if (p->present)
-        snprintf(voice, sizeof(voice), "Party voice is not available here: %s", p->voice_reason[0] ? p->voice_reason : "the server does not offer it.");
-    else snprintf(voice, sizeof(voice), "Voice is part of a party. AKENO Native shows who is in voice but has no voice of its own yet.");
-    akn_gfx_text_wrap(g, x, y, 22, AKN_FONT_REGULAR, C_MUTED, voice, w, 32, 7);
+    if (in_voice) {
+        snprintf(voice, sizeof(voice), "%s", akn_voice_state_text(v));
+        akn_gfx_text_fit(g, x, y, 26, AKN_FONT_BOLD, v->state == AKN_VOICE_CONNECTED ? C_SUCCESS : C_INK, voice, w);
+        y += 42;
+        if (v->state == AKN_VOICE_CONNECTED) {
+            for (int i = 0; i < v->people_count && i < 6; i++) {
+                const akn_voice_participant *pp = &v->people[i];
+                char who[160];
+                snprintf(who, sizeof(who), "%s%s%s", pp->name[0] ? pp->name : "Member", pp->self ? " (you)" : "",
+                         pp->muted ? "  \xC2\xB7  muted" : pp->speaking ? "  \xC2\xB7  speaking" : "");
+                akn_gfx_rrect(g, (akn_rect){ x, y + 8, 14, 14 }, 7, pp->speaking && !pp->muted ? C_SUCCESS : pp->muted ? C_DANGER : C_LINE_STRONG);
+                akn_gfx_text_fit(g, x + 28, y, 22, AKN_FONT_REGULAR, C_INK, who, w - 28);
+                y += 34;
+            }
+            snprintf(voice, sizeof(voice), "Microphone: %s%s  \xC2\xB7  heard %d%%", akn_mic_state_text(v->mic), v->muted ? " (muted)" : "", v->rx_level);
+            akn_gfx_text_fit(g, x, y + 6, 20, AKN_FONT_REGULAR, C_MUTED, voice, w);
+        } else if (v->error[0]) {
+            akn_gfx_text_wrap(g, x, y, 22, AKN_FONT_REGULAR, C_MUTED, v->error, w, 32, 3);
+        }
+    } else {
+        if (p->present && p->voice_available)
+            snprintf(voice, sizeof(voice),
+                     "Join voice to talk with your party: the website, the apps and this console share one voice chat. Your microphone "
+                     "opens only after you confirm; nothing is recorded or stored. Voice runs while AKENO Native is open.");
+        else if (p->present)
+            snprintf(voice, sizeof(voice), "Party voice is not available here: %s", p->voice_reason[0] ? p->voice_reason : "the server does not offer it.");
+        else snprintf(voice, sizeof(voice), "Voice is part of a party: create or join one to talk with your friends.");
+        if (v->state == AKN_VOICE_FAILED && v->error[0]) snprintf(voice, sizeof(voice), "Voice stopped: %s", v->error);
+        akn_gfx_text_wrap(g, x, y, 22, AKN_FONT_REGULAR, C_MUTED, voice, w, 32, 7);
+    }
     if (focus_rect.w && !app->ui.dialog) focus_ring(app, focus_rect, 18, now);
 }
 
@@ -1767,7 +1828,8 @@ static void draw_settings(akn_app *app, const akn_social *s, uint64_t now) {
                                                                 : "online";
     const char *status = strcmp(pref, "away") == 0 ? "Away" : strcmp(pref, "dnd") == 0 ? "Busy" : strcmp(pref, "invisible") == 0 ? "Invisible" : "Online";
     static const char *const titles[AKN_SET_COUNT] = { "Message notifications", "Friend and invitation notifications", "Share the game I'm playing",
-                                                       "Online status", "Connection", "System and diagnostic report", "Audio test", "Controller test" };
+                                                       "Online status", "Connection", "System and diagnostic report", "Audio test", "Controller test",
+                                                       "Microphone test" };
     const char *subs[AKN_SET_COUNT] = { "System notifications for new messages (not for the conversation open here).",
                                         "Friend requests, accepted requests and invitations.",
                                         "Your friends see the game this console detects; nothing is shared while it is off.",
@@ -1775,7 +1837,18 @@ static void draw_settings(akn_app *app, const akn_social *s, uint64_t now) {
                                         "The AKENO daemon, your server and the account this console is paired with.",
                                         "Build, firmware and process; save a report for troubleshooting.",
                                         "Play a tone to check the sound (milestone V1).",
-                                        "Every button and stick of the DualSense." };
+                                        "Every button and stick of the DualSense.",
+                                        "" };
+    const akn_voice *v = &app->voice;
+    char mic_line[200];
+    if (v->mic_test && v->mic == AKN_MIC_OPEN)
+        snprintf(mic_line, sizeof(mic_line), "Level %d%%  \xC2\xB7  peak %d%%  \xC2\xB7  %d Hz  \xC2\xB7  Square: %s  \xC2\xB7  Cross: stop", v->mic_level,
+                 v->mic_peak * 100 / 32767, v->mic_rate, v->mic_monitor ? "stop hearing yourself" : "hear yourself (headset)");
+    else if (v->mic_test && v->mic == AKN_MIC_FAILED) snprintf(mic_line, sizeof(mic_line), "The microphone could not be opened (0x%08X). Cross: stop", (unsigned)v->mic_rc);
+    else if (v->mic_test && v->mic == AKN_MIC_UNAVAILABLE) snprintf(mic_line, sizeof(mic_line), "%s", v->mic_detail[0] ? v->mic_detail : "No microphone function.");
+    else if (v->mic_test) snprintf(mic_line, sizeof(mic_line), "Opening the microphone...");
+    else snprintf(mic_line, sizeof(mic_line), "DualSense or headset: level meter on this console only; nothing is sent or stored.");
+    subs[AKN_SET_MIC_TEST] = mic_line;
     int focus = app->ui.focus[AKN_SCREEN_SETTINGS];
     akn_rect focus_rect = { 0, 0, 0, 0 };
     for (int i = app->ui.list_top[AKN_SCREEN_SETTINGS]; i < AKN_SET_COUNT && i < app->ui.list_top[AKN_SCREEN_SETTINGS] + AKN_FRIEND_ROWS_VISIBLE; i++) {
@@ -1792,6 +1865,11 @@ static void draw_settings(akn_app *app, const akn_social *s, uint64_t now) {
         else if (i == AKN_SET_PRESENCE) {
             int w = akn_gfx_text_width(g, 16, AKN_FONT_BOLD, status, strlen(status)) + 28;
             pill(app, right - w, r.y + 27, C_ACCENT_SOFT, 0xFFB7C8FFu, status);
+        } else if (i == AKN_SET_MIC_TEST && v->mic_test) {
+            /* the live level */
+            akn_rect bar = { right - 180, r.y + 34, 180, 14 };
+            akn_gfx_rrect(g, bar, 7, C_LINE);
+            if (v->mic_level > 0) akn_gfx_rrect(g, (akn_rect){ bar.x, bar.y, bar.w * v->mic_level / 100, bar.h }, 7, C_SUCCESS);
         } else {
             float mid = (float)r.y + (float)r.h / 2.0f;
             triangle(app->renderer, (float)right - 10, mid, (float)right - 24, mid - 10, (float)right - 24, mid + 10, C_MUTED);

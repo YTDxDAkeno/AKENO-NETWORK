@@ -164,8 +164,14 @@ headset or elsewhere.
 | Controller / headset microphone ownership | The system and the running game own them (party chat, games). Taking them over is out of bounds. |
 | Focus | If output is focus-gated (above), capture very likely is too. |
 
-**Not done:** no AudioIn function is called, no audio is recorded, stored or transmitted, and no
-build contains capture code (CI fails if the platform layer mentions `sceAudioIn`).
+**Update 2026-10-18 (AKENO Native 1.1.0-beta.1, owner-approved):** AKENO Native's platform layer
+opens the microphone with the declaration above (`sceAudioInOpen(user, 1, 0, 256, 16000, 0)`),
+loaded with `dlopen` only after the user confirms party voice or the microphone test
+([PS5_VOICE.md](PS5_VOICE.md)). Still nothing is recorded or stored; the daemon and the audio labs
+contain no capture code. **Not yet run on a PS5.**
+
+**Before 1.1 (still true for the daemon):** no AudioIn function is called, no audio is recorded,
+stored or transmitted.
 
 **Evidence required before a capture prototype:**
 1. A credible PS5 source (or documentation) declaring `sceAudioInOpen`/`Input`/`Close` with

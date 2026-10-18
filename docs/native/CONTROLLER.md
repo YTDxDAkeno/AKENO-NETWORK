@@ -26,6 +26,8 @@ PS5 with firmware 12.20). The bar at the bottom of every screen shows the button
 | Settings | change the setting or open the check | previous status (Online status row) | |
 | Invite a friend (picker) | invite / write | | |
 | Controller test | every button is shown instead of acting | | hold ◯ for 1 s to return |
+| Party, voice rows (1.1) | Join / Leave voice; mute; deafen | volume rows: lower | Left/Right on the volume rows: −/+ 10 % |
+| Settings, Microphone test (1.1) | start / stop | hear yourself on / off | |
 | Confirmation dialogs | the highlighted choice | | ◯ cancels |
 
 ## The on-screen keyboard

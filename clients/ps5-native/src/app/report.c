@@ -8,6 +8,8 @@
 #include <unistd.h>
 
 #include "app.h"
+#include "mic_test.h"
+#include "voice_codec.h"
 #include "redact.h"
 
 typedef struct {
@@ -28,6 +30,66 @@ static void add(sb *b, const char *fmt, ...) {
 }
 
 static const char *yes_no(int v) { return v ? "yes" : "no"; }
+
+#define MIC_TEST_FILE "mic-test-last.txt"
+#define MIC_TEST_OK_FILE "mic-test-last-ok.txt"
+
+/* Writes a private file (0600) in AKENO Native's folder through a temporary file. */
+static int write_private(const char *path, const char *text) {
+    char tmp[340];
+    snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) return -1;
+    size_t n = strlen(text);
+    int ok = write(fd, text, n) == (ssize_t)n;
+    ok = close(fd) == 0 && ok;
+    if (ok && rename(tmp, path) == 0) return 0;
+    unlink(tmp);
+    return -1;
+}
+
+static int read_mic_test(const akn_app *app, const char *name, akn_mic_test_record *r) {
+    char path[340], text[1024];
+    snprintf(path, sizeof(path), "%s/%s", app->platform.native_dir, name);
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return -1;
+    ssize_t n = read(fd, text, sizeof(text) - 1);
+    close(fd);
+    if (n <= 0) return -1;
+    text[n] = '\0';
+    return akn_mic_test_parse(text, r);
+}
+
+int akn_report_save_mic_test(akn_app *app, const akn_mic_test_record *r) {
+    char text[1024], path[340];
+    if (akn_mic_test_format(r, text, sizeof(text)) < 0) return -1;
+    snprintf(path, sizeof(path), "%s/%s", app->platform.native_dir, MIC_TEST_FILE);
+    int rc = write_private(path, text);
+    if (rc == 0 && akn_mic_test_succeeded(r)) {
+        snprintf(path, sizeof(path), "%s/%s", app->platform.native_dir, MIC_TEST_OK_FILE);
+        rc = write_private(path, text);
+    }
+    if (rc != 0) akn_logf(&app->log, AKN_LOG_ERROR, "report.write_failed", "could not keep the microphone test result");
+    return rc;
+}
+
+/* The last microphone test, kept across starts (a later background start opens no microphone). */
+static void add_mic_tests(sb *b, const akn_app *app) {
+    akn_mic_test_record last, ok;
+    int have_last = read_mic_test(app, MIC_TEST_FILE, &last) == 0;
+    int have_ok = read_mic_test(app, MIC_TEST_OK_FILE, &ok) == 0;
+    char text[1024];
+    add(b, "\n[Last microphone test]\n");
+    if (!have_last && !have_ok) {
+        add(b, "None yet (Settings > Microphone test).\n");
+        return;
+    }
+    if (have_last && akn_mic_test_describe(&last, text, sizeof(text)) >= 0) add(b, "%s", text);
+    if (have_ok && (!have_last || !akn_mic_test_succeeded(&last))) {
+        add(b, "\n[Last successful microphone test]\n");
+        if (akn_mic_test_describe(&ok, text, sizeof(text)) >= 0) add(b, "%s", text);
+    }
+}
 
 void akn_report_build(akn_app *app, char *out, size_t out_len) {
     char *raw = malloc(out_len);
@@ -129,7 +191,25 @@ void akn_report_build(akn_app *app, char *out, size_t out_len) {
             s->inbox->invitation_count, s->inbox->notifications_unread);
     add(&b, "Requests:         %lu (%lu writes, %lu failed), %lu errors, %lu event polls, %lu events, %lu connects\n", s->requests, s->writes,
         s->write_errors, s->errors, s->event_polls, s->events, s->reconnects);
+    /* Party voice: states, codes and counts only (no names, no audio, no voice pass). */
+    {
+        const akn_voice *v = &app->voice;
+        add(&b, "\n[Voice]\n");
+        add(&b, "State:            %s%s%s\n", akn_voice_state_text(v), v->error[0] ? " - " : "", v->error);
+        add(&b, "Codec:            %s, 48 kHz mono, 20 ms, %d kbit/s\n", akn_voice_codec_version(), AKN_VOICE_BITRATE / 1000);
+        add(&b, "Microphone:       %s (rc 0x%08X, %d Hz)%s%s\n", akn_mic_state_text(v->mic), (unsigned)v->mic_rc, v->mic_rate,
+            v->mic_detail[0] ? " - " : "", v->mic_detail);
+        add(&b, "Mic frames:       %lu, level %d%%, peak %d%%, tone %d Hz%s\n", v->mic_frames, v->mic_level, v->mic_peak * 100 / 32767,
+            v->tx_tone_hz, v->mic_test ? " (microphone test running)" : "");
+        add(&b, "Controls:         %s, %s, output %d%%, microphone %d%%\n", v->muted ? "muted" : "not muted", v->deafened ? "deafened" : "hearing",
+            v->out_volume, v->mic_volume);
+        add(&b, "Packets:          %lu sent, %lu received, %lu concealed, %lu late, %lu dropped (delay bound), %lu rebuffers\n", v->sent,
+            v->received, v->concealed, v->late, v->overflow, v->underruns);
+        add(&b, "Playback:         level %d%%, tone %d Hz, round trip %d ms, %lu reconnects, %d in the room\n", v->rx_level, v->rx_tone_hz,
+            v->latency_ms, v->reconnects, v->people_count);
+    }
     SDL_UnlockMutex(app->lock);
+    add_mic_tests(&b, app);
 
     /* Counts only: never which pictures (media IDs or titles). */
     akn_images_stats is = app->images_final;
@@ -155,17 +235,7 @@ int akn_report_save(akn_app *app) {
     char *text = malloc(len);
     if (!text) return -1;
     akn_report_build(app, text, len);
-    char tmp[340];
-    snprintf(tmp, sizeof(tmp), "%s.tmp", app->report_path);
-    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    int rc = -1;
-    if (fd >= 0) {
-        size_t n = strlen(text);
-        int ok = write(fd, text, n) == (ssize_t)n;
-        ok = close(fd) == 0 && ok;
-        if (ok && rename(tmp, app->report_path) == 0) rc = 0;
-        else unlink(tmp);
-    }
+    int rc = write_private(app->report_path, text);
     free(text);
     if (rc == 0) snprintf(app->last_saved, sizeof(app->last_saved), "Saved %s", app->report_path);
     else akn_logf(&app->log, AKN_LOG_ERROR, "report.write_failed", "could not write the report");

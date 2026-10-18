@@ -114,6 +114,7 @@ Inputs of the PS5 build, pinned and checksummed by `clients/ps5-native/scripts/`
 | Inter | 4.1 (Regular, Bold) | SIL Open Font License 1.1 | UI font, embedded in the ELF; the OFL text ships in the artifact (`LICENSE-Inter-OFL.txt`) |
 | Lucide icons (path data of crown, shield-check, braces, badge-check, sprout, flask-conical, gamepad-2, ticket) | lucide-react 1.56.0 | ISC | Badge medallions (`src/core/badges.c`, Native 0.2+), the same eight icons as the console page; the ISC notice is in the source and ships in `LICENSES.md` of every release package |
 | mbedTLS, CA bundle, ps5-payload-sdk | as for the daemon (above) | Apache-2.0, MPL-2.0, GPLv3+ | TLS, trust roots, runtime and libc |
+| libopus (xiph/opus) | 1.5.2 (release tarball, SHA-256 `65c1d2f7…`) | BSD-3-Clause | Party voice codec (Native 1.1+): portable C files, float build, statically linked, unmodified; its `COPYING` ships in every release package (`licenses/libopus-BSD-3-Clause.txt`) |
 
 As with the daemon, the distributed PS5 ELF links the SDK's GPLv3+ runtime, so the ELF is a
 combined work under the GPLv3; zlib, MIT/public-domain, Apache-2.0 and the OFL (for the embedded
@@ -127,6 +128,19 @@ SDL2 commit and the checksummed inputs), and the Apache-2.0 text for mbedTLS. st
 stb_image are used under their MIT option (notice in `LICENSES.md`); SDL2's zlib licence asks for
 no notice in binaries, which is given anyway. The MPL-2.0 CA bundle is unmodified; its source is
 named by version and checksum in `BUILDINFO.txt`.
+
+## AKENO voice gateway (`apps/voice-gateway`, server side)
+
+Runs on the AKENO server next to LiveKit (compose `voice` profile); it is not part of the console
+packages.
+
+| Component | Version | License | Use |
+| --- | --- | --- | --- |
+| @livekit/rtc-node, @livekit/rtc-ffi-bindings (LiveKit Rust SDK with libwebrtc, prebuilt) | 1.1.0 / 0.12.73 | Apache-2.0 (libwebrtc: BSD-3-Clause) | The gateway's LiveKit participant per console |
+| livekit-server-sdk | 2.19.1 | Apache-2.0 | Verifying voice passes |
+| opusscript (libopus compiled to WebAssembly) | 0.1.1 | MIT (libopus: BSD-3-Clause) | Opus to and from the consoles |
+| ws | 8.22.0 | MIT | The consoles' WebSocket |
+| pino | 10.4.0 | MIT | Logs (no audio, no tokens) |
 
 ## AKENO In-Game Companion (`clients/ps5-ingame`, EXPERIMENTAL)
 

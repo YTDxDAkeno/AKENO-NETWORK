@@ -1,4 +1,4 @@
-# Handoff — AKENO NETWORK Native (PS5), 1.0.0-beta.1
+# Handoff — AKENO NETWORK Native (PS5), 1.0.0-beta.1 and 1.1.0-beta.1 (voice)
 
 _Written 2026-10-18 for the next person or session. Facts only; anything not run is marked so._
 
@@ -109,3 +109,22 @@ PS5 builds: `PS5_PAYLOAD_SDK=<sdk f5d40f0>` with `clients/ps5-native/scripts/bui
    tables (`PS5_NATIVE_CLIENT.md`), then decide about the tag and pre-release.
 3. Parity review against the browser page (Phase 2.5); the page stays until the owner decides.
 4. Only after an approved OnionHEN setup: the companion's hardware proof.
+
+## 1.1.0-beta.1: two-way party voice (branch `claude/native-voice`, successor of PR #8's branch)
+
+| Item | Value |
+| --- | --- |
+| Branch | `claude/native-voice`, started from `34c2485` (draft PR #8's head); PR #8 and the 1.0.0-beta.1 candidate (`238aec4`, run 39085172366) are unchanged |
+| Design | [PS5_VOICE.md](PS5_VOICE.md): Opus gateway (apps/voice-gateway) chosen over a WebRTC stack on the console |
+| Server | `POST /parties/:id/voice/device-token` (`parties:write`); the authorizing session or device is sealed into each voice token, so revocation follows the connection in the room, also after a restart (`4d8a971`, review of `196ca13`); `VOICE_GATEWAY_URL` |
+| Gateway | `apps/voice-gateway` (LiveKit Node SDK, Opus, mixing); compose `voice` profile service, Caddy `/voice-gateway`; **not deployed**, image not built here (no Docker daemon in this environment) |
+| Daemon | native interface 3 (voice pass on the write list); release ELF unchanged (byte-identical RC) |
+| Console | Party: Join/Leave voice, mute, deafen, volumes, speaking; Settings: microphone test; libSceAudioIn via dlopen after consent; libopus 1.5.2 |
+| Evidence | PC only: unit, server, gateway with real LiveKit, end to end with LiveKit + gateway + daemon + AKENO Native + a LiveKit participant, both directions by frequency; PS5 build and gate |
+| PS5 results | build `196ca13c71d1-ps5` on 12.20 (owner, 2026-10-18): starts, daemon protocol 3, realtime, party join, **microphone opens at 16 kHz and the test's level follows speech** (V1 pass); joining voice got **HTTP 404** from production (server side not deployed) — [PS5_NATIVE_1.1_HARDWARE_RESULTS_FW12.20.md](PS5_NATIVE_1.1_HARDWARE_RESULTS_FW12.20.md) |
+| Needs the PS5 | V2 onwards of [HARDWARE_TEST_PLAN_PS5_NATIVE_1.1.0-beta.1.md](HARDWARE_TEST_PLAN_PS5_NATIVE_1.1.0-beta.1.md) (listening, talking, latency, long sessions), after the server side is deployed |
+| Owner decisions | deploying the gateway (test setup first), approving the 1.1 build for the hardware test, the in-game voice research (PS5_VOICE.md, last section) |
+
+Run the voice tests locally: download LiveKit 1.12.0 (`livekit_1.12.0_linux_amd64.tar.gz`, SHA-256
+`9b89eb16…3aee`), then `LIVEKIT_SERVER_BIN=<path> pnpm --filter @akeno/voice-gateway test` and the
+end-to-end command above with `--livekit <path>` (after `pnpm build`).

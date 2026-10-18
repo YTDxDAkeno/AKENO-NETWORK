@@ -34,8 +34,9 @@
 /* Local interface for AKENO Native (docs/PS5_NATIVE_PHASE2.md); only in the native-IPC build.
  * 1: reads (Phase 2.1). 2: an explicit list of server writes (messages, parties, invitations,
  * friend requests, presence) and the open-conversation report that keeps the daemon from showing
- * a system notification for a message the user is reading in AKENO Native. */
-#define AKENO_NATIVE_IPC_VERSION 2
+ * a system notification for a message the user is reading in AKENO Native. 3: the party voice
+ * pass for this console (POST /parties/:id/voice/device-token, docs/PS5_VOICE.md). */
+#define AKENO_NATIVE_IPC_VERSION 3
 /* A conversation counts as open in AKENO Native for this long after its last report. */
 #define AKENO_NATIVE_FOCUS_MS 20000
 #endif
