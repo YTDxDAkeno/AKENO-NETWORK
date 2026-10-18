@@ -34,3 +34,27 @@ not hardware evidence. Do not install or change HEN frameworks on the
 console as part of building/testing this branch. The custom onionHEN
 build and any system-partition write avoidance are separate, pending
 work requiring review and console-owner approval.
+
+### onionHEN v0.9.0 startup behavior (source-verified, hardware-unverified)
+
+The v0.9.0 host at `aydencharles/onionHEN@aaa4264` **does not**
+interpret `ONION_PLUGIN_FLAG_AUTO_START` from the ELF. Its descriptor
+inspector rejects that bit. The host instead discovers the ELF in its
+plugins directory and exposes **Run** and **Auto Start** toggles in the
+Toolbox plugin configuration. On enabling Auto Start, the host records a
+marker next to the ELF: `/data/OnionHEN/plugins/AKEN00001.elf.auto_start`.
+Only plugins with that marker are started by the startup reconciliation
+path. With no marker, the owner would have to start the plugin manually
+from the host's plugin settings.
+
+Evidence: `source/libonion_plugin_manager/include/onion/plugin_manager.hpp`,
+`source/libonion_plugin_manager/source/plugin_manager.cpp`,
+`source/shellui/src/external_plugin_ui.cpp` and
+`source/shellui/src/plugin_sprx_pages.cpp` at the pinned onionHEN commit.
+
+These are **research findings, not installation instructions**. Do not
+install the ELF, enable the plugin, or change HEN frameworks until the
+onionHEN 12.20 compatibility and system-partition write decisions are
+resolved and the console owner separately approves a hardware test.
+The CI build now checks the final ELF descriptor against the host's known
+flag mask and IPC/UI capability mask, as well as the SDK's own inspector.
