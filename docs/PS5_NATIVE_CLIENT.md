@@ -1,12 +1,15 @@
-# AKENO NETWORK Native for PS5 — 0.2 preview (Phase 2.1)
+# AKENO NETWORK Native for PS5 — 1.0.0-beta.1
 
 A native, full-screen AKENO application for a jailbroken PS5: SDL2 at 1920×1080, DualSense
 navigation and your AKENO account — **without the system browser**. Native 0.1 proved on a PS5
 with firmware 12.20 that this app runs in the foreground next to the AKENO daemon, with the
-DualSense working and **audible sound** ([results](PS5_NATIVE_HARDWARE_RESULTS_FW12.20.md)). **0.2 adds the first social screens —
-Friends, Profiles and Activity — read through the daemon's local interface**, with live updates
-from the daemon's realtime session ([Phase 2 plan](PS5_NATIVE_PHASE2.md)). Messages, parties and
-settings follow in 2.2–2.4.
+DualSense working and **audible sound** ([results](PS5_NATIVE_HARDWARE_RESULTS_FW12.20.md)). 0.2 added Friends, Profiles and Activity
+through the daemon's local interface. **1.0.0-beta.1 adds messages with a controller keyboard,
+parties, friend requests, invitations, notifications and settings**, written through a fixed list
+of changes the daemon allows (IPC protocol 2, [interface](PS5_NATIVE_PHASE2.md)). **Neither 0.2
+nor 1.0.0-beta.1 has run on a PS5**; the release package and its guides are described in
+[native/INSTALL.md](native/INSTALL.md) and the console test in
+[HARDWARE_TEST_PLAN_PS5_NATIVE_1.0.0-beta.1.md](HARDWARE_TEST_PLAN_PS5_NATIVE_1.0.0-beta.1.md).
 
 The daemon stays responsible for the server connection, realtime, notifications and game
 detection; AKENO Native opens no second realtime session. The daemon's browser page
@@ -26,15 +29,22 @@ detection; AKENO Native opens no second realtime session. The daemon's browser p
 | Foreground audio test, every return code and pacing recorded | yes | fake system calls; SDL dummy device | **yes — audible**: 0.1, four tests, all heard (voice roadmap V1) |
 | Reads the existing pairing read-only; `GET /devices/current`; username on screen | yes | fake server: token sent, file never modified, 401 handled | **yes** — 0.1: HTTP 200, pairing valid, signed in, 14 permissions |
 | Daemon liveness probe (`GET /api/instance`) | yes | fake daemon | **yes** — 0.1: "Running, 0.5.0-alpha" |
-| **Native interface to the daemon** (key file, hello, state, event ring; GET only) | 0.2 | unit (key file rules, loopback client), fake daemon, **end to end with the real server and the native-IPC daemon** | **no** (test P1, P7.1) |
-| **Friends**: presence, games, status, request count; live presence, request and profile updates | 0.2 | fake daemon + end to end (live events over the daemon's realtime session) | **no** (P3, P4) |
-| **Profiles**: yours and your friends' (bio, status, badges count, favourites, party, recent games) | 0.2 | fake daemon + end to end | **no** (P5) |
-| **Activity**: this console's game (daemon detection), your recent games, friends playing | 0.2 | fake daemon + end to end | **no** (P6) |
-| Release daemon (no native interface) recognised, with what to do | 0.2 | fake daemon + end to end with the release daemon | **no** |
+| **Native interface to the daemon** (key file, hello, state, event ring; protocol 2 adds a fixed write list and the focus signal) | 0.2 / 1.0 | unit (key file rules, loopback client), fake daemon, **end to end with the real server and the native-IPC daemon** | **no** (B1, B9.3) |
+| **Friends**: presence, games, status, request count; live presence, request and profile updates | 0.2 | fake daemon + end to end (live events over the daemon's realtime session) | **no** (B3.1, B3.2) |
+| **Profiles**: yours and your friends' (bio, status, badges count, favourites, party, recent games) | 0.2 | fake daemon + end to end | **no** (B3.3, B3.4) |
+| **Activity**: this console's game (daemon detection), your recent games, friends playing | 0.2 | fake daemon + end to end | **no** (B3.5) |
+| Release daemon (no native interface) recognised, with what to do | 0.2 | fake daemon + end to end with the release daemon | **no** (B10.3) |
 | Redacted log and report, private files (0600); no names of other people in them | yes | unit + integration + end to end | **no** |
-| Clean exit to the system (`sceSystemServiceLoadExec("exit")`, foreground only) | yes | PC exit paths | **not reported yet** (0.2 test P7.3) |
+| Clean exit to the system (`sceSystemServiceLoadExec("exit")`, foreground only) | yes | PC exit paths | **not reported yet** (B9.4) |
 | Launcher folder with AKENO icon (websrv format) | yes | built in CI | **yes** — 0.1 started as `FAKE00000` |
-| Messages (2.2), parties (2.3), settings and pictures (2.4), voice | later | — | — |
+| **Messages**: direct, groups, party chat; history and older pages; send with idempotent IDs; read state; retry; drafts | 1.0.0-beta.1 | unit (chat model, JSON), fake daemon, **end to end** (one stored copy, read marking) | **no** (B5) |
+| **Controller keyboard** (own drawing, no system dialog; USB text) | 1.0.0-beta.1 | unit (every key, UTF-8, limits), end to end (typed through the virtual controller) | **no** (B5.3) |
+| **Party**: create, invite, chat, accept/decline, join, leave; honest voice panel, no microphone | 1.0.0-beta.1 | unit + end to end (live invitation, party chat, leave) | **no** (B6) |
+| **Inbox**: friend requests, invitations, notifications read | 1.0.0-beta.1 | unit + end to end (accept a request) | **no** (B7) |
+| **Settings**: notification and activity toggles, online status | 1.0.0-beta.1 | end to end (toggle, presence away/online) | **no** (B8) |
+| No duplicate system notification for the open conversation (focus signal) | 1.0.0-beta.1 | end to end (no toast while open, toast after leaving) | **no** (B5.7–B5.9) |
+| **Pictures and game artwork** (avatars, banners, badges; verified server covers also for uninstalled games) | 1.0.0-beta.1 | unit, libFuzzer (image, path), end to end (uninstalled game's cover) | **no** (B3.6, B4) |
+| Voice | research ([VOICE.md](VOICE.md)) | — | — |
 
 Hardware results on firmware 12.20 (owner report, 2026-10-17):
 [PS5_NATIVE_HARDWARE_RESULTS_FW12.20.md](PS5_NATIVE_HARDWARE_RESULTS_FW12.20.md). Every native CI
@@ -53,30 +63,27 @@ byte-verified) and the hardware-tested Alpha 0.5 RC daemon under `fallback/`.
   in the artifact) running instead of the release daemon. With the release daemon these screens
   explain what to do; everything else works.
 
-## Install and start (Level B)
+## Install and start
 
-1. Download **akeno-native-ps5-0.2.0-preview** from the "PS5 native client" workflow run of the
-   approved commit; check `SHA256SUMS` (Windows: `Get-FileHash … -Algorithm SHA256`).
-2. Daemon: on the AKENO page press **Exit AKENO**, then send `daemon/akeno-network-ps5-native-ipc.elf`
-   with your ELF loader as usual (same pairing, same settings).
-3. Copy the folder `AKENONative` to `/data/homebrew/AKENONative/` (keep `sce_sys/icon0.png`).
-4. Start **AKENO NETWORK** from the launcher, from the home screen. Starting homebrew this way
-   closes a running game (launcher behaviour).
-5. Exit with Home → **Exit** (or ◯ on Home → Exit). You return to the PS5.
+Follow [native/INSTALL.md](native/INSTALL.md) (package **akeno-network-native-1.0.0-beta.1** from
+the "PS5 native client" workflow run of the approved commit): check `SHA256SUMS`, send
+`daemon/akeno-network-ps5-native-ipc.elf` instead of the release daemon, copy `AKENONative` to
+`/data/homebrew/AKENONative/`, start **AKENO NETWORK** from the launcher. First steps:
+[native/FIRST_RUN.md](native/FIRST_RUN.md); problems: [native/TROUBLESHOOTING.md](native/TROUBLESHOOTING.md).
 
 Sent to the ELF loader instead (`akeno-native.elf`), it detects that it is a background process,
 shows one notification, writes its report and stops — it opens no screen, controller or audio and
 calls nothing that would affect the foreground application.
 
-Step-by-step hardware test: [HARDWARE_TEST_PLAN_PS5_NATIVE_0.2.md](HARDWARE_TEST_PLAN_PS5_NATIVE_0.2.md)
-(0.1: [HARDWARE_TEST_PLAN_PS5_NATIVE_0.1.md](HARDWARE_TEST_PLAN_PS5_NATIVE_0.1.md)).
+Hardware test: [HARDWARE_TEST_PLAN_PS5_NATIVE_1.0.0-beta.1.md](HARDWARE_TEST_PLAN_PS5_NATIVE_1.0.0-beta.1.md)
+(earlier: [0.2](HARDWARE_TEST_PLAN_PS5_NATIVE_0.2.md), [0.1](HARDWARE_TEST_PLAN_PS5_NATIVE_0.1.md)).
 
 ## Controls
 
-D-pad or left stick: move · ✕ select · ◯ back (on Home: exit dialog) · lists: L1/R1 page,
-✕ opens the profile, △ reloads · on the Controller test, every button is shown instead of
-acting; hold ◯ for 1 s to return. Keyboard on a PC: arrows,
-Enter/Space (✕), Esc/Backspace (◯), Tab (OPTIONS), Q/E (L1/R1).
+See [native/CONTROLLER.md](native/CONTROLLER.md): D-pad or left stick move · ✕ select · ◯ back
+(on Home: exit dialog) · △ reload · L1/R1 page · □ write to a friend / decline · the on-screen
+keyboard (✕ type, □ delete, △ space, L1 Shift, R1 symbols, L2/R2 cursor, OPTIONS send). On a PC:
+arrows, Enter/Space (✕), Esc/Backspace (◯), Tab (OPTIONS), Q/E (L1/R1).
 
 ## Files on the console
 
@@ -88,9 +95,7 @@ Enter/Space (✕), Esc/Backspace (◯), Tab (OPTIONS), Q/E (L1/R1).
 | `/data/akeno/native.key` | **read only** | written by the native-IPC daemon at every start (0600), deleted when it stops; used only if it is a private regular file of 64 hex digits |
 
 **Uninstall:** delete `/data/homebrew/AKENONative/` and `/data/akeno-native/`. Nothing else exists.
-To go back to the release daemon: Exit AKENO on its page and send the release ELF (or
-`fallback/akeno-network-ps5-alpha-0.5-rc-7e28255.elf`). To go back to Native 0.1: restore
-`fallback/native-0.1-d094e62bcaf1/AKENONative/` (the hardware-tested build).
+Rollback to the hardware-tested builds: [native/ROLLBACK.md](native/ROLLBACK.md).
 
 ## Security and privacy
 
@@ -100,11 +105,13 @@ To go back to the release daemon: Exit AKENO on its page and send the release EL
   pairing). CI fails if native code references `akeno_pairing_*`, `akeno_logout`,
   `akeno_forget_credentials` or `akeno_realtime_run`; the integration test checks the file's bytes,
   mtime and inode after a 401.
-- No realtime connection, presence update or notification from the native app: the daemon keeps
-  sole ownership (no duplicates, no races). Social data comes only through the daemon's local
-  interface ([PS5_NATIVE_PHASE2.md](PS5_NATIVE_PHASE2.md)): loopback, a per-launch key from a
-  private file, an allow-list in the daemon, and — in 0.2 — GET requests only; the end-to-end test
-  proves one realtime session per console.
+- No realtime connection or notification from the native app: the daemon keeps sole ownership
+  (no duplicates, no races). Social data and changes go only through the daemon's local interface
+  ([PS5_NATIVE_PHASE2.md](PS5_NATIVE_PHASE2.md)): loopback, a per-launch key from a private file,
+  the daemon's allow-list for reads and, since protocol 2, an explicit list of 13 write routes plus
+  three settings keys; pairing, the server address, the console name and the daemon's secrets
+  cannot be changed. The server checks the console's scopes again. The end-to-end test proves one
+  realtime session per console and that every other write is refused.
 - The report and log hold states and counts of the social screens, never other people's names,
   IDs or texts; the native key is never logged.
 - Logs and reports pass through redaction: `ak?_` secrets, `Bearer` values, `X-Akeno-*-Key`
@@ -163,10 +170,12 @@ generator (`clients/ps5/app/audio_lab_pcm.c`) and the app-info parser (`game_det
 - Only the rows marked yes in the last column of the status table are verified on a PS5.
 - Needs a homebrew launcher for the foreground; none is installed by AKENO.
 - Starting it closes a running game (launcher behaviour); in-game use is not possible this way.
-- Friends, Profile and Activity need the native-IPC daemon; 0.2 only reads (friend requests,
-  messages, parties and settings stay on the AKENO page until 2.2–2.4).
-- Avatars and banners are shown as initials until 2.4 (pictures need a hardened image decoder).
-- While AKENO Native is open the daemon's own notifications still appear (2.2 coordinates them).
+- The social screens need the native-IPC daemon of the same package (protocol 2); with the 0.2
+  daemon (protocol 1) they are read-only.
+- Text messages only (500 characters); no pictures or attachments. Group administration, party
+  leader changes and kicking stay on the website.
+- No voice on the PS5 (research); the party screen says so.
+- The daemon skips its notification only for the conversation that is open; all others appear.
 - Text uses Inter (Latin, Greek, Cyrillic); other scripts show replacement glyphs.
 - Software rendering only (what works for foreground homebrew today); about 1–10 ms per frame on a PC.
 - On the PS5 a controller that is switched off is detected through the pad's connected flag, which
