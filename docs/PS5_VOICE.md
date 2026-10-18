@@ -2,9 +2,13 @@
 
 Status (2026-10-18): **implemented and tested on PCs end to end** (real AKENO server, real LiveKit
 1.12 server, the voice gateway, AKENO Native with a simulated microphone, a LiveKit participant in
-the role of a website member). **Not run on a PS5.** The console's audio *output* path is the one
-Native 0.1 proved audible on firmware 12.20; the console's *microphone* (libSceAudioIn) has never
-been opened by AKENO on any console. The hardware test is
+the role of a website member). **On a PS5 (12.20, build `196ca13c71d1-ps5`, owner report
+2026-10-18):** the microphone works locally: `libSceAudioIn.sprx` loads, the port opens at
+16000 Hz with 256-frame reads, the Settings microphone test's level follows speech, and the
+microphone closes again ([PS5_NATIVE_1.1_HARDWARE_RESULTS_FW12.20.md](PS5_NATIVE_1.1_HARDWARE_RESULTS_FW12.20.md)). The console's audio *output* path is the one Native 0.1 proved
+audible on 12.20. **Two-way network voice has not run on a PS5**: the production server answered
+the voice pass request with 404 because the device voice pass and the gateway are not deployed.
+The hardware test is
 [HARDWARE_TEST_PLAN_PS5_NATIVE_1.1.0-beta.1.md](HARDWARE_TEST_PLAN_PS5_NATIVE_1.1.0-beta.1.md).
 
 Goal: open AKENO Native on the PS5, select the party, press **Join voice**, hear the friends who
@@ -127,12 +131,13 @@ Test this on disposable infrastructure first (as CI does); production was not ch
 
 | Level | What | Where | Result |
 | --- | --- | --- | --- |
-| Unit (PC, sanitizers) | Opus round trip (tone survives, PLC), jitter buffer (reorder, duplicates, late, loss, bounds, wrap), 16→48 kHz, gain/levels/meters, protocol and credential parsing (wss only, same host), session model, party rows, controls | `clients/ps5-native/tests/unit` | pass (1,485 checks in total) |
+| Unit (PC, sanitizers) | Opus round trip (tone survives, PLC), jitter buffer (reorder, duplicates, late, loss, bounds, wrap), 16→48 kHz, gain/levels/meters, protocol and credential parsing (wss only, same host), session model, party rows, controls | `clients/ps5-native/tests/unit` | pass (1,521 checks in total) |
 | Server | device pass contents and limits, refusals, revocation by unpairing / scope / leaving, refused joins, 503 without gateway, configuration | `apps/server/test/voice.test.ts` | pass |
 | Gateway with real LiveKit | console client ↔ LiveKit participant: tones both ways, mute/unmute, deafen, ping, removal 4003, refused passes, browsers, replacement | `apps/voice-gateway/test` | pass |
 | End to end | real server + LiveKit + gateway behind TLS + daemon (IPC 3) + AKENO Native (simulated microphone 300 Hz) + a website member through LiveKit (600 Hz): consent before the microphone, both directions by frequency, mute, unmute, deafen, volume, dropped connection reconnects, removing "parties:write" ends voice (4003), no token in logs, one realtime session | `clients/ps5-native/tests/e2e/run.mjs --livekit` | pass |
 | PS5 build | ELF with libopus, gate, reproducible | CI PS5 job | builds; gate OK |
-| PS5 hardware | microphone, playback, two people talking | the owner | **not done** |
+| PS5 hardware | microphone (open, level, close) | the owner, 12.20, `196ca13c71d1-ps5` | **pass** ([PS5_NATIVE_1.1_HARDWARE_RESULTS_FW12.20.md](PS5_NATIVE_1.1_HARDWARE_RESULTS_FW12.20.md)) |
+| PS5 hardware | playback, two people talking, latency, long sessions | the owner | **not done** (needs the server side deployed) |
 
 ## In-game voice (separate research, does not block this milestone)
 
