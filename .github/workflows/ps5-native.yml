@@ -22,7 +22,8 @@ concurrency:
 
 env:
   PS5_SDK_COMMIT: f5d40f02770e9b0001dd9e18056eca70b3da8b40 # same SDK as the daemon (ps5.yml)
-  RELEASE_NAME: akeno-native-ps5-0.2.0-preview
+  RELEASE_NAME: akeno-network-native-1.0.0-beta.1
+  NATIVE_VERSION: 1.0.0-beta.1
   # The Alpha 0.5 RC daemon that ran on a PS5 with 12.20 (see ps5.yml): shipped as the daemon
   # fallback next to the native-IPC daemon, rebuilt and verified byte for byte.
   RC_COMMIT: 7e28255c63baa528e28866cda53db1dedb3954a6
@@ -41,6 +42,15 @@ env:
   NATIVE_01_PR_SHA256: 0856094cf434b7e8114bad396fe8f942e87b408e2c847d015cf811aec913e4db
   NATIVE_01_HOMEBREW_JS_SHA256: fa5334012df469535faf991c2635ac55a2e3100d2a6f38c43885e276f8b28c63
   NATIVE_01_ICON_SHA256: e3870ccfc517da69f9c4e25e34a98a39d4c488a2825326f63353063220f033a9
+  # Native 0.2 preview, build 4b4602c7d0b7, with its IPC-1 daemon: ran on the owner's PS5 (12.20; real
+  # friend profiles and activity, owner report 2026-10-18, build ID not recorded), not fully tested.
+  # Shipped as a fallback, rebuilt from its commit; these are the checksums
+  # of the files of push run 39065377144 (listed in PR #7) and every run must reproduce them.
+  NATIVE_02_COMMIT: 4b4602c7d0b7bc8315130341205d4b98cc1114ef
+  NATIVE_02_BUILD_ID: 4b4602c7d0b7
+  NATIVE_02_SHA256: fab3dfb8f6a4819bd81a41064b065098d433cd4c383097d436564801bcddbefa
+  NATIVE_02_HOMEBREW_JS_SHA256: 330f77c29726d94979dcd9625ce23d80289bb60a106e5cd45252d9baed79b5a6
+  NATIVE_02_IPC1_DAEMON_SHA256: be7502f297d6d5f77bbb9709f8f9d6ac38ae5bab7725466e36813b4984b63822
 
 jobs:
   host:
@@ -59,7 +69,7 @@ jobs:
       - name: Install build requirements
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake libsdl2-dev valgrind clang-18 clang-tidy-18
+          sudo apt-get install -y --no-install-recommends cmake libsdl2-dev valgrind clang-18 clang-tidy-18 libclang-rt-18-dev
 
       - name: Fetch pinned third-party inputs (checksums verified)
         run: clients/ps5-native/scripts/fetch-deps.sh
@@ -90,6 +100,25 @@ jobs:
           clang-tidy-18 -p build-clang --quiet --warnings-as-errors='*' --checks="$checks" \
             src/core/*.c src/app/app.c src/app/screens.c src/app/gfx.c src/app/net.c src/app/report.c src/app/main.c \
             src/app/ipc.c src/app/social.c src/platform/platform_host.c tools/make_icon.c
+
+      - name: Fuzz the picture decoder and the badge paths (libFuzzer, ASan + UBSan, committed regression seeds)
+        run: AKN_FUZZ_OUT="$RUNNER_TEMP/fuzz" clients/ps5-native/tests/fuzz/run.sh 90 clang-18
+
+      - name: In-Game Companion (experimental) - menu model and OnionHEN page tests (sanitizers)
+        run: |
+          clients/ps5-ingame/scripts/fetch-deps.sh
+          cmake -S clients/ps5-ingame -B clients/ps5-ingame/build -DAKN_SANITIZE=ON -DCMAKE_BUILD_TYPE=Debug
+          cmake --build clients/ps5-ingame/build -j"$(nproc)"
+          ctest --test-dir clients/ps5-ingame/build --output-on-failure
+
+      - name: Upload fuzzer findings
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: akeno-native-fuzz-findings
+          path: ${{ runner.temp }}/fuzz/crash-*
+          retention-days: 30
+          if-no-files-found: ignore
 
       - name: Upload the UI screenshots and report of the integration test (PC, not PS5 evidence)
         if: always()
@@ -141,7 +170,9 @@ jobs:
           pnpm build
 
       - name: Fetch pinned third-party inputs (checksums verified)
-        run: clients/ps5-native/scripts/fetch-deps.sh
+        run: |
+          clients/ps5-native/scripts/fetch-deps.sh
+          clients/ps5-ingame/scripts/fetch-deps.sh
 
       - name: Build the daemon (release and native-IPC host builds) and AKENO Native with sanitizers
         run: |
@@ -149,11 +180,14 @@ jobs:
           cmake --build clients/ps5/build-asan -j"$(nproc)" --target akeno-app akeno-app-native-ipc
           cmake -S clients/ps5-native -B clients/ps5-native/build-asan -DAKN_SANITIZE=ON -DCMAKE_BUILD_TYPE=Debug
           cmake --build clients/ps5-native/build-asan -j"$(nproc)" --target akeno-native
+          cmake -S clients/ps5-ingame -B clients/ps5-ingame/build -DAKN_SANITIZE=ON -DCMAKE_BUILD_TYPE=Debug
+          cmake --build clients/ps5-ingame/build -j"$(nproc)" --target akeno-ingame-check
 
       - name: End-to-end tests (real server, TLS, pairing, live events, IPC security, release daemon)
         run: |
           AKN_E2E_OUT="$RUNNER_TEMP/e2e" node clients/ps5-native/tests/e2e/run.mjs --native clients/ps5-native/build-asan/akeno-native \
-            --daemon clients/ps5/build-asan/akeno-app-native-ipc --release-daemon clients/ps5/build-asan/akeno-app
+            --daemon clients/ps5/build-asan/akeno-app-native-ipc --release-daemon clients/ps5/build-asan/akeno-app \
+            --companion clients/ps5-ingame/build/akeno-ingame-check
 
       - name: Upload the end-to-end screenshots and report (PC, not PS5 evidence)
         if: always()
@@ -188,7 +222,9 @@ jobs:
           make -C "$RUNNER_TEMP/ps5-sdk-src" DESTDIR="$RUNNER_TEMP/ps5-payload-sdk" install
 
       - name: Fetch pinned third-party inputs (checksums verified)
-        run: clients/ps5-native/scripts/fetch-deps.sh
+        run: |
+          clients/ps5-native/scripts/fetch-deps.sh
+          clients/ps5-ingame/scripts/fetch-deps.sh
 
       - name: Build SDL2 for the PS5 (ps5-payload-dev/SDL ee4c47d, software renderer)
         run: PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk" clients/ps5-native/scripts/build-sdl-ps5.sh
@@ -237,6 +273,24 @@ jobs:
             check "$NATIVE_01_ICON_SHA256" "$RUNNER_TEMP/native-0.1-$id/AKENONative/sce_sys/icon0.png"
           done
 
+      - name: Rebuild the Native 0.2 preview (4b4602c) and its IPC-1 daemon and verify them (untested fallback)
+        shell: bash
+        run: |
+          export PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk"
+          tree="$RUNNER_TEMP/native-0.2"
+          git worktree add --detach "$tree" "$NATIVE_02_COMMIT"
+          cp -r clients/ps5/third_party "$tree/clients/ps5/"
+          mkdir -p "$tree/clients/ps5-native/third_party"
+          cp -r clients/ps5-native/third_party/stb_truetype.h clients/ps5-native/third_party/inter "$tree/clients/ps5-native/third_party/"
+          make -C "$tree/clients/ps5-native/console" -j"$(nproc)" SDL_PREFIX="$PWD/clients/ps5-native/third_party/sdl-ps5" \
+            BUILD="$RUNNER_TEMP/native-0.2-build" GIT_COMMIT="$NATIVE_02_BUILD_ID" package ICON="$RUNNER_TEMP/icon0.png"
+          make -C "$tree/clients/ps5/console" -j"$(nproc)" NATIVE_IPC=1 BUILD="$RUNNER_TEMP/native-0.2-ipc" GIT_COMMIT="$NATIVE_02_BUILD_ID"
+          check() { echo "$1  $2" | sha256sum -c -; }
+          check "$NATIVE_02_SHA256" "$RUNNER_TEMP/native-0.2-build/AKENONative/eboot.elf"
+          check "$NATIVE_02_HOMEBREW_JS_SHA256" "$RUNNER_TEMP/native-0.2-build/AKENONative/homebrew.js"
+          check "$NATIVE_01_ICON_SHA256" "$RUNNER_TEMP/native-0.2-build/AKENONative/sce_sys/icon0.png"
+          check "$NATIVE_02_IPC1_DAEMON_SHA256" "$RUNNER_TEMP/native-0.2-ipc/akeno-network-ps5-native-ipc.elf"
+
       - name: Build the native-IPC daemon twice (reproducible), gate it, and require the release's imports
         shell: bash
         run: |
@@ -263,6 +317,15 @@ jobs:
             echo "The release daemon contains the native interface" >&2; exit 1
           fi
 
+      - name: Build the In-Game Companion OnionHEN plugin twice (reproducible), check its descriptor and imports (EXPERIMENTAL)
+        shell: bash
+        run: |
+          export PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk"
+          make -C clients/ps5-ingame/console -j"$(nproc)" BUILD="$RUNNER_TEMP/ingame-repro"
+          make -C clients/ps5-ingame/console -j"$(nproc)"
+          cmp "$RUNNER_TEMP/ingame-repro/AKEN00001.elf" clients/ps5-ingame/build-ps5/AKEN00001.elf
+          clients/ps5-ingame/console/check-plugin.sh clients/ps5-ingame/build-ps5 | tee gate-ingame.txt
+
       - name: Rebuild the hardware-tested Alpha 0.5 RC daemon (7e28255) as the daemon fallback
         shell: bash
         run: |
@@ -272,42 +335,89 @@ jobs:
           make -C "$RUNNER_TEMP/rc/clients/ps5/console" -j"$(nproc)" GIT_COMMIT="$RC_BUILD_ID"
           echo "$RC_RELEASE_SHA256  $RUNNER_TEMP/rc/clients/ps5/build-ps5/akeno-network-ps5.elf" | sha256sum -c -
 
-      - name: Inspect, checksum and describe the build
+      - name: Assemble, inspect, checksum and describe the release package
         shell: bash
         run: |
           out="dist/$RELEASE_NAME"
-          mkdir -p "$out/debug"
+          rc_elf="fallback/akeno-network-ps5-alpha-0.5-rc-7e28255.elf"
+          n02="fallback/native-0.2-preview-$NATIVE_02_BUILD_ID"
+          mkdir -p "$out/debug" "$out/daemon" "$out/docs" "$out/licenses" "$out/experimental/in-game-companion" "$out/$n02/daemon"
+          # AKENO Native 1.0.0-beta.1 and the native-IPC daemon (protocol 2) of this commit
           cp -r clients/ps5-native/build-ps5/AKENONative "$out/"
+          cp clients/ps5-native/build-ps5/akeno-native.elf "$out/"
+          cp clients/ps5-native/build-ps5/akeno-native.debug.elf "$out/debug/"
+          cp clients/ps5/build-ps5-native-ipc/akeno-network-ps5-native-ipc.elf "$out/daemon/"
+          cp clients/ps5/build-ps5-native-ipc/akeno-network-ps5-native-ipc.debug.elf "$out/debug/"
+          # Fallbacks: hardware-tested Native 0.1 and Alpha 0.5 RC daemon; reference and untested builds
           for id in "$NATIVE_01_PUSH_BUILD_ID" "$NATIVE_01_PR_BUILD_ID"; do
             mkdir -p "$out/fallback/native-0.1-$id"
             cp -r "$RUNNER_TEMP/native-0.1-$id/AKENONative" "$out/fallback/native-0.1-$id/"
           done
-          cp docs/PS5_NATIVE_HARDWARE_RESULTS_FW12.20.md "$out/HARDWARE_RESULTS_0.1.md"
-          mkdir -p "$out/daemon"
-          cp clients/ps5/build-ps5-native-ipc/akeno-network-ps5-native-ipc.elf "$out/daemon/"
-          cp clients/ps5/build-ps5-native-ipc/akeno-network-ps5-native-ipc.debug.elf "$out/debug/"
-          cp "$RUNNER_TEMP/rc/clients/ps5/build-ps5/akeno-network-ps5.elf" "$out/fallback/akeno-network-ps5-alpha-0.5-rc-7e28255.elf"
-          cp docs/PS5_NATIVE_PHASE2.md "$out/PHASE2_PLAN.md"
-          cp clients/ps5-native/build-ps5/akeno-native.elf "$out/"
-          cp clients/ps5-native/build-ps5/akeno-native.debug.elf "$out/debug/"
-          for elf in "$out"/akeno-native.elf "$out"/AKENONative/eboot.elf "$out"/debug/*.elf "$out"/daemon/*.elf "$out"/fallback/*.elf; do
+          cp -r "$RUNNER_TEMP/native-0.2-build/AKENONative" "$out/$n02/"
+          cp "$RUNNER_TEMP/native-0.2-ipc/akeno-network-ps5-native-ipc.elf" "$out/$n02/daemon/akeno-network-ps5-native-ipc-1.elf"
+          cp "$RUNNER_TEMP/rc/clients/ps5/build-ps5/akeno-network-ps5.elf" "$out/$rc_elf"
+          # Experimental In-Game Companion (separate from the release; GPLv3 ELF)
+          cp clients/ps5-ingame/build-ps5/AKEN00001.elf "$out/experimental/in-game-companion/"
+          {
+            echo "AKENO In-Game Companion (EXPERIMENTAL) - an OnionHEN Toolbox plugin"
+            echo
+            echo "NOT part of AKENO NETWORK Native $NATIVE_VERSION. NOT run on a PS5. It needs OnionHEN, which AKENO"
+            echo "never installs: installing OnionHEN is the console owner's decision (risks, backup, install,"
+            echo "rollback and the hardware proof: docs/IN_GAME_ACCESS.md). Never run two kstuff."
+            echo
+            echo "Plugin ID AKEN00001; copy to /data/OnionHEN/plugins/AKEN00001.elf only after that decision."
+            echo "Reads through the AKENO native-IPC daemon (daemon/); writes only status and accepting a party"
+            echo "invitation (confirmed). No console system function (import gate in BUILDINFO.txt)."
+            echo
+            echo "Licence: the ELF links the OnionHEN plugin SDK runtime and is GPLv3 (licenses/GPL-3.0.txt)."
+            echo "Corresponding source: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/tree/$(git rev-parse HEAD)/clients/ps5-ingame"
+            echo "OnionHEN plugin SDK: https://github.com/OnionBuddies/onionHEN-plugin-sdk commit $(git -C clients/ps5-ingame/third_party/onion-sdk rev-parse HEAD)"
+            echo "PS5 payload SDK:     https://github.com/ps5-payload-dev/sdk commit $PS5_SDK_COMMIT"
+          } > "$out/experimental/in-game-companion/README.txt"
+          # Documentation
+          cp docs/native/INSTALL.md docs/native/FIRST_RUN.md docs/native/CONTROLLER.md docs/native/TROUBLESHOOTING.md docs/native/ROLLBACK.md "$out/docs/"
+          cp docs/IN_GAME_ACCESS.md "$out/docs/IN_GAME_ACCESS.md"
+          cp docs/HARDWARE_TEST_PLAN_PS5_NATIVE_1.0.0-beta.1.md "$out/docs/HARDWARE_TEST_PLAN.md"
+          cp docs/PS5_NATIVE_HARDWARE_RESULTS_FW12.20.md "$out/docs/HARDWARE_RESULTS_NATIVE_0.1.md"
+          cp docs/PS5_NATIVE_CLIENT.md "$out/docs/NATIVE_CLIENT.md"
+          cp docs/PS5_NATIVE_PHASE2.md "$out/docs/NATIVE_INTERFACE.md"
+          cp docs/PS5_NATIVE_ADR.md "$out/docs/ARCHITECTURE_DECISION.md"
+          cp docs/GAME_ARTWORK.md "$out/docs/GAME_ARTWORK.md"
+          cp clients/ps5-native/CHANGELOG.md "$out/CHANGELOG.md"
+          cp docs/RELEASE_NOTES_PS5_NATIVE_1.0.0-beta.1.md "$out/RELEASE_NOTES.md"
+          # Licences: LICENSES.md (with the stb MIT and Lucide ISC notices) and the full texts
+          cp docs/LICENSES.md "$out/LICENSES.md"
+          cp clients/ps5-native/third_party/inter/OFL.txt "$out/licenses/Inter-OFL-1.1.txt"
+          cp clients/ps5-ingame/third_party/onion-sdk/LICENSE "$out/licenses/GPL-3.0.txt"
+          tar xjf clients/ps5/third_party/mbedtls-3.6.7.tar.bz2 -O mbedtls-3.6.7/LICENSE > "$out/licenses/mbedTLS-Apache-2.0.txt"
+          grep -q 'GNU GENERAL PUBLIC LICENSE' "$out/licenses/GPL-3.0.txt"
+          grep -q 'Version 3, 29 June 2007' "$out/licenses/GPL-3.0.txt"
+          grep -q 'Apache License' "$out/licenses/mbedTLS-Apache-2.0.txt"
+          grep -q 'SIL OPEN FONT LICENSE' "$out/licenses/Inter-OFL-1.1.txt"
+          grep -q 'stb_image' "$out/LICENSES.md"
+          grep -q 'Lucide' "$out/LICENSES.md"
+          # Every ELF is a PS5 (x86-64 PIE) ELF; the launcher copy is the plain ELF
+          while IFS= read -r elf; do
             readelf -h "$elf" | grep -q 'ELF64'
             readelf -h "$elf" | grep -q 'Advanced Micro Devices X86-64'
             readelf -h "$elf" | grep -q 'DYN (Position-Independent Executable file)'
-          done
+          done < <(find "$out" -name '*.elf')
           cmp "$out/akeno-native.elf" "$out/AKENONative/eboot.elf"
-          cp docs/PS5_NATIVE_CLIENT.md "$out/README.md"
-          cp docs/HARDWARE_TEST_PLAN_PS5_NATIVE_0.2.md "$out/HARDWARE_TEST_PLAN.md"
-          cp docs/PS5_NATIVE_ADR.md "$out/ARCHITECTURE_DECISION.md"
-          cp docs/LICENSES.md "$out/LICENSES.md"
-          cp clients/ps5-native/third_party/inter/OFL.txt "$out/LICENSE-Inter-OFL.txt"
-          (cd "$out" && sha256sum akeno-native.elf AKENONative/eboot.elf AKENONative/homebrew.js AKENONative/sce_sys/icon0.png \
-            daemon/akeno-network-ps5-native-ipc.elf fallback/*.elf \
-            fallback/*/AKENONative/eboot.elf fallback/*/AKENONative/homebrew.js fallback/*/AKENONative/sce_sys/icon0.png > SHA256SUMS)
+          grep -q "Native $NATIVE_VERSION" "$out/AKENONative/homebrew.js"
+          grep -qa "$NATIVE_VERSION" "$out/AKENONative/eboot.elf"
+          # Fallbacks are the recorded bytes
+          (cd "$out" && {
+            echo "$NATIVE_01_PUSH_SHA256  fallback/native-0.1-$NATIVE_01_PUSH_BUILD_ID/AKENONative/eboot.elf"
+            echo "$NATIVE_01_PR_SHA256  fallback/native-0.1-$NATIVE_01_PR_BUILD_ID/AKENONative/eboot.elf"
+            echo "$NATIVE_02_SHA256  $n02/AKENONative/eboot.elf"
+            echo "$NATIVE_02_IPC1_DAEMON_SHA256  $n02/daemon/akeno-network-ps5-native-ipc-1.elf"
+            echo "$RC_RELEASE_SHA256  $rc_elf"
+          } | sha256sum -c -)
+          (cd "$out" && find . -type f ! -path './debug/*' ! -name SHA256SUMS ! -name BUILDINFO.txt -printf '%P\n' | LC_ALL=C sort | xargs -d '\n' sha256sum > SHA256SUMS)
           (cd "$out/debug" && sha256sum *.debug.elf > SHA256SUMS)
           nm="$RUNNER_TEMP/ps5-payload-sdk/bin/prospero-nm"
           {
-            echo "AKENO NETWORK Native 0.2.0-preview (PS5, Phase 2.1: Friends, Profiles, Activity over the daemon's native interface)"
+            echo "AKENO NETWORK Native $NATIVE_VERSION (PS5) - BETA, pre-release, NOT run on a PS5"
             echo "Source commit:   $(git rev-parse HEAD)"
             echo "Workflow run:    $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             echo "ps5-payload-sdk: $PS5_SDK_COMMIT"
@@ -315,16 +425,40 @@ jobs:
             echo "mbedTLS:         3.6.7 ($(sha256sum clients/ps5/third_party/mbedtls-3.6.7.tar.bz2 | cut -d' ' -f1))"
             echo "CA bundle:       certifi 2026.07.22 ($(sha256sum clients/ps5/third_party/cacert.pem | cut -d' ' -f1))"
             echo "stb_truetype:    v1.26, nothings/stb 6e9f34d ($(sha256sum clients/ps5-native/third_party/stb_truetype.h | cut -d' ' -f1))"
+            echo "stb_image:       $(sha256sum clients/ps5-native/third_party/stb_image.h | cut -d' ' -f1)"
             echo "Inter:           4.1 Regular + Bold ($(sha256sum clients/ps5-native/third_party/inter/Inter-Regular.ttf | cut -c1-16)…, $(sha256sum clients/ps5-native/third_party/inter/Inter-Bold.ttf | cut -c1-16)…)"
+            echo "OnionHEN SDK:    $(git -C clients/ps5-ingame/third_party/onion-sdk rev-parse HEAD) (experimental companion only)"
             echo "Compiler:        $("$RUNNER_TEMP/ps5-payload-sdk/bin/prospero-clang" --version | head -1)"
-            echo "Reproducible:    built twice in this run, byte-identical"
+            echo "Reproducible:    AKENO Native, the native-IPC daemon and the companion built twice in this run, byte-identical"
+            echo
+            echo "Hardware status (read before installing):"
+            echo "  AKENONative/ (Native $NATIVE_VERSION, this commit): NOT run on a PS5. PC tests only (unit, UI"
+            echo "    integration, end-to-end with the real server). Start it only from a homebrew launcher, following"
+            echo "    docs/INSTALL.md and docs/HARDWARE_TEST_PLAN.md. Sent to an ELF loader it detects the background"
+            echo "    context, opens nothing and stops."
+            echo "  daemon/akeno-network-ps5-native-ipc.elf (this commit, native interface protocol 2): NOT run on a PS5."
+            echo "    The Alpha 0.5 daemon plus the native interface with a fixed write list (docs/NATIVE_INTERFACE.md)."
+            echo "  experimental/in-game-companion/AKEN00001.elf: EXPERIMENTAL, NOT part of this release, NOT run on a"
+            echo "    PS5; needs OnionHEN (owner decision, docs/IN_GAME_ACCESS.md)."
+            echo "  $rc_elf: HARDWARE-TESTED Alpha 0.5 RC daemon (FW 12.20, owner report),"
+            echo "    rebuilt from $RC_COMMIT, byte-identical to CI run 39043014243."
+            echo "  fallback/native-0.1-$NATIVE_01_PUSH_BUILD_ID/: HARDWARE-TESTED Native 0.1 (known-good fallback), rebuilt from"
+            echo "    $NATIVE_01_COMMIT, byte-identical to CI run 39058830774. Ran on a PS5 with 12.20 next to the daemon:"
+            echo "    foreground application, video 1920x1080, DualSense opened (2,274 events, 0 dropped), four audio tests"
+            echo "    heard, account authenticated, background protection triggered. Per-button controller coverage and the"
+            echo "    clean exit were not itemised (docs/HARDWARE_RESULTS_NATIVE_0.1.md)."
+            echo "  fallback/native-0.1-$NATIVE_01_PR_BUILD_ID/: the same code with the PR merge build ID (CI run 39058834341);"
+            echo "    NOT run on a PS5, reference only."
+            echo "  $n02/: Native 0.2 preview and its IPC-1 daemon, rebuilt from $NATIVE_02_COMMIT,"
+            echo "    byte-identical to CI run 39065377144; PARTLY verified: Native 0.2 showed real friend profiles"
+            echo "    and game activity on the owner's PS5 with 12.20 (owner report, build ID not recorded); not fully tested."
             echo
             echo "SHA-256:"
             sed 's/^/  /' "$out/SHA256SUMS"
             echo "  (debug artifact)"
             sed 's/^/  /' "$out/debug/SHA256SUMS"
             echo
-            echo "Shared libraries required:"
+            echo "Shared libraries required (AKENO Native):"
             readelf -d "$out/akeno-native.elf" | grep NEEDED | sed 's/^.*\[/  /; s/\]$//'
             echo
             cat gate.txt
@@ -334,29 +468,16 @@ jobs:
             echo "  (same NEEDED libraries); this commit's release daemon is still the RC file ($RC_RELEASE_SHA256)."
             sed 's/^/  /' gate-daemon.txt
             echo
+            echo "In-Game Companion (experimental):"
+            sed 's/^/  /' gate-ingame.txt
+            echo
             echo "System imports (AKENO Native):"
             "$nm" -D --undefined-only "$out/akeno-native.elf" | awk '{print $2}' | grep -E '^(sce|kernel_)' | sort | sed 's/^/  /'
-            echo
-            echo "Hardware status:"
-            echo "  AKENONative/ (Native 0.2.0-preview, this commit): NOT run on a PS5. Start it only from a homebrew"
-            echo "    launcher, following HARDWARE_TEST_PLAN.md. Sent to an ELF loader instead, it detects the background"
-            echo "    context, opens nothing and stops. Friends, Profile and Activity need the native-IPC daemon."
-            echo "  daemon/akeno-network-ps5-native-ipc.elf (this commit): NOT run on a PS5. The Alpha 0.5 daemon plus the"
-            echo "    native interface (docs/PS5_NATIVE_PHASE2.md); send it with your ELF loader instead of the release ELF."
-            echo "  fallback/akeno-network-ps5-alpha-0.5-rc-7e28255.elf: the hardware-tested Alpha 0.5 RC daemon, rebuilt"
-            echo "    from $RC_COMMIT and byte-identical to CI run 39043014243 (ran on a PS5 with 12.20, owner report)."
-            echo "  fallback/native-0.1-$NATIVE_01_PUSH_BUILD_ID/: the HARDWARE-TESTED Native 0.1 (known-good fallback), rebuilt from"
-            echo "    $NATIVE_01_COMMIT and byte-identical to CI run 39058830774. Ran on a PS5 with 12.20 next to the daemon"
-            echo "    (owner report and native-report.txt): foreground application FAKE00000, video 1920x1080, DualSense opened"
-            echo "    (2,274 events, 0 dropped), four audio tests all heard, account authenticated, background protection"
-            echo "    triggered when sent with the ELF loader. Per-button controller coverage and the clean exit were not"
-            echo "    itemised. See HARDWARE_RESULTS_0.1.md."
-            echo "  fallback/native-0.1-$NATIVE_01_PR_BUILD_ID/: the same code with the PR merge build ID (CI run 39058834341);"
-            echo "    NOT run on a PS5, kept for reference only."
           } > "$out/BUILDINFO.txt"
           cat "$out/BUILDINFO.txt"
+          find "$out" -type f ! -path '*/debug/*' | sort
 
-      - name: Upload the release build (launcher folder, ELF, checksums, build info, test plan)
+      - name: Upload the release package (AKENONative, daemon, experimental, fallback, docs, checksums, build info)
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.RELEASE_NAME }}

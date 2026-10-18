@@ -71,17 +71,41 @@ void akn_http_reply_free(akn_http_reply *reply) {
 }
 
 int akn_loopback_get(int port, const char *path, const char *native_key, int timeout_ms, size_t max_body, akn_http_reply *out) {
+    return akn_loopback_request(port, "GET", path, native_key, NULL, timeout_ms, max_body, out);
+}
+
+#define REQUEST_BODY_MAX (60 * 1024) /* the daemon accepts 64 KiB */
+
+int akn_loopback_request(int port, const char *method, const char *path, const char *native_key, const char *json_body, int timeout_ms,
+                         size_t max_body, akn_http_reply *out) {
     memset(out, 0, sizeof(*out));
     out->transport_error = 1;
     long long deadline = now_ms() + timeout_ms;
-    char request[1024];
-    int n = snprintf(request, sizeof(request),
-                     "GET %s HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nAccept: application/json\r\n%s%s%sConnection: close\r\n\r\n", path, port,
-                     native_key ? "X-Akeno-Native-Key: " : "", native_key ? native_key : "", native_key ? "\r\n" : "");
-    if (n <= 0 || (size_t)n >= sizeof(request) || path[0] != '/') return 0;
+    if (strcmp(method, "GET") != 0 && strcmp(method, "POST") != 0 && strcmp(method, "PUT") != 0) return 0;
+    size_t body_len = json_body ? strlen(json_body) : 0;
+    if (body_len > REQUEST_BODY_MAX || path[0] != '/') return 0;
+    for (const char *c = path; *c; c++)
+        if ((unsigned char)*c <= 0x20 || (unsigned char)*c >= 0x7F) return 0; /* no header injection */
+    size_t req_cap = 1024 + body_len;
+    char *request = malloc(req_cap);
+    if (!request) return 0;
+    char length[64] = "";
+    if (json_body) snprintf(length, sizeof(length), "Content-Type: application/json\r\nContent-Length: %zu\r\n", body_len);
+    int n = snprintf(request, req_cap, "%s %s HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nAccept: application/json\r\n%s%s%s%sConnection: close\r\n\r\n", method,
+                     path, port, native_key ? "X-Akeno-Native-Key: " : "", native_key ? native_key : "", native_key ? "\r\n" : "", length);
+    if (n <= 0 || (size_t)n + body_len >= req_cap) {
+        free(request);
+        return 0;
+    }
+    if (body_len) snprintf(request + n, req_cap - (size_t)n, "%s", json_body);
+    n += (int)body_len;
 
     int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return 0;
+    if (fd < 0) {
+        memset(request, 0, (size_t)n);
+        free(request);
+        return 0;
+    }
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);
     struct sockaddr_in addr;
@@ -103,7 +127,8 @@ int akn_loopback_get(int port, const char *path, const char *native_key, int tim
         if (w <= 0) break;
         sent += (size_t)w;
     }
-    memset(request, 0, sizeof(request)); /* the key */
+    memset(request, 0, (size_t)n); /* the key */
+    free(request);
     size_t cap = HEAD_MAX + max_body + 1, got = 0;
     char *buf = sent == (size_t)n ? malloc(cap) : NULL;
     int complete = 0;

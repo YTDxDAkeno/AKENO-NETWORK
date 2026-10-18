@@ -17,10 +17,12 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { inflateSync } from 'node:zlib';
 import tls from 'node:tls';
 import { fileURLToPath } from 'node:url';
 
@@ -35,6 +37,7 @@ const arg = (name) => {
 const nativeBinary = arg('--native');
 const daemonBinary = arg('--daemon');
 const releaseBinary = arg('--release-daemon');
+const companionBinary = arg('--companion'); // optional: clients/ps5-ingame akeno-ingame-check
 if (!nativeBinary || !daemonBinary || !releaseBinary) {
   console.error('usage: run.mjs --native <akeno-native> --daemon <akeno-app-native-ipc> --release-daemon <akeno-app>');
   process.exit(2);
@@ -326,7 +329,7 @@ await step('native-IPC daemon: starts, writes a private key and announces the in
   assert.match(key, /^[0-9a-f]{64}$/);
   assert.notEqual(key, daemon.token, 'a separate secret from the page');
   const instance = await local(daemon.port, 'GET', '/api/instance');
-  assert.deepEqual(instance.body, { app: 'akeno-network-console', version: '0.5.0-alpha', nativeIpc: 1 });
+  assert.deepEqual(instance.body, { app: 'akeno-network-console', version: '0.5.0-alpha', nativeIpc: 2 });
 });
 
 await step('native-IPC daemon: pairs through its page and the website; one realtime session', async () => {
@@ -344,7 +347,8 @@ await step('native interface: the key opens only the native allow-list', async (
   const K = { 'X-Akeno-Native-Key': key };
   const hello = await local(daemon.port, 'GET', '/api/native/hello', K);
   assert.equal(hello.status, 200, hello.text);
-  assert.equal(hello.body.ipc, 1);
+  assert.equal(hello.body.ipc, 2);
+  assert.equal(hello.body.writes, true);
   assert.equal(hello.body.paired, true);
   assert.equal(hello.body.onlineId, 'it_alice');
   assert.equal((await local(daemon.port, 'GET', '/api/native/hello')).body.error.code, 'SESSION_REQUIRED');
@@ -381,10 +385,41 @@ await step('native interface: the key opens only the native allow-list', async (
   const friends = await local(daemon.port, 'GET', '/api/v1/friends', K);
   assert.equal(friends.body.ok, true);
   assert.deepEqual(friends.body.data.friends.map((f) => f.onlineId), ['it_bob']);
+  // IPC 2: only the listed writes, each an existing device route; IDs are one plain path segment.
+  const uuid = '00000000-0000-4000-8000-000000000000';
+  for (const [method, path] of [['PATCH', '/api/v1/profile'], ['POST', '/api/v1/profile'], ['DELETE', `/api/v1/friends/${uuid}`],
+    ['POST', `/api/v1/parties/${uuid}/close`], ['POST', `/api/v1/parties/${uuid}/leader`], ['DELETE', `/api/v1/parties/${uuid}/members/${uuid}`],
+    ['POST', `/api/v1/groups/${uuid}/messages`], ['POST', `/api/v1/parties/${uuid}/messages`], ['POST', '/api/v1/friends/requests'],
+    ['POST', `/api/v1/invitations/${uuid}/cancel`], ['POST', '/api/v1/game-sessions'], ['DELETE', '/api/v1/devices/current'],
+    ['POST', `/api/v1/conversations/${uuid}/messages?x=1`], ['POST', '/api/v1/conversations/../messages'],
+    ['POST', `/api/v1/conversations/${uuid}/x/messages`], ['POST', '/api/v1/conversations//messages'], ['PUT', '/api/v1/presence/x'],
+    ['POST', `/api/v1/conversations/${'a'.repeat(65)}/read`], ['POST', '/api/v1/conversations/a%2Fb/read'], ['PATCH', '/api/v1/presence'],
+    ['POST', '/api/v1/conversationsX'], ['POST', '/api/v1/blocks']]) {
+    const refused = await local(daemon.port, method, path, K, {});
+    assert.equal(refused.status, 403, `${method} ${path}`);
+    assert.equal(refused.body.error.code, 'NOT_ALLOWED_FOR_NATIVE', `${method} ${path}`);
+  }
+  // An allowed write reaches the server, which applies its own rules (here: an invalid body).
+  const presence = await local(daemon.port, 'PUT', '/api/v1/presence', K, { status: 'away' });
+  assert.equal(presence.body.ok, true, presence.text);
+  assert.equal((await local(daemon.port, 'PUT', '/api/v1/presence', K, { status: 'online' })).body.ok, true);
+  const invalid = await local(daemon.port, 'POST', `/api/v1/conversations/${uuid}/messages`, K, { body: '' });
+  assert.equal(invalid.body.ok, false);
+  assert.equal(invalid.body.status, 400);
+  // The conversation open in AKENO Native.
+  assert.equal((await local(daemon.port, 'POST', '/api/native/focus', K, { conversationId: null })).status, 200);
+  assert.equal((await local(daemon.port, 'POST', '/api/native/focus', K, { conversationId: uuid })).status, 200);
+  for (const body of [{ conversationId: '../x' }, { conversationId: 5 }, {}, { conversationId: 'a'.repeat(40) }])
+    assert.equal((await local(daemon.port, 'POST', '/api/native/focus', K, body)).status, 400, JSON.stringify(body));
+  assert.equal((await local(daemon.port, 'POST', '/api/native/focus', { 'X-Akeno-Token': daemon.token }, { conversationId: null })).status, 404,
+    'the page has no focus route');
   // The page keeps working as before.
   assert.equal((await local(daemon.port, 'GET', '/api/state', { 'X-Akeno-Token': daemon.token })).status, 200);
   const daemonLog = readFileSync(join(akenoDir, 'akeno.log'), 'utf8');
-  assert.match(daemonLog, /native\.ready Native interface 1 ready/);
+  assert.match(daemonLog, /native\.ready Native interface 2 ready/);
+  assert.match(daemonLog, /native\.write PUT \/presence/);
+  // native.write names the route only (the client library's existing http.response line logs failed paths, as for the page).
+  for (const line of daemonLog.split('\n').filter((l) => l.includes('native.write'))) assert.ok(!line.includes(uuid), line);
   assert.match(daemonLog, /native\.denied/);
   assert.ok(!daemonLog.includes(key), 'the key is never logged');
 });
@@ -406,11 +441,14 @@ await step('AKENO Native: friends, live presence, a friend request and a profile
     'sync bob-status', 'until text 20000 Back at nine', `shot ${shots}/e2e-friends-live.png`,
     // bob's profile
     'pad cross', 'expect screen profile', 'until profile 15000', 'wait 300', 'expect text @it_bob', 'expect text Speedrunner from the e2e test',
-    'expect text friend', 'expect text Not playing right now', `shot ${shots}/e2e-profile.png`, 'pad circle', 'pad circle', 'expect screen home',
+    // the relationship pill of the redesigned profile (0.2 showed "· friend" after the online ID)
+    'expect text Friends', 'expect notext Friend request sent', 'expect notext Wants to be your friend',
+    // bob plays nothing and has no history: no NOW PLAYING card, the empty Recently Played state
+    'expect notext NOW PLAYING', 'expect text RECENTLY PLAYED', 'expect text No games played recently.', `shot ${shots}/e2e-profile.png`, 'pad circle', 'pad circle', 'expect screen home',
     'expect text 1 ONLINE',
     // your own profile
-    'pad right', 'pad right', 'pad right', 'expect focus profile', 'pad cross', 'until profile 15000', 'wait 300', 'expect text @it_alice',
-    'expect text you', 'pad circle',
+    'pad right', 'pad right', 'pad right', 'pad right', 'expect focus profile', 'pad cross', 'until profile 15000', 'wait 300', 'expect text @it_alice',
+    'expect text You', 'expect notext Friend request sent', 'pad circle',
     // activity
     'pad right', 'pad cross', 'expect screen activity', 'until activity 15000', 'wait 300', 'expect text YOUR RECENT GAMES',
     'expect text No games tracked yet.', 'expect text None of your friends is playing right now.', `shot ${shots}/e2e-activity.png`,
@@ -430,9 +468,10 @@ await step('AKENO Native: friends, live presence, a friend request and a profile
   assert.equal(upgrades.length, 1, `realtime sessions: ${upgrades.map((r) => r.line).join(' | ')}`);
   assert.ok(upgrades[0].at < startedAt, 'the session predates AKENO Native');
   const report = readFileSync(join(nativeDir, 'native-report.txt'), 'utf8');
-  assert.match(report, /State:\s+Connected to the AKENO daemon: protocol 1, daemon 0\.5\.0-alpha \([0-9a-f]+-linux-native-ipc\)/);
+  assert.match(report, /State:\s+Connected to the AKENO daemon: protocol 2, daemon 0\.5\.0-alpha \([0-9a-f]+-linux-native-ipc\)/);
   assert.match(report, /Friends:\s+1 \(1 online, 0 playing\), 1 incoming and 0 outgoing requests/);
-  assert.match(report, /Requests:\s+\d+ \(GET only\), 0 errors, \d+ event polls, [1-9]\d* events, 1 connects/);
+  // Browsing friends, profiles and activity writes nothing.
+  assert.match(report, /Requests:\s+\d+ \(0 writes, 0 failed\), 0 errors, \d+ event polls, [1-9]\d* events, 1 connects/);
   assert.match(report, /Signed in as:\s+it_alice \(@it_alice\)/);
   const nativeLog = readFileSync(join(nativeDir, 'native.log'), 'utf8');
   for (const text of [report, nativeLog]) {
@@ -441,6 +480,235 @@ await step('AKENO Native: friends, live presence, a friend request and a profile
   }
   assert.ok(readdirSync(akenoDir).every((f) => ['akeno.log', 'ca.pem', 'device.json', 'instance.key', 'native.key', 'settings.json'].includes(f)),
     `daemon folder: ${readdirSync(akenoDir)}`);
+});
+
+await step('AKENO Native: messages, the controller keyboard, party, requests and settings through the write list', async () => {
+  // bob wrote to alice on the website before she opened AKENO Native
+  const conv = await bob.request('POST', '/conversations', { userId: alice.user.id });
+  assert.equal(conv.status, 200, JSON.stringify(conv.body));
+  const convId = conv.body.id;
+  const say = async (who, body) => {
+    const r = await who.request('POST', `/conversations/${convId}/messages`, { body, clientMessageId: randomUUID() });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+  };
+  await say(bob, 'Hi from the website');
+  const daemonOutAt = () => daemon.stdout.length;
+  const checks = {};
+  let leftAt = 0;
+  let partyId = null;
+  const run = await runNative({ AKENO_NATIVE_AKENO_DIR: akenoDir, AKENO_NATIVE_DIR: nativeDir, AKENO_NATIVE_DAEMON_PORT: String(daemon.port),
+    AKENO_NATIVE_SYNC_DIR: syncDir }, [
+    'until ipc 15000', 'until friends 15000', 'wait 500',
+    // Messages: the conversation with its unread message, then the thread
+    'pad right', 'expect focus messages', 'pad cross', 'expect screen messages', 'until text 15000 Hi from the website',
+    'expect text 1 unread message', `shot ${shots}/e2e-messages.png`,
+    'pad cross', 'expect screen chat', 'until text 15000 Hi from the website', 'expect text Press Cross to write a message',
+    // alice answers with the controller keyboard: H (Shift is on for the first letter), i, space, 8, 8
+    'pad cross', 'expect dialog keyboard', 'pad down', 'pad right', 'pad right', 'pad right', 'pad right', 'pad right', 'pad cross',
+    'pad up', 'pad right', 'pad right', 'pad cross', 'pad triangle', 'pad up', 'pad cross', 'pad cross', 'expect text Hi 88',
+    `shot ${shots}/e2e-keyboard.png`, 'pad options', 'expect dialog none', 'sync check-sent',
+    // bob answers while the conversation is open: it appears live, and the daemon shows no system notification for it
+    'sync bob-reply', 'until text 20000 Reply while open', `shot ${shots}/e2e-chat.png`, 'wait 1500', 'sync check-quiet',
+    // leaving the conversation: the next message is a system notification again
+    'pad circle', 'expect screen messages', 'pad circle', 'expect screen home', 'wait 800', 'sync bob-after',
+    // Party: an invitation arrives live; accept it, open the party chat, leave
+    'pad right', 'expect focus parties', 'pad cross', 'expect screen party', 'until text 15000 Create a party', 'sync bob-party',
+    'until text 20000 invited you', 'pad down', 'pad cross', 'until text 20000 YOUR PARTY', 'until text 20000 Party chat', 'sync check-joined',
+    `shot ${shots}/e2e-party.png`,
+    'pad up', 'expect text Leave the party', 'pad cross', 'expect screen chat', 'expect text Party chat', 'pad circle', 'expect screen party',
+    'pad down', 'pad down', 'pad cross', 'expect dialog confirm', 'pad left', 'pad cross', 'until text 20000 Create a party', 'sync check-left',
+    // Inbox: carol's friend request, accepted here
+    'pad circle', 'expect screen home', 'pad right', 'expect focus inbox', 'pad cross', 'expect screen inbox',
+    'until text 15000 wants to be your friend', `shot ${shots}/e2e-inbox.png`, 'pad cross', 'until text 20000 are now friends', 'sync check-carol',
+    // Settings: a daemon setting and your status
+    'pad circle', 'pad right', 'pad right', 'pad right', 'expect focus settings', 'pad cross', 'expect screen settings',
+    'until text 10000 Message notifications', 'wait 500', 'pad cross', 'until text 10000 Message notifications off.', 'sync check-setting-off',
+    'pad cross', 'until text 10000 Message notifications on.', 'pad down', 'pad down', 'pad down', 'pad cross', 'until text 10000 Your status is now Away',
+    'sync check-away', `shot ${shots}/e2e-settings.png`, 'pad square', 'until text 10000 Your status is now Online',
+    'pad circle', 'pad circle', 'expect dialog exit', 'pad left', 'pad cross',
+  ], {
+    'check-sent': async () => {
+      await waitFor(async () => {
+        const page = await bob.request('GET', `/conversations/${convId}/messages`);
+        return page.body.messages.some((m) => m.body === 'Hi 88');
+      }, 'the message on the server', 15_000);
+      const page = await bob.request('GET', `/conversations/${convId}/messages`);
+      checks.sent = page.body.messages.filter((m) => m.body === 'Hi 88');
+      // read on the server: alice's unread count is 0
+      await waitFor(async () => (await alice.request('GET', '/conversations')).body.conversations.find((c) => c.id === convId).unreadCount === 0,
+        'the conversation marked read', 10_000);
+      checks.read = true;
+    },
+    'bob-reply': async () => {
+      checks.quietFrom = daemonOutAt();
+      await say(bob, 'Reply while open');
+    },
+    'check-quiet': async () => {
+      checks.quietOut = daemon.stdout.slice(checks.quietFrom);
+    },
+    'bob-after': async () => {
+      leftAt = daemonOutAt();
+      await say(bob, 'Reply after leaving');
+      await waitFor(() => daemon.stdout.slice(leftAt).includes('Reply after leaving'), 'a system notification after leaving', 10_000);
+      checks.notifiedAfter = true;
+    },
+    'bob-party': async () => {
+      const party = await bob.request('POST', '/parties', { name: 'E2E party', privacy: 'invite_only' });
+      assert.equal(party.status, 201, JSON.stringify(party.body));
+      partyId = party.body.id;
+      const inv = await bob.request('POST', `/parties/${partyId}/invitations`, { userId: alice.user.id });
+      assert.equal(inv.status, 201, JSON.stringify(inv.body));
+    },
+    'check-joined': async () => {
+      const p = await bob.request('GET', `/parties/${partyId}`);
+      checks.joined = p.body.memberCount;
+    },
+    'check-left': async () => {
+      await waitFor(async () => (await bob.request('GET', `/parties/${partyId}`)).body.memberCount === 1, 'alice left the party', 10_000);
+      checks.left = true;
+    },
+    'check-carol': async () => {
+      await waitFor(async () => (await carol.request('GET', '/friends')).body.friends.some((f) => f.id === alice.user.id), 'carol and alice friends', 10_000);
+      checks.carol = true;
+    },
+    'check-setting-off': async () => {
+      checks.notifyOff = (await local(daemon.port, 'GET', '/api/state', { 'X-Akeno-Token': daemon.token })).body.notifications.messages;
+    },
+    'check-away': async () => {
+      await waitFor(async () => (await bob.request('GET', '/friends')).body.friends.find((f) => f.id === alice.user.id)?.presence.status === 'away',
+        'alice away for bob', 10_000);
+      checks.away = true;
+    },
+  });
+  assert.equal(run.code, 0, `native exit ${run.code} ${run.signal}\n${run.output.slice(-4000)}`);
+  assert.equal(checks.sent?.length, 1, 'the message reached the server exactly once');
+  assert.equal(checks.sent[0].sender.id, alice.user.id);
+  assert.ok(checks.read, 'the open conversation was marked read on the server');
+  assert.ok(checks.quietOut !== undefined && !checks.quietOut.includes('Reply while open'),
+    'no system notification for a message in the conversation open in AKENO Native');
+  assert.ok(checks.notifiedAfter, 'a system notification once the conversation is closed');
+  assert.equal(checks.joined, 2, 'accepting the invitation joined the party');
+  assert.ok(checks.left, 'leaving the party reached the server');
+  assert.ok(checks.carol, 'accepting the friend request reached the server');
+  assert.equal(checks.notifyOff, false, 'the daemon setting changed through the native interface');
+  assert.ok(checks.away, 'the status change reached friends');
+  // still one realtime session for the console: AKENO Native opened none
+  assert.equal(tlsRequests.filter((r) => r.upgrade).length, 1);
+  const report = readFileSync(join(nativeDir, 'native-report.txt'), 'utf8');
+  assert.match(report, /Requests:\s+\d+ \([1-9]\d* writes, 0 failed\)/);
+  const nativeLog = readFileSync(join(nativeDir, 'native.log'), 'utf8');
+  for (const text of [report, nativeLog])
+    for (const secret of [key, 'Hi 88', 'Reply while open', 'Hi from the website', 'E2E party', convId]) assert.ok(!text.includes(secret), `not logged: ${secret}`);
+  const daemonLog = readFileSync(join(akenoDir, 'akeno.log'), 'utf8');
+  for (const route of ['POST /conversations/:id/messages', 'POST /conversations/:id/read', 'POST /invitations/:id/accept', 'POST /parties/:id/leave',
+    'POST /friends/requests/:id/accept', 'PUT /presence'])
+    assert.ok(daemonLog.includes(`native.write ${route}`), route);
+});
+
+/** Counts the pixels of a screenshot (8-bit RGBA PNG as SDL writes it) close to a colour. */
+function countColour(path, rgb, tolerance) {
+  const buf = readFileSync(path);
+  let pos = 8;
+  let width = 0;
+  let height = 0;
+  const idat = [];
+  while (pos < buf.length) {
+    const len = buf.readUInt32BE(pos);
+    const type = buf.toString('ascii', pos + 4, pos + 8);
+    if (type === 'IHDR') {
+      width = buf.readUInt32BE(pos + 8);
+      height = buf.readUInt32BE(pos + 12);
+    } else if (type === 'IDAT') idat.push(buf.subarray(pos + 8, pos + 8 + len));
+    pos += 12 + len;
+  }
+  const raw = inflateSync(Buffer.concat(idat));
+  const stride = width * 4 + 1;
+  let n = 0;
+  for (let y = 0; y < height; y++) {
+    if (raw[y * stride] !== 0) throw new Error('unexpected PNG filter');
+    for (let x = 0; x < width; x++) {
+      const o = y * stride + 1 + x * 4;
+      if (Math.abs(raw[o] - rgb[0]) <= tolerance && Math.abs(raw[o + 1] - rgb[1]) <= tolerance && Math.abs(raw[o + 2] - rgb[2]) <= tolerance) n++;
+    }
+  }
+  return n;
+}
+
+await step('AKENO Native: an uninstalled game keeps its administrator-verified cover (no local icon)', async () => {
+  // An administrator verifies the title and uploads its cover (solid magenta, so the screenshot can find it).
+  const TITLE = 'PPSA09999';
+  const game = await admin.request('POST', '/admin/games', { name: 'Magenta Run', titleIds: [TITLE] });
+  assert.equal(game.status, 201, JSON.stringify(game.body));
+  const sharp = serverRequire('sharp');
+  const cover = await sharp({ create: { width: 600, height: 900, channels: 3, background: { r: 255, g: 0, b: 255 } } }).jpeg({ quality: 95 }).toBuffer();
+  const upload = await fetch(`http://127.0.0.1:${backendPort}/api/v1/admin/games/${game.body.id}/artwork/cover`, {
+    method: 'PUT', body: cover, headers: { 'Content-Type': 'image/jpeg', Origin: origin, Cookie: admin.cookie, 'X-CSRF-Token': admin.csrf },
+  });
+  assert.equal(upload.status, 200, await upload.text());
+  // This console played the game (its detection reports the title with the console's own credential), then it was closed.
+  const device = JSON.parse(readFileSync(join(akenoDir, 'device.json'), 'utf8'));
+  const asConsole = (path, body) => fetch(`http://127.0.0.1:${backendPort}/api/v1${path}`, {
+    method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${device.accessToken}` },
+  });
+  assert.equal((await asConsole('/activity/heartbeat', { titleId: TITLE, titleName: 'Console name of the game', platform: 'PS5' })).status, 200);
+  assert.equal((await asConsole('/activity/stop', { reason: 'closed' })).status, 200);
+  const history = await alice.request('GET', '/users/it_alice/activity');
+  const entry = history.body.recentGames.find((g) => g.titleId === TITLE);
+  assert.ok(entry?.art?.cover, 'the server attaches the verified cover to the history entry');
+  // The daemon has no metadata root here: the game is not installed, there is no local icon0.png.
+  const run = await runNative({ AKENO_NATIVE_AKENO_DIR: akenoDir, AKENO_NATIVE_DIR: nativeDir, AKENO_NATIVE_DAEMON_PORT: String(daemon.port),
+    AKENO_NATIVE_SYNC_DIR: syncDir }, [
+    'until ipc 15000', 'until friends 15000', 'wait 300', 'pad right', 'pad right', 'pad right', 'pad right', 'expect focus profile', 'pad cross',
+    'until profile 15000', 'wait 300', 'expect text RECENTLY PLAYED', 'expect text Magenta Run', 'wait 500', 'until pictures 15000', 'wait 300',
+    `shot ${shots}/e2e-artwork-uninstalled.png`, 'pad circle', 'pad circle', 'expect dialog exit', 'pad left', 'pad cross',
+  ], {});
+  assert.equal(run.code, 0, `native exit ${run.code} ${run.signal}\n${run.output.slice(-3000)}`);
+  // A 160 x 240 cover card is drawn in the server's magenta (a placeholder would be dark blue with initials).
+  const magenta = countColour(join(shots, 'e2e-artwork-uninstalled.png'), [255, 0, 255], 24);
+  assert.ok(magenta > 20000, `the verified cover is on screen (${magenta} magenta pixels)`);
+  const report = readFileSync(join(nativeDir, 'native-report.txt'), 'utf8');
+  assert.match(report, /Pictures:\s+\d+ asked for, [1-9]\d* shown/);
+});
+
+if (companionBinary) await step('In-Game Companion (experimental): the menu from the real server, a status change and an accepted invitation', async () => {
+  // asynchronous: this process also runs the TLS terminator the daemon talks to
+  const check = (...extra) => new Promise((done) => {
+    const child = spawn(companionBinary, ['--port', String(daemon.port), '--akeno-dir', akenoDir, ...extra], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => (stdout += d));
+    child.stderr.on('data', (d) => (stderr += d));
+    child.on('exit', (status) => done({ status, stdout, stderr }));
+  });
+  // bob writes to alice and invites her to a new party
+  const conv = await bob.request('POST', '/conversations', { userId: alice.user.id });
+  assert.equal((await bob.request('POST', `/conversations/${conv.body.id}/messages`, { body: 'gg, party?', clientMessageId: randomUUID() })).status, 201);
+  const party = await bob.request('POST', '/parties', { name: 'Companion party', privacy: 'invite_only' });
+  assert.equal(party.status, 201, JSON.stringify(party.body));
+  assert.equal((await bob.request('POST', `/parties/${party.body.id}/invitations`, { userId: alice.user.id })).status, 201);
+  let r = await check();
+  assert.equal(r.status, 0, r.stderr + r.stdout);
+  assert.match(r.stdout, /AKENO QUICK MENU/);
+  assert.match(r.stdout, /Friends\s+\d+ online/);
+  // bob's unread "Reply after leaving" from the messages step, and the new one
+  assert.match(r.stdout, /Messages\s+2 unread in 1 conversation/);
+  assert.match(r.stdout, /Party\s+Not in a party/);
+  assert.match(r.stdout, /Invitations\s+1 party invitation/);
+  assert.match(r.stdout, /Status\s+Online as @it_alice/);
+  assert.match(r.stdout, /it_bob \(2\): gg, party\?/);
+  assert.match(r.stdout, /Invitation: it_bob invited you to "Companion party"/);
+  assert.match(r.stdout, /OnionHEN page: valid, \d+ nodes/);
+  // the two quick actions, through the daemon's write list
+  r = await check('--presence', 'away', '--accept-invite');
+  assert.equal(r.status, 0, r.stderr + r.stdout);
+  assert.match(r.stdout, /Status\s+Away as @it_alice/);
+  assert.match(r.stdout, /Party\s+Companion party, 2 members/);
+  assert.equal((await bob.request('GET', `/parties/${party.body.id}`)).body.memberCount, 2);
+  await waitFor(async () => (await bob.request('GET', '/friends')).body.friends.find((f) => f.id === alice.user.id)?.presence.status === 'away',
+    'alice away for bob', 10_000);
+  assert.equal((await check('--presence', 'online')).status, 0);
+  // still the daemon's single realtime session; the companion opened none
+  assert.equal(tlsRequests.filter((x) => x.upgrade).length, 1);
 });
 
 await step('native-IPC daemon: stopping removes the key; the release daemon ignores it', async () => {

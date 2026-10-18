@@ -223,6 +223,8 @@ static akn_button map_key(SDL_Keycode k) {
     }
 }
 
+static void run_command(akn_app *app, akn_cmd cmd, uint64_t now);
+
 static void handle_event(akn_app *app, const SDL_Event *e, uint64_t now) {
     switch (e->type) {
     case SDL_QUIT: app->quit = 1; break;
@@ -267,11 +269,22 @@ static void handle_event(akn_app *app, const SDL_Event *e, uint64_t now) {
     }
     case SDL_KEYDOWN:
     case SDL_KEYUP: {
+        if (app->ui.dialog == AKN_DIALOG_KEYBOARD && SDL_IsTextInputActive()) { /* typing: only the editing keys act */
+            SDL_Keycode k = e->key.keysym.sym;
+            if (e->type == SDL_KEYDOWN && k == SDLK_BACKSPACE) akn_osk_backspace(&app->ui.osk);
+            if (e->type == SDL_KEYDOWN && (k == SDLK_RETURN || k == SDLK_KP_ENTER) && !(e->key.keysym.mod & KMOD_SHIFT))
+                run_command(app, AKN_CMD_KEYBOARD_SUBMIT, now);
+            if (e->type == SDL_KEYDOWN && (k == SDLK_RETURN || k == SDLK_KP_ENTER) && (e->key.keysym.mod & KMOD_SHIFT)) akn_osk_insert(&app->ui.osk, "\n");
+            if (k != SDLK_ESCAPE && k != SDLK_UP && k != SDLK_DOWN && k != SDLK_LEFT && k != SDLK_RIGHT) break;
+        }
         if (e->key.repeat) break; /* AKENO repeats D-pad directions itself */
         akn_button b = map_key(e->key.keysym.sym);
         if (b != AKN_BTN_COUNT) akn_input_button(&app->input, &app->queue, b, AKN_SRC_KEYBOARD, e->type == SDL_KEYDOWN, now);
         break;
     }
+    case SDL_TEXTINPUT: /* a USB keyboard types into the on-screen keyboard */
+        if (app->ui.dialog == AKN_DIALOG_KEYBOARD) akn_osk_insert(&app->ui.osk, e->text.text);
+        break;
     case SDL_WINDOWEVENT:
         if (e->window.event == SDL_WINDOWEVENT_FOCUS_LOST) akn_input_release_source(&app->input, &app->queue, AKN_SRC_KEYBOARD, now);
         break;
@@ -295,6 +308,14 @@ static void poll_pad_status(akn_app *app, uint64_t now) {
     }
     app->pad_disconnected = app->pad_seen && (!app->pad || (st.has_handle && !st.connected));
     app->pad_status = st;
+}
+
+/* The Connection screen checks the account once when it is first opened. */
+static void run_net_check_if_never(akn_app *app) {
+    SDL_LockMutex(app->lock);
+    int never = app->account.checks == 0 && !app->net_running;
+    SDL_UnlockMutex(app->lock);
+    if (never) start_net_check(app);
 }
 
 /* ---- Social screens ---------------------------------------------------------------------------- */
@@ -322,7 +343,31 @@ static void sync_social(akn_app *app) {
         app->focus_friend_gen = s->friends_gen;
     }
     akn_ui_set_list_count(ui, AKN_SCREEN_FRIENDS, s->friends ? s->friends->count : 0);
+    akn_ui_set_list_count(ui, AKN_SCREEN_PICKER, s->friends ? s->friends->count : 0);
     akn_ui_set_list_count(ui, AKN_SCREEN_ACTIVITY, akn_social_playing_count(s));
+    akn_ui_set_list_count(ui, AKN_SCREEN_MESSAGES, s->convs ? s->convs->count : 0);
+    akn_party_row prows[AKN_PARTY_ROWS_MAX];
+    akn_ui_set_list_count(ui, AKN_SCREEN_PARTY, akn_party_rows(&s->party, s->inbox, s->joinable, prows, AKN_PARTY_ROWS_MAX));
+    akn_inbox_row irows[AKN_INBOX_ROWS_MAX];
+    akn_ui_set_list_count(ui, AKN_SCREEN_INBOX, akn_social_inbox_rows(s, irows, AKN_INBOX_ROWS_MAX));
+    akn_ui_set_list_count(ui, AKN_SCREEN_SETTINGS, AKN_SET_COUNT);
+    /* the outcome of a write */
+    if (s->result_seq != app->result_seen) {
+        app->result_seen = s->result_seq;
+        akn_ui_toast(ui, s->result, akn_platform_now_ms(), s->result_error ? 5000 : 3000);
+    }
+    /* a conversation the worker found (writing to a friend) */
+    if (s->open_chat_ready) {
+        s->open_chat_ready = 0;
+        if (ui->dialog == AKN_DIALOG_NONE) akn_ui_open_chat(ui, ui->screen == AKN_SCREEN_CHAT ? ui->chat_back : ui->screen);
+    }
+    /* the conversation on screen, for the daemon's notifications and for marking it read */
+    const char *focus = ui->screen == AKN_SCREEN_CHAT && s->thread_conv.id[0] ? s->thread_conv.id : "";
+    if (strcmp(focus, s->focus_conv) != 0) {
+        snprintf(s->focus_conv, sizeof(s->focus_conv), "%s", focus);
+        s->focus_dirty = 1;
+        SDL_CondSignal(app->social_cond);
+    }
     int f = ui->focus[AKN_SCREEN_FRIENDS];
     if (s->friends && f >= 0 && f < s->friends->count) snprintf(app->focus_friend_id, sizeof(app->focus_friend_id), "%s", s->friends->items[f].id);
     else app->focus_friend_id[0] = '\0';
@@ -341,6 +386,11 @@ static void opened_social_screen(akn_app *app) {
         if (s->own_activity_load == AKN_LOAD_NONE) s->own_activity_load = AKN_LOAD_LOADING;
         if (s->friends_load != AKN_LOAD_OK) want |= AKN_WANT_FRIENDS;
     }
+    if (app->ui.screen == AKN_SCREEN_MESSAGES) want |= AKN_WANT_CONVERSATIONS;
+    if (app->ui.screen == AKN_SCREEN_PARTY) want |= AKN_WANT_PARTY | AKN_WANT_INBOX | (s->friends_load != AKN_LOAD_OK ? AKN_WANT_FRIENDS : 0);
+    if (app->ui.screen == AKN_SCREEN_INBOX) want |= AKN_WANT_INBOX;
+    if (app->ui.screen == AKN_SCREEN_SETTINGS) want |= AKN_WANT_STATE;
+    if (app->ui.screen == AKN_SCREEN_PICKER && s->friends_load != AKN_LOAD_OK) want |= AKN_WANT_FRIENDS;
     SDL_UnlockMutex(app->lock);
     if (want) akn_social_want(app, want);
 }
@@ -377,11 +427,430 @@ static void refresh_screen(akn_app *app, uint64_t now) {
     if (app->ui.screen == AKN_SCREEN_FRIENDS) want |= AKN_WANT_FRIENDS;
     else if (app->ui.screen == AKN_SCREEN_PROFILE) want |= AKN_WANT_PROFILE;
     else if (app->ui.screen == AKN_SCREEN_ACTIVITY) want |= AKN_WANT_STATE | AKN_WANT_OWN_ACTIVITY | AKN_WANT_FRIENDS;
+    else if (app->ui.screen == AKN_SCREEN_MESSAGES) want |= AKN_WANT_CONVERSATIONS;
+    else if (app->ui.screen == AKN_SCREEN_CHAT) {
+        want |= AKN_WANT_THREAD;
+        if (akn_social_retry_failed(app) > 0) {
+            akn_ui_toast(&app->ui, "Sending the failed messages again...", now, 2000);
+            akn_social_want(app, want);
+            return;
+        }
+    } else if (app->ui.screen == AKN_SCREEN_PARTY) want |= AKN_WANT_PARTY | AKN_WANT_INBOX;
+    else if (app->ui.screen == AKN_SCREEN_INBOX) want |= AKN_WANT_INBOX;
+    else if (app->ui.screen == AKN_SCREEN_SETTINGS) want |= AKN_WANT_STATE | AKN_WANT_ME;
+    else if (app->ui.screen == AKN_SCREEN_PICKER) want |= AKN_WANT_FRIENDS;
     SDL_LockMutex(app->lock);
     if (app->social.ipc == AKN_IPC_READY) want &= ~(unsigned)AKN_WANT_RECONNECT;
     SDL_UnlockMutex(app->lock);
     akn_social_want(app, want);
     akn_ui_toast(&app->ui, "Loading again...", now, 1500);
+}
+
+/* ---- Messages, party, inbox, settings ------------------------------------------------------------ */
+
+/* An ID from the server as one URL path segment: letters, digits and '-' only. */
+static int safe_id(const char *id) {
+    size_t n = strlen(id);
+    if (n == 0 || n > 64) return 0;
+    for (size_t i = 0; i < n; i++)
+        if (!((id[i] >= 'a' && id[i] <= 'z') || (id[i] >= 'A' && id[i] <= 'Z') || (id[i] >= '0' && id[i] <= '9') || id[i] == '-')) return 0;
+    return 1;
+}
+
+static void need_writes(akn_app *app, uint64_t now) {
+    akn_ui_toast(&app->ui,
+                 "This needs the AKENO daemon's native interface 2: send akeno-network-ps5-native-ipc.elf from this release, then try again.",
+                 now, 6000);
+}
+
+/* Queues a write with an ID in its path; toasts when it cannot. */
+/* path: prefix, then the ID when there is one, then suffix (e.g. "/api/v1/parties/" ID "/leave"). */
+static void act(akn_app *app, akn_action_kind kind, const char *method, const char *prefix, const char *id, const char *body, const char *label,
+                uint64_t now) {
+    if (!akn_social_can_write(app)) {
+        need_writes(app, now);
+        return;
+    }
+    akn_action a;
+    memset(&a, 0, sizeof(a));
+    a.kind = kind;
+    snprintf(a.method, sizeof(a.method), "%s", method);
+    if (id) {
+        if (!safe_id(id)) return;
+        const char *suffix = strstr(prefix, "%s");
+        snprintf(a.path, sizeof(a.path), "%.*s%s%s", suffix ? (int)(suffix - prefix) : (int)strlen(prefix), prefix, id, suffix ? suffix + 2 : "");
+    } else {
+        snprintf(a.path, sizeof(a.path), "%s", prefix);
+    }
+    snprintf(a.body, sizeof(a.body), "%s", body ? body : "");
+    snprintf(a.label, sizeof(a.label), "%s", label ? label : "");
+    if (id) snprintf(a.target, sizeof(a.target), "%s", id);
+    if (akn_social_act(app, &a) != 0) akn_ui_toast(&app->ui, "AKENO Native is still busy with earlier changes. Try again in a moment.", now, 3000);
+    else akn_ui_toast(&app->ui, "One moment...", now, 1500);
+}
+
+static void open_conversation(akn_app *app, const akn_conversation *conv, akn_screen back) {
+    akn_social_open_chat(app, conv);
+    akn_ui_open_chat(&app->ui, back);
+    akn_logf(&app->log, AKN_LOG_INFO, "ui.chat", "a %s conversation", conv->kind == AKN_CONV_PARTY ? "party" : conv->kind == AKN_CONV_GROUP ? "group" : "direct");
+}
+
+static void open_chat_row(akn_app *app) {
+    akn_conversation conv;
+    int found = 0;
+    SDL_LockMutex(app->lock);
+    const akn_conv_list *l = app->social.convs;
+    if (l && app->ui.open_row >= 0 && app->ui.open_row < l->count) {
+        conv = l->items[app->ui.open_row];
+        found = 1;
+    }
+    SDL_UnlockMutex(app->lock);
+    if (found) open_conversation(app, &conv, AKN_SCREEN_MESSAGES);
+}
+
+/* Writes to a user: their direct conversation if it is in the list, else the server finds or
+ * creates it (POST /conversations) and the worker opens it. */
+static void message_user(akn_app *app, const char *user_id, const char *name, akn_screen back, uint64_t now) {
+    akn_conversation conv;
+    int found = 0;
+    SDL_LockMutex(app->lock);
+    const akn_conv_list *l = app->social.convs;
+    for (int i = 0; l && i < l->count; i++)
+        if (l->items[i].kind == AKN_CONV_DIRECT && strcmp(l->items[i].target_id, user_id) == 0) {
+            conv = l->items[i];
+            found = 1;
+            break;
+        }
+    int self = strcmp(user_id, app->social.me.id) == 0;
+    SDL_UnlockMutex(app->lock);
+    if (self) return;
+    if (found) {
+        open_conversation(app, &conv, back);
+        return;
+    }
+    if (!safe_id(user_id)) return;
+    char body[96];
+    snprintf(body, sizeof(body), "{\"userId\":\"%s\"}", user_id);
+    act(app, AKN_ACT_OPEN_DIRECT, "POST", "/api/v1/conversations", NULL, body, name, now);
+}
+
+static void message_friend(akn_app *app, uint64_t now) {
+    char id[40] = "", name[80] = "";
+    SDL_LockMutex(app->lock);
+    akn_social *s = &app->social;
+    int friend_profile = 0;
+    if (app->ui.open_row < 0) { /* the open profile */
+        snprintf(id, sizeof(id), "%s", s->profile.id);
+        snprintf(name, sizeof(name), "%s", s->profile.display_name);
+        friend_profile = strcmp(s->profile.relationship, "friend") == 0;
+    } else if (s->friends && app->ui.open_row < s->friends->count) {
+        snprintf(id, sizeof(id), "%s", s->friends->items[app->ui.open_row].id);
+        snprintf(name, sizeof(name), "%s", s->friends->items[app->ui.open_row].display_name);
+        friend_profile = 1;
+    }
+    SDL_UnlockMutex(app->lock);
+    if (!id[0]) return;
+    if (!friend_profile) {
+        akn_ui_toast(&app->ui, "AKENO Native writes to friends. Add this player as a friend on the AKENO website first.", now, 4000);
+        return;
+    }
+    message_user(app, id, name, app->ui.screen, now);
+}
+
+static void compose(akn_app *app, uint64_t now) {
+    akn_conversation conv;
+    SDL_LockMutex(app->lock);
+    conv = app->social.thread_conv;
+    SDL_UnlockMutex(app->lock);
+    if (!conv.id[0]) return;
+    if (!akn_social_can_write(app)) {
+        need_writes(app, now);
+        return;
+    }
+    if (!conv.can_send) {
+        akn_ui_toast(&app->ui, "You cannot write in this conversation right now (privacy settings, a block, or you left the party).", now, 4500);
+        return;
+    }
+    char title[160], draft[AKN_OSK_TEXT_MAX + 1] = "";
+    snprintf(title, sizeof(title), "Message to %s", conv.title);
+    if (strcmp(app->draft_conv, conv.id) == 0) snprintf(draft, sizeof(draft), "%s", app->ui.osk.text);
+    akn_ui_open_keyboard(&app->ui, AKN_KB_MESSAGE, title, draft, AKN_MSG_SEND_MAX, 0);
+    snprintf(app->draft_conv, sizeof(app->draft_conv), "%s", conv.id);
+    SDL_StartTextInput();
+}
+
+static void keyboard_submit(akn_app *app, uint64_t now) {
+    akn_ui *ui = &app->ui;
+    if (ui->osk_purpose == AKN_KB_MESSAGE) {
+        if (!akn_message_valid(ui->osk.text)) {
+            akn_ui_toast(ui, "Type a message first.", now, 2000);
+            return;
+        }
+        if (akn_social_send(app, ui->osk.text) != 0) {
+            akn_ui_toast(ui, "The message could not be sent now. Check the connection and try again.", now, 3500);
+            return;
+        }
+        akn_osk_init(&ui->osk, NULL, AKN_MSG_SEND_MAX, 0);
+        app->draft_conv[0] = '\0';
+        ui->chat_scroll = 0;
+        akn_logf(&app->log, AKN_LOG_INFO, "ui.message", "message queued"); /* never its text */
+    } else if (ui->osk_purpose == AKN_KB_PARTY_NAME) {
+        char body[400];
+        if (akn_party_create_json(ui->osk.text, 0, body, sizeof(body)) != 0) {
+            akn_ui_toast(ui, "That name cannot be used.", now, 2500);
+            return;
+        }
+        act(app, AKN_ACT_PARTY_CREATE, "POST", "/api/v1/parties", NULL, body, ui->osk.text, now);
+    }
+    akn_ui_close_dialog(ui);
+    SDL_StopTextInput();
+}
+
+static void confirm(akn_app *app, int action, const char *target, const char *label, const char *title, const char *text, const char *yes) {
+    snprintf(app->confirm_target, sizeof(app->confirm_target), "%s", target);
+    snprintf(app->confirm_label, sizeof(app->confirm_label), "%s", label);
+    akn_ui_open_confirm(&app->ui, action, title, text, yes);
+}
+
+static void confirmed(akn_app *app, uint64_t now) {
+    switch (app->ui.confirm_action) {
+    case AKN_CONFIRM_LEAVE_PARTY:
+        act(app, AKN_ACT_PARTY_LEAVE, "POST", "/api/v1/parties/%s/leave", app->confirm_target, NULL, app->confirm_label, now);
+        break;
+    case AKN_CONFIRM_DECLINE_INVITATION:
+        act(app, AKN_ACT_INVITATION_DECLINE, "POST", "/api/v1/invitations/%s/decline", app->confirm_target, NULL, app->confirm_label, now);
+        break;
+    case AKN_CONFIRM_DECLINE_REQUEST:
+        act(app, AKN_ACT_REQUEST_DECLINE, "POST", "/api/v1/friends/requests/%s/decline", app->confirm_target, NULL, app->confirm_label, now);
+        break;
+    default: break;
+    }
+}
+
+static void party_row(akn_app *app, uint64_t now) {
+    akn_party_row rows[AKN_PARTY_ROWS_MAX];
+    akn_party_row r;
+    char id[40] = "", name[100] = "", conv_id[40] = "";
+    int secondary = app->ui.row_secondary, members = 0, valid = 0, self = 0;
+    SDL_LockMutex(app->lock);
+    akn_social *s = &app->social;
+    int n = akn_party_rows(&s->party, s->inbox, s->joinable, rows, AKN_PARTY_ROWS_MAX);
+    if (app->ui.open_row >= 0 && app->ui.open_row < n) {
+        r = rows[app->ui.open_row];
+        valid = 1;
+        switch (r.kind) {
+        case AKN_PROW_CHAT:
+        case AKN_PROW_INVITE:
+        case AKN_PROW_LEAVE:
+            snprintf(id, sizeof(id), "%s", s->party.id);
+            snprintf(name, sizeof(name), "%s", s->party.name[0] ? s->party.name : "the party");
+            snprintf(conv_id, sizeof(conv_id), "%s", s->party.conversation_id);
+            members = s->party.member_count;
+            break;
+        case AKN_PROW_MEMBER:
+            snprintf(id, sizeof(id), "%s", s->party.members[r.index].id);
+            snprintf(name, sizeof(name), "%s", s->party.members[r.index].display_name);
+            self = strcmp(id, s->me.id) == 0;
+            break;
+        case AKN_PROW_INVITATION:
+            snprintf(id, sizeof(id), "%s", s->inbox->invitations[r.index].id);
+            snprintf(name, sizeof(name), "%s", s->inbox->invitations[r.index].target_name);
+            break;
+        case AKN_PROW_JOINABLE:
+            snprintf(id, sizeof(id), "%s", s->joinable->items[r.index].id);
+            snprintf(name, sizeof(name), "%s", s->joinable->items[r.index].name[0] ? s->joinable->items[r.index].name : "the party");
+            break;
+        case AKN_PROW_CREATE: break;
+        }
+    }
+    SDL_UnlockMutex(app->lock);
+    if (!valid) return;
+    switch (r.kind) {
+    case AKN_PROW_CREATE:
+        if (!akn_social_can_write(app)) {
+            need_writes(app, now);
+            return;
+        }
+        akn_ui_open_keyboard(&app->ui, AKN_KB_PARTY_NAME, "Name your party (optional), then press Options", "", 48, 1);
+        SDL_StartTextInput();
+        break;
+    case AKN_PROW_CHAT: {
+        akn_conversation conv;
+        memset(&conv, 0, sizeof(conv));
+        conv.kind = AKN_CONV_PARTY;
+        snprintf(conv.id, sizeof(conv.id), "%s", conv_id);
+        snprintf(conv.target_id, sizeof(conv.target_id), "%s", id);
+        snprintf(conv.title, sizeof(conv.title), "%.79s", name);
+        conv.can_send = 1;
+        conv.members = members;
+        open_conversation(app, &conv, AKN_SCREEN_PARTY);
+        break;
+    }
+    case AKN_PROW_INVITE: akn_ui_open_picker(&app->ui, AKN_SCREEN_PARTY, AKN_PICK_INVITE); break;
+    case AKN_PROW_LEAVE:
+        confirm(app, AKN_CONFIRM_LEAVE_PARTY, id, name, "Leave the party?", "You can join again while it is open, or be invited again.", "Leave");
+        break;
+    case AKN_PROW_MEMBER:
+        if (secondary) {
+            if (!self) message_user(app, id, name, AKN_SCREEN_PARTY, now);
+        } else {
+            app->ui.profile_back = AKN_SCREEN_PARTY;
+            akn_ui_open_screen(&app->ui, AKN_SCREEN_PROFILE);
+            akn_social_open_profile(app, id, self);
+        }
+        break;
+    case AKN_PROW_INVITATION:
+        if (secondary) confirm(app, AKN_CONFIRM_DECLINE_INVITATION, id, name, "Decline the invitation?", name, "Decline");
+        else act(app, AKN_ACT_INVITATION_ACCEPT, "POST", "/api/v1/invitations/%s/accept", id, NULL, name, now);
+        break;
+    case AKN_PROW_JOINABLE:
+        if (!secondary) act(app, AKN_ACT_PARTY_JOIN, "POST", "/api/v1/parties/%s/join", id, NULL, name, now);
+        break;
+    }
+}
+
+static void inbox_row(akn_app *app, uint64_t now) {
+    akn_inbox_row rows[AKN_INBOX_ROWS_MAX];
+    akn_inbox_row r;
+    char id[40] = "", name[160] = "";
+    int valid = 0, secondary = app->ui.row_secondary;
+    SDL_LockMutex(app->lock);
+    akn_social *s = &app->social;
+    int n = akn_social_inbox_rows(s, rows, AKN_INBOX_ROWS_MAX);
+    if (app->ui.open_row >= 0 && app->ui.open_row < n) {
+        r = rows[app->ui.open_row];
+        valid = 1;
+        if (r.kind == AKN_IROW_REQUEST) {
+            snprintf(id, sizeof(id), "%s", s->inbox->incoming[r.index].id);
+            snprintf(name, sizeof(name), "%s", s->inbox->incoming[r.index].display_name);
+        } else if (r.kind == AKN_IROW_INVITATION) {
+            const akn_invitation *v = &s->inbox->invitations[r.index];
+            snprintf(id, sizeof(id), "%s", v->id);
+            snprintf(name, sizeof(name), "the %s \"%s\"", akn_invitation_kind_label(v->kind), v->target_name);
+        }
+    }
+    SDL_UnlockMutex(app->lock);
+    if (!valid) return;
+    switch (r.kind) {
+    case AKN_IROW_REQUEST:
+        if (secondary) confirm(app, AKN_CONFIRM_DECLINE_REQUEST, id, name, "Decline the friend request?", name, "Decline");
+        else act(app, AKN_ACT_REQUEST_ACCEPT, "POST", "/api/v1/friends/requests/%s/accept", id, NULL, name, now);
+        break;
+    case AKN_IROW_INVITATION:
+        if (secondary) confirm(app, AKN_CONFIRM_DECLINE_INVITATION, id, name, "Decline the invitation?", name, "Decline");
+        else act(app, AKN_ACT_INVITATION_ACCEPT, "POST", "/api/v1/invitations/%s/accept", id, NULL, name, now);
+        break;
+    case AKN_IROW_NOTIFICATIONS:
+        act(app, AKN_ACT_NOTIFICATIONS_READ, "POST", "/api/v1/notifications/read", NULL, "{\"all\":true}", "", now);
+        break;
+    }
+}
+
+static void settings_row(akn_app *app, uint64_t now) {
+    int row = app->ui.open_row;
+    SDL_LockMutex(app->lock);
+    akn_daemon_info d = app->social.daemon;
+    char pref[16];
+    snprintf(pref, sizeof(pref), "%s", app->social.presence_pref);
+    if (!pref[0]) {
+        akn_presence p = app->social.me.presence.status;
+        snprintf(pref, sizeof(pref), "%s", p == AKN_PRES_AWAY ? "away" : p == AKN_PRES_DND ? "dnd" : "online");
+    }
+    SDL_UnlockMutex(app->lock);
+    char body[80];
+    switch ((akn_setting_row)row) {
+    case AKN_SET_NOTIFY_MESSAGES:
+    case AKN_SET_NOTIFY_SOCIAL:
+    case AKN_SET_ACTIVITY: {
+        if (!d.settings_known) {
+            akn_ui_toast(&app->ui, "The settings are still loading.", now, 2000);
+            return;
+        }
+        const char *key = row == AKN_SET_NOTIFY_MESSAGES ? "notifyMessages" : row == AKN_SET_NOTIFY_SOCIAL ? "notifySocial" : "activityEnabled";
+        int value = row == AKN_SET_NOTIFY_MESSAGES ? d.notify_messages : row == AKN_SET_NOTIFY_SOCIAL ? d.notify_social : d.activity_enabled;
+        snprintf(body, sizeof(body), "{\"%s\":%s}", key, value ? "false" : "true");
+        const char *label = row == AKN_SET_NOTIFY_MESSAGES ? (value ? "Message notifications off." : "Message notifications on.")
+                            : row == AKN_SET_NOTIFY_SOCIAL ? (value ? "Friend and invitation notifications off." : "Friend and invitation notifications on.")
+                                                           : (value ? "Game activity is no longer shared." : "Game activity is shared again.");
+        act(app, AKN_ACT_SETTING, "POST", "/api/settings", NULL, body, label, now);
+        break;
+    }
+    case AKN_SET_PRESENCE: {
+        static const char *const order[] = { "online", "away", "dnd", "invisible" };
+        int i = 0;
+        while (i < 4 && strcmp(order[i], pref) != 0) i++;
+        const char *next = order[(i + (app->ui.row_secondary ? 3 : 1)) % 4];
+        snprintf(body, sizeof(body), "{\"status\":\"%s\"}", next);
+        act(app, AKN_ACT_PRESENCE, "PUT", "/api/v1/presence", NULL, body, next, now);
+        break;
+    }
+    case AKN_SET_CONNECTION: akn_ui_open_screen(&app->ui, AKN_SCREEN_CONNECTION); run_net_check_if_never(app); break;
+    case AKN_SET_SYSTEM: akn_ui_open_screen(&app->ui, AKN_SCREEN_SYSTEM); break;
+    case AKN_SET_AUDIO: akn_ui_open_screen(&app->ui, AKN_SCREEN_AUDIO); break;
+    case AKN_SET_CONTROLLER: akn_ui_open_screen(&app->ui, AKN_SCREEN_CONTROLLER); break;
+    case AKN_SET_COUNT: break;
+    }
+}
+
+static void picker_row(akn_app *app, uint64_t now) {
+    char id[40] = "", name[80] = "", party[40] = "";
+    SDL_LockMutex(app->lock);
+    akn_social *s = &app->social;
+    if (s->friends && app->ui.open_row >= 0 && app->ui.open_row < s->friends->count) {
+        snprintf(id, sizeof(id), "%s", s->friends->items[app->ui.open_row].id);
+        snprintf(name, sizeof(name), "%s", s->friends->items[app->ui.open_row].display_name);
+    }
+    snprintf(party, sizeof(party), "%s", s->party.present ? s->party.id : "");
+    SDL_UnlockMutex(app->lock);
+    if (!id[0]) return;
+    if (app->ui.picker_purpose == AKN_PICK_INVITE) {
+        if (!party[0] || !safe_id(party) || !safe_id(id)) {
+            akn_ui_toast(&app->ui, "You are not in a party any more.", now, 2500);
+            return;
+        }
+        char body[96];
+        snprintf(body, sizeof(body), "{\"userId\":\"%s\"}", id);
+        act(app, AKN_ACT_PARTY_INVITE, "POST", "/api/v1/parties/%s/invitations", party, body, name, now);
+    } else {
+        message_user(app, id, name, app->ui.picker_back, now);
+    }
+}
+
+static void row_action(akn_app *app, uint64_t now) {
+    switch (app->ui.screen) {
+    case AKN_SCREEN_PARTY: party_row(app, now); break;
+    case AKN_SCREEN_INBOX: inbox_row(app, now); break;
+    case AKN_SCREEN_SETTINGS: settings_row(app, now); break;
+    case AKN_SCREEN_PICKER: picker_row(app, now); break;
+    default: break;
+    }
+}
+
+static void load_older(akn_app *app) {
+    SDL_LockMutex(app->lock);
+    akn_social *s = &app->social;
+    int go = s->thread && s->thread->has_more && !s->older_loading;
+    if (go) {
+        s->older_loading = 1;
+        s->want |= AKN_WANT_OLDER;
+        SDL_CondSignal(app->social_cond);
+    }
+    SDL_UnlockMutex(app->lock);
+}
+
+static void chat_profile(akn_app *app, uint64_t now) {
+    akn_conversation conv;
+    SDL_LockMutex(app->lock);
+    conv = app->social.thread_conv;
+    SDL_UnlockMutex(app->lock);
+    if (conv.kind != AKN_CONV_DIRECT || !conv.target_id[0]) {
+        akn_ui_toast(&app->ui, conv.kind == AKN_CONV_PARTY ? "The party's members are on the Party screen." : "Group chats have no single profile.",
+                     now, 2500);
+        return;
+    }
+    app->ui.profile_back = AKN_SCREEN_CHAT;
+    akn_ui_open_screen(&app->ui, AKN_SCREEN_PROFILE);
+    akn_social_open_profile(app, conv.target_id, 0);
 }
 
 /* ---- Commands ---------------------------------------------------------------------------------- */
@@ -423,17 +892,21 @@ static void run_command(akn_app *app, akn_cmd cmd, uint64_t now) {
     case AKN_CMD_HEARD_UNSURE: set_heard(app, AKN_HEARD_UNSURE); break;
     case AKN_CMD_OPENED_SCREEN:
         akn_logf(&app->log, AKN_LOG_INFO, "ui.screen", "%s", akn_screen_name(app->ui.screen));
-        if (app->ui.screen == AKN_SCREEN_CONNECTION) {
-            SDL_LockMutex(app->lock);
-            int never = app->account.checks == 0 && !app->net_running;
-            SDL_UnlockMutex(app->lock);
-            if (never) start_net_check(app);
-        }
+        if (app->ui.screen == AKN_SCREEN_CONNECTION) run_net_check_if_never(app);
         opened_social_screen(app);
         break;
     case AKN_CMD_OPEN_PROFILE: open_row_profile(app, now); break;
     case AKN_CMD_OPEN_OWN_PROFILE: open_own_profile(app); break;
     case AKN_CMD_REFRESH: refresh_screen(app, now); break;
+    case AKN_CMD_OPEN_CHAT: open_chat_row(app); break;
+    case AKN_CMD_ROW_ACTION: row_action(app, now); break;
+    case AKN_CMD_MESSAGE_FRIEND: message_friend(app, now); break;
+    case AKN_CMD_COMPOSE: compose(app, now); break;
+    case AKN_CMD_KEYBOARD_SUBMIT: keyboard_submit(app, now); break;
+    case AKN_CMD_KEYBOARD_CANCEL: SDL_StopTextInput(); break; /* the text stays as a draft */
+    case AKN_CMD_CONFIRMED: confirmed(app, now); break;
+    case AKN_CMD_LOAD_OLDER: load_older(app); break;
+    case AKN_CMD_CHAT_PROFILE: chat_profile(app, now); break;
     }
 }
 
@@ -580,7 +1053,11 @@ static const char *run_script(akn_app *app, uint64_t now) {
             next = 1;
             break;
         case AKN_STEP_EXPECT_DIALOG: {
-            const char *d = app->ui.dialog == AKN_DIALOG_EXIT ? "exit" : app->ui.dialog == AKN_DIALOG_HEARD ? "heard" : "none";
+            const char *d = app->ui.dialog == AKN_DIALOG_EXIT       ? "exit"
+                            : app->ui.dialog == AKN_DIALOG_HEARD    ? "heard"
+                            : app->ui.dialog == AKN_DIALOG_KEYBOARD ? "keyboard"
+                            : app->ui.dialog == AKN_DIALOG_CONFIRM  ? "confirm"
+                                                                    : "none";
             if (strcmp(d, st->arg) != 0) script_fail(app, "expected dialog %s, found %s", st->arg, d);
             next = 1;
             break;
@@ -884,6 +1361,10 @@ int akn_app_run(const akn_options *options, int *opened_devices) {
     if (app->net_thread) SDL_WaitThread(app->net_thread, NULL);
     if (app->social_cond) SDL_DestroyCond(app->social_cond);
     free(app->social.friends);
+    free(app->social.convs);
+    free(app->social.thread);
+    free(app->social.joinable);
+    free(app->social.inbox);
     SDL_Quit();
     akeno_global_cleanup();
     akn_log_close(&app->log);

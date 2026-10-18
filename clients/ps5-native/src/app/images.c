@@ -26,6 +26,7 @@ typedef struct {
     size_t bytes;
     unsigned long last_frame;
     uint64_t retry_at;    /* E_FAILED: 0 = permanent */
+    int failed_before;    /* a retry after a failure: still reported as missing */
 } entry;
 
 struct akn_images {
@@ -203,7 +204,20 @@ static void release(akn_images *im, entry *e) {
 }
 
 SDL_Texture *akn_images_get(akn_images *im, akn_img_source source, const char *id, int w, int h, akn_fit fit) {
+    akn_pic_state state;
+    return akn_images_lookup(im, source, id, w, h, fit, &state);
+}
+
+static akn_pic_state state_of(const entry *e) {
+    if (e->state == E_READY) return AKN_PIC_READY;
+    if (e->state == E_FAILED || e->failed_before) return AKN_PIC_MISSING;
+    return AKN_PIC_LOADING;
+}
+
+SDL_Texture *akn_images_lookup(akn_images *im, akn_img_source source, const char *id, int w, int h, akn_fit fit, akn_pic_state *state) {
+    *state = AKN_PIC_NONE;
     if (!im || !valid_id(source, id) || w <= 0 || h <= 0 || w > 1920 || h > 1080) return NULL;
+    *state = AKN_PIC_LOADING;
     SDL_LockMutex(im->lock);
     int free_slot = -1, oldest = -1;
     SDL_Texture *tex = NULL;
@@ -218,8 +232,10 @@ SDL_Texture *akn_images_get(akn_images *im, akn_img_source source, const char *i
             if (e->state == E_READY) tex = e->tex;
             else if (e->state == E_FAILED && e->retry_at && now_ms() >= e->retry_at) {
                 e->state = E_QUEUED;
+                e->failed_before = 1;
                 SDL_CondSignal(im->cond);
             }
+            *state = state_of(e);
             SDL_UnlockMutex(im->lock);
             return tex;
         }
@@ -265,6 +281,7 @@ void akn_images_pump(akn_images *im, SDL_Renderer *renderer) {
             e->tex = t;
             e->bytes = (size_t)e->pixels.w * e->pixels.h * 4;
             e->state = E_READY;
+            e->failed_before = 0;
             im->stats.loaded++;
             im->stats.resident++;
             im->stats.bytes += e->bytes;

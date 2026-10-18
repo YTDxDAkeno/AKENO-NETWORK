@@ -1,7 +1,7 @@
 /*
  * HTTP/1.1 client for the AKENO daemon's local interface, 127.0.0.1 only (docs/PS5_NATIVE_PHASE2.md).
- * Phase 2.1 has GET only: through this build AKENO Native reads, it never changes anything.
- * Blocking with a deadline; call from a worker thread.
+ * GET for reading; POST and PUT with a JSON body for the writes the daemon's native interface
+ * (IPC 2) allows. Blocking with a deadline; call from a worker thread.
  */
 #ifndef AKN_IPC_H
 #define AKN_IPC_H
@@ -19,6 +19,9 @@ typedef struct {
 /* GET path (with its query) from 127.0.0.1:port, sending X-Akeno-Native-Key when native_key is set.
  * Returns the HTTP status, or 0 on a transport error. Free the reply with akn_http_reply_free(). */
 int akn_loopback_get(int port, const char *path, const char *native_key, int timeout_ms, size_t max_body, akn_http_reply *out);
+/* method: GET, POST or PUT; json_body: sent as application/json (NULL: none). Same result as above. */
+int akn_loopback_request(int port, const char *method, const char *path, const char *native_key, const char *json_body, int timeout_ms,
+                         size_t max_body, akn_http_reply *out);
 void akn_http_reply_free(akn_http_reply *reply);
 
 #endif

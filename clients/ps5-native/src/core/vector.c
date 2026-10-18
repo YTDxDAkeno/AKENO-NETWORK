@@ -255,6 +255,14 @@ static float seg_dist2(float px, float py, akn_pt a, akn_pt b) {
     return ex * ex + ey * ey;
 }
 
+/* A bounding-box edge in pixels, clamped to 0..size before the conversion: huge or NaN coordinates
+ * would not fit an int (found by tests/fuzz/fuzz_path.c). */
+static int pixel_clamp(float v, int size) {
+    if (!(v > 0)) return 0;
+    if (v >= (float)size) return size;
+    return (int)v;
+}
+
 void akn_raster_stroke(uint8_t *rgba, int size, const akn_path *p, float scale, float width, uint32_t argb) {
     float r = width / 2, r2 = r * r;
     /* bounding box of the path, grown by the half width */
@@ -263,12 +271,8 @@ void akn_raster_stroke(uint8_t *rgba, int size, const akn_path *p, float scale, 
         minx = fminf(minx, p->pts[i].x), miny = fminf(miny, p->pts[i].y);
         maxx = fmaxf(maxx, p->pts[i].x), maxy = fmaxf(maxy, p->pts[i].y);
     }
-    int x0 = (int)floorf((minx - r) * scale), y0 = (int)floorf((miny - r) * scale);
-    int x1 = (int)ceilf((maxx + r) * scale), y1 = (int)ceilf((maxy + r) * scale);
-    if (x0 < 0) x0 = 0;
-    if (y0 < 0) y0 = 0;
-    if (x1 > size) x1 = size;
-    if (y1 > size) y1 = size;
+    int x0 = pixel_clamp(floorf((minx - r) * scale), size), y0 = pixel_clamp(floorf((miny - r) * scale), size);
+    int x1 = pixel_clamp(ceilf((maxx + r) * scale), size), y1 = pixel_clamp(ceilf((maxy + r) * scale), size);
     for (int y = y0; y < y1; y++)
         for (int x = x0; x < x1; x++) {
             int hits = 0;

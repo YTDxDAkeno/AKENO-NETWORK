@@ -31,8 +31,13 @@
 #endif
 #define AKENO_PLATFORM_LABEL "PlayStation 5 (homebrew)"
 #ifdef AKENO_NATIVE_IPC
-/* Local interface for AKENO Native (docs/PS5_NATIVE_PHASE2.md); only in the native-IPC build. */
-#define AKENO_NATIVE_IPC_VERSION 1
+/* Local interface for AKENO Native (docs/PS5_NATIVE_PHASE2.md); only in the native-IPC build.
+ * 1: reads (Phase 2.1). 2: an explicit list of server writes (messages, parties, invitations,
+ * friend requests, presence) and the open-conversation report that keeps the daemon from showing
+ * a system notification for a message the user is reading in AKENO Native. */
+#define AKENO_NATIVE_IPC_VERSION 2
+/* A conversation counts as open in AKENO Native for this long after its last report. */
+#define AKENO_NATIVE_FOCUS_MS 20000
 #endif
 
 #define APP_EVENT_RING 128
@@ -154,6 +159,10 @@ struct akeno_app {
     long long native_denied_logged_at;
     unsigned long native_requests;
     unsigned long native_denied;
+    unsigned long native_writes;
+    char native_focus[40];         /* lock: conversation open in AKENO Native, "" for none */
+    long long native_focus_at;     /* lock: when AKENO Native last reported it */
+    unsigned long native_quieted;  /* lock: notifications not shown because the conversation was open */
 #endif
     int browser_launches;
     int browser_last_rc;

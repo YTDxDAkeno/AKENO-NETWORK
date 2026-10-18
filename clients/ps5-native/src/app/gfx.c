@@ -458,6 +458,25 @@ int akn_gfx_text_wrap(akn_gfx *g, int x, int y, int px, akn_font_weight weight, 
     return lines;
 }
 
+int akn_gfx_text_block(akn_gfx *g, int px, akn_font_weight weight, const char *s, int max_width, int max_lines, int *widest) {
+    *widest = 0;
+    face_t *f = face(g, px, weight);
+    if (!f) return 0;
+    measure_ctx m = { g, f };
+    int lines = 0;
+    while (*s && lines < max_lines) {
+        size_t next;
+        size_t n = akn_text_wrap(s, max_width, measure_cb, &m, &next);
+        int w = measure_cb(&m, s, n);
+        if (lines == max_lines - 1 && s[next]) w = max_width; /* cut with an ellipsis */
+        if (w > *widest) *widest = w;
+        lines++;
+        if (next <= 0) break;
+        s += next;
+    }
+    return lines;
+}
+
 void akn_gfx_text_center(akn_gfx *g, int x, int width, int y, int px, akn_font_weight weight, uint32_t argb, const char *s) {
     int w = akn_gfx_text_width(g, px, weight, s, strlen(s));
     akn_gfx_text(g, x + (width - w) / 2, y, px, weight, argb, s);

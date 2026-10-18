@@ -789,6 +789,87 @@ static int native_settings_allowed(const akeno_json *root) {
     return 1;
 }
 
+/*
+ * Server writes AKENO Native may make through the proxy (IPC protocol 2), each one an existing
+ * device route the server checks against the console's scopes again. ":id" is one path segment of
+ * 1-64 letters, digits and '-'; no query string. Everything else that is not GET stays refused:
+ * account, profile and privacy changes, blocks, group administration, party administration
+ * (close, leader, kick), game sessions and device management.
+ */
+static const char *const NATIVE_WRITES[] = {
+    "POST /conversations",                 /* open a direct conversation with a friend */
+    "POST /conversations/:id/messages",    /* direct, group and party chats alike, as on the website */
+    "POST /conversations/:id/read",
+    "POST /parties",
+    "POST /parties/:id/join",
+    "POST /parties/:id/leave",
+    "POST /parties/:id/invitations",
+    "POST /friends/requests/:id/accept",
+    "POST /friends/requests/:id/decline",
+    "POST /invitations/:id/accept",
+    "POST /invitations/:id/decline",
+    "POST /notifications/read",
+    "PUT /presence",
+};
+
+static int native_segment_ok(const char *s, size_t n) {
+    if (n == 0 || n > 64) return 0;
+    for (size_t i = 0; i < n; i++) {
+        char c = s[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-')) return 0;
+    }
+    return 1;
+}
+
+/* "POST /parties/:id/join" against method and path: the matching entry, or NULL. */
+static const char *native_write_allowed(const char *method, const char *path, const char *query) {
+    if (query[0]) return NULL;
+    for (size_t i = 0; i < sizeof(NATIVE_WRITES) / sizeof(NATIVE_WRITES[0]); i++) {
+        const char *entry = NATIVE_WRITES[i];
+        const char *pattern = strchr(entry, ' ');
+        if ((size_t)(pattern - entry) != strlen(method) || strncmp(entry, method, strlen(method)) != 0) continue;
+        pattern++;
+        const char *p = path;
+        int ok = 1;
+        while (ok && *pattern) {
+            if (strncmp(pattern, "/:id", 4) == 0) {
+                if (*p != '/') {
+                    ok = 0;
+                    break;
+                }
+                p++;
+                size_t n = strcspn(p, "/");
+                ok = native_segment_ok(p, n);
+                p += n;
+                pattern += 4;
+            } else {
+                if (*pattern != *p) ok = 0;
+                pattern++;
+                p++;
+            }
+        }
+        if (ok && *p == '\0') return entry;
+    }
+    return NULL;
+}
+
+/* POST /api/native/focus {"conversationId":"<uuid>"} or {"conversationId":null}: the conversation
+ * AKENO Native shows now; repeated while it stays open (AKENO_NATIVE_FOCUS_MS). */
+static void route_native_focus(akeno_app *app, const akeno_json *root, ui_response *r) {
+    const akeno_json *v = akeno_json_get(root, "conversationId");
+    const char *id = v && v->type == AKENO_JSON_STRING ? v->string : "";
+    if (!root || root->type != AKENO_JSON_OBJECT || !v || (v->type != AKENO_JSON_NULL && v->type != AKENO_JSON_STRING) ||
+        (id[0] && !native_segment_ok(id, strlen(id))) || strlen(id) >= sizeof(app->native_focus)) {
+        respond_error(r, 400, "INVALID_FOCUS", "Send {\"conversationId\": \"<id>\"} or null.");
+        return;
+    }
+    pthread_mutex_lock(&app->lock);
+    app_copy_str(app->native_focus, sizeof(app->native_focus), id);
+    app->native_focus_at = akeno_now_ms();
+    pthread_mutex_unlock(&app->lock);
+    respond_ok(r);
+}
+
 static void route_native_hello(akeno_app *app, ui_response *r) {
     akeno_buf *b = &r->body;
     respond_json(r, 200);
@@ -801,6 +882,8 @@ static void route_native_hello(akeno_app *app, ui_response *r) {
     json_kv_str(b, "onlineId", app->online_id, 1);
     json_kv_str(b, "realtime", app->rt_state, 1);
     json_kv_int(b, "eventsNext", (long long)app->next_seq, 1);
+    json_kv_bool(b, "writes", 1, 1);
+    json_kv_int(b, "focusMs", AKENO_NATIVE_FOCUS_MS, 1);
     akeno_buf_append_str(b, "}");
     pthread_mutex_unlock(&app->lock);
 }
@@ -831,8 +914,20 @@ static void route_native(akeno_app *app, const ui_request *req, const char *body
     akeno_json_doc *doc = NULL;
     if (is(req, "GET", "/api/native/hello")) {
         route_native_hello(app, r);
-    } else if (strncmp(req->path, "/api/v1/", 8) == 0) {
+    } else if (strncmp(req->path, "/api/v1/", 8) == 0 && strcmp(req->method, "GET") == 0) {
         route_proxy(app, req, body, body_len, r);
+    } else if (strncmp(req->path, "/api/v1/", 8) == 0) {
+        const char *entry = native_write_allowed(req->method, req->path + 7, req->query);
+        if (entry) {
+            app->native_writes++;
+            app_log(app, AKENO_LOG_INFO, "native.write", "%s", entry); /* the route only: no IDs, no text */
+            route_proxy(app, req, body, body_len, r);
+        } else {
+            respond_error(r, 403, "NOT_ALLOWED_FOR_NATIVE", "AKENO Native may not make this change; use the AKENO website.");
+        }
+    } else if (is(req, "POST", "/api/native/focus")) {
+        doc = akeno_json_parse(body ? body : "", body_len, NULL, 0);
+        route_native_focus(app, akeno_json_root(doc), r);
     } else if (is(req, "GET", "/api/state")) {
         route_state(app, r);
     } else if (is(req, "GET", "/api/events")) {

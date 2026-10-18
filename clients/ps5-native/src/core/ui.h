@@ -11,6 +11,7 @@
 
 #include "input.h"
 #include "nav.h"
+#include "osk.h"
 
 #define AKN_SCREEN_W 1920
 #define AKN_SCREEN_H 1080
@@ -25,15 +26,22 @@ typedef enum {
     AKN_SCREEN_FRIENDS,  /* Phase 2.1: list of friends (rows) */
     AKN_SCREEN_PROFILE,  /* Phase 2.1: one profile, yours or a friend's */
     AKN_SCREEN_ACTIVITY, /* Phase 2.1: this console's game, your games, friends playing (rows) */
+    AKN_SCREEN_MESSAGES, /* conversations (rows) */
+    AKN_SCREEN_CHAT,     /* one conversation */
+    AKN_SCREEN_PARTY,    /* your party, party invitations, friends' parties (rows) */
+    AKN_SCREEN_INBOX,    /* friend requests, invitations, notifications (rows) */
+    AKN_SCREEN_SETTINGS, /* notification, activity and presence settings (rows) */
+    AKN_SCREEN_PICKER,   /* choose a friend (to invite to the party, to write to) (rows) */
     AKN_SCREEN_COUNT
 } akn_screen;
 
-typedef enum { AKN_DIALOG_NONE = 0, AKN_DIALOG_EXIT, AKN_DIALOG_HEARD } akn_dialog;
+typedef enum { AKN_DIALOG_NONE = 0, AKN_DIALOG_EXIT, AKN_DIALOG_HEARD, AKN_DIALOG_KEYBOARD, AKN_DIALOG_CONFIRM } akn_dialog;
 
 typedef enum {
     AKN_ITEM_FRIENDS = 0,
     AKN_ITEM_MESSAGES,
     AKN_ITEM_PARTIES,
+    AKN_ITEM_INBOX,
     AKN_ITEM_PROFILE,
     AKN_ITEM_ACTIVITY,
     AKN_ITEM_SETTINGS,
@@ -52,6 +60,8 @@ typedef enum {
     AKN_ITEM_HEARD_YES,
     AKN_ITEM_HEARD_NO,
     AKN_ITEM_HEARD_UNSURE,
+    AKN_ITEM_CONFIRM_YES,
+    AKN_ITEM_CONFIRM_NO,
     AKN_ITEM_ROW, /* a row of a list screen; akn_item.index is the row */
     AKN_ITEM_COUNT
 } akn_item_id;
@@ -82,7 +92,16 @@ typedef enum {
     AKN_CMD_OPENED_SCREEN, /* informational: the screen changed */
     AKN_CMD_OPEN_PROFILE,  /* the profile screen opened for row ui->open_row of ui->profile_back */
     AKN_CMD_OPEN_OWN_PROFILE,
-    AKN_CMD_REFRESH        /* triangle on a social screen: load it again */
+    AKN_CMD_REFRESH,       /* triangle on a social screen: load it again */
+    AKN_CMD_OPEN_CHAT,     /* Messages: the conversation of row ui->open_row */
+    AKN_CMD_ROW_ACTION,    /* Party, Inbox, Settings, Picker: row ui->open_row, ui->row_secondary for Square */
+    AKN_CMD_MESSAGE_FRIEND,/* Square on Friends (row ui->open_row) or a profile (open_row -1): write to them */
+    AKN_CMD_COMPOSE,       /* Cross in a conversation: open the keyboard */
+    AKN_CMD_KEYBOARD_SUBMIT, /* the keyboard's text (ui->osk) for ui->osk_purpose; the dialog stays open */
+    AKN_CMD_KEYBOARD_CANCEL, /* the keyboard closed; its text stays in ui->osk as a draft */
+    AKN_CMD_CONFIRMED,     /* the confirm dialog's action ui->confirm_action */
+    AKN_CMD_LOAD_OLDER,    /* the conversation is scrolled to its oldest message */
+    AKN_CMD_CHAT_PROFILE   /* Square in a direct conversation: the other user's profile */
 } akn_cmd;
 
 #define AKN_MAX_ITEMS 16
@@ -107,14 +126,29 @@ typedef struct {
     int open_row;                   /* the row AKN_CMD_OPEN_PROFILE refers to */
     int profile_scroll;             /* pixels the profile is scrolled down */
     int profile_content_h;          /* height of the profile's content (set by the screen) */
+    int row_secondary;              /* AKN_CMD_ROW_ACTION: 1 when Square chose it */
+    akn_screen chat_back;           /* where circle in a conversation returns to */
+    int chat_scroll;                /* pixels scrolled up from the newest message */
+    int chat_content_h;             /* height of the conversation's messages (set by the screen) */
+    akn_screen picker_back;
+    int picker_purpose;             /* the app's reason for the friend picker */
+    akn_osk osk;                    /* the keyboard dialog */
+    int osk_purpose;
+    char osk_title[120];
+    int confirm_action;             /* the app's action behind the confirm dialog */
+    char confirm_title[120], confirm_text[240], confirm_yes[40];
 } akn_ui;
 
 #define AKN_PROFILE_VIEW_Y 120      /* the profile scrolls between the top bar and the prompts */
 #define AKN_PROFILE_VIEW_H 870
 #define AKN_PROFILE_SCROLL_STEP 140
 
-#define AKN_FRIEND_ROWS_VISIBLE 7
+#define AKN_FRIEND_ROWS_VISIBLE 7  /* also Messages, Party, Inbox, Settings, the picker */
 #define AKN_ACTIVITY_ROWS_VISIBLE 4
+
+#define AKN_CHAT_VIEW_Y 280           /* the conversation scrolls between its header and the composer */
+#define AKN_CHAT_VIEW_H 560
+#define AKN_CHAT_SCROLL_STEP 120
 
 void akn_ui_init(akn_ui *ui);
 int akn_ui_screen_items(const akn_ui *ui, akn_screen screen, akn_item *out, int max);
@@ -136,6 +170,17 @@ akn_rect akn_ui_row_rect(const akn_ui *ui, akn_screen screen, int row);
 /* The profile screen: content height in pixels (clamps the scroll position). */
 void akn_ui_set_profile_height(akn_ui *ui, int content_h);
 void akn_ui_open_heard(akn_ui *ui);
+/* The keyboard dialog for the app's purpose, starting with initial (a draft). */
+void akn_ui_open_keyboard(akn_ui *ui, int purpose, const char *title, const char *initial, int max_chars, int single_line);
+/* A yes/no question before something that cannot be undone from here (leave the party, decline). */
+void akn_ui_open_confirm(akn_ui *ui, int action, const char *title, const char *text, const char *yes);
+void akn_ui_close_dialog(akn_ui *ui);
+/* Opens a conversation; circle returns to back. */
+void akn_ui_open_chat(akn_ui *ui, akn_screen back);
+/* Opens the friend picker; circle returns to back. */
+void akn_ui_open_picker(akn_ui *ui, akn_screen back, int purpose);
+/* The conversation screen: content height in pixels (clamps the scroll position). */
+void akn_ui_set_chat_height(akn_ui *ui, int content_h);
 void akn_ui_toast(akn_ui *ui, const char *text, uint64_t now_ms, unsigned duration_ms);
 
 const char *akn_screen_name(akn_screen screen);

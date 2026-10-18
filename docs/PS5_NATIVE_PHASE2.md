@@ -1,8 +1,9 @@
 # AKENO NETWORK Native — Phase 2 plan: native social screens over the daemon
 
 Status: **approved direction** (owner, 2026-10-17, after the 12.20 result
-[E14](PS5_NATIVE_ADR.md#2-evidence)). Increment 2.1 is implemented in this branch; nothing in
-Phase 2 is verified on a PS5 until the owner reports it. Nothing is merged or deployed
+[E14](PS5_NATIVE_ADR.md#2-evidence)). Increments 2.1–2.4 are implemented (2.1 shipped as Native 0.2
+preview; 2.2–2.4 as **Native 1.0.0-beta.1** with IPC protocol 2); nothing in Phase 2 is verified on
+a PS5 until the owner reports it. Nothing is merged or deployed
 automatically.
 
 ## Goal and rules
@@ -54,7 +55,7 @@ key must have no `Origin` at all. **What it does not protect against:** another 
 console that can read `/data/akeno` can already read `device.json`, the device token itself — the
 key gives such a program nothing it did not have. This is documented, not hidden.
 
-### What the native key may call (IPC protocol 1)
+### What the native key may call (IPC protocol 1, all GET or local)
 
 | Route | Use |
 | --- | --- |
@@ -66,6 +67,37 @@ key gives such a program nothing it did not have. This is documented, not hidden
 | `GET /api/media`, `GET /api/local-art` | pictures (later increment) and installed-game icons |
 | `POST /api/settings` | **only** `notifyMessages`, `notifySocial`, `activityEnabled` (2.4); anything else in the body is refused |
 | `POST /api/realtime/reconnect` | ask the daemon to reconnect its own session |
+
+### IPC protocol 2: the write list (1.0.0-beta.1)
+
+`GET /api/native/hello` answers `"ipc":2`, `"writes":true` and `"focusMs":20000`. Through the
+`/api/v1/*` proxy the native key may make **only** these changes; each is an existing device route
+the server checks against the console's scopes again (no server change):
+
+| Method and route | Use |
+| --- | --- |
+| `POST /conversations` | open a direct conversation with a friend |
+| `POST /conversations/:id/messages` | send to a direct, group or party chat (`clientMessageId` makes a retry idempotent) |
+| `POST /conversations/:id/read` | mark read |
+| `POST /parties`, `POST /parties/:id/join`, `POST /parties/:id/leave` | create, join, leave |
+| `POST /parties/:id/invitations` | invite a friend |
+| `POST /friends/requests/:id/accept`, `.../decline` | answer friend requests |
+| `POST /invitations/:id/accept`, `.../decline` | answer party and group invitations |
+| `POST /notifications/read` | mark notifications read |
+| `PUT /presence` | online status |
+
+Rules: `:id` is one path segment of 1–64 characters `[A-Za-z0-9-]`; no query string, no encoded
+characters, no extra segments; every other non-GET request through the proxy is refused with
+`403 NOT_ALLOWED_FOR_NATIVE` (account, profile and privacy changes, blocks, group administration,
+party close/leader/kick, game sessions, device management). The daemon logs each accepted write
+as `native.write <METHOD> <route pattern>` — never IDs or bodies. `POST /api/settings` stays limited
+to the three keys above.
+
+**Notification coordination.** `POST /api/native/focus` with `{"conversationId":"<id>"}` (or
+`null`) tells the daemon which conversation is on screen; AKENO Native repeats it every 8 s while
+the chat is open. The daemon then skips its system notification for messages of that one
+conversation, for at most `focusMs` (20 s) after the last signal; all other notifications are
+unchanged. The end-to-end test checks both directions.
 
 Never with the native key: pairing, unpairing, server or console-name changes, the controller
 shortcut, diagnostics and audio-lab actions, test notifications, opening the browser
@@ -84,7 +116,7 @@ unchanged). All IPC code is under `#ifdef AKENO_NATIVE_IPC`. CI proves on every 
 - the host build of the native-IPC daemon passes end-to-end tests against the real AKENO server
   (below).
 
-The `/api/instance` answer of this build adds `"nativeIpc":1`; the native app uses that to tell an
+The `/api/instance` answer of this build adds `"nativeIpc":2` (the 0.2 build: `1`); the native app uses that to tell an
 IPC daemon from the release daemon. With the release daemon the native app keeps working as in
 0.1 (connection check, controller, audio) and shows how to get the social screens.
 
@@ -92,10 +124,10 @@ IPC daemon from the release daemon. With the release daemon the native app keeps
 
 | # | Content | Writes to the server | Daemon build |
 | --- | --- | --- | --- |
-| **2.1** (this build) | IPC protocol 1; native IPC client; **Friends** (presence, current game, incoming request count, live presence updates from the event ring), **Profiles** (yours and your friends': name, presence, status, bio, game, favourite games, badges count, mutual friends, recent games), **Activity** (this console's detected game from the daemon, your recent games, friends playing now); Connection screen shows the IPC state | **none** — the native 2.1 IPC client has no write function at all | native-IPC 1 |
-| 2.2 | **Messages**: conversations, history, send text (system keyboard), mark read; in-app message banner; the daemon skips its own toast for a conversation that is open in the native app (heartbeat) | messages | native-IPC 2 (heartbeat) |
-| 2.3 | **Parties**: current party, members, party chat, join/leave, invitations inbox. No voice (voice roadmap unchanged) | party actions | native-IPC 2 |
-| 2.4 | **Settings**: notification and activity toggles through the daemon, presence preference; **pictures**: avatars and banners through `/api/media` (JPEG fallback variant, size-capped decoder with fuzz tests in CI) | settings, presence | native-IPC 2 |
+| **2.1** (Native 0.2 preview) | IPC protocol 1; native IPC client; **Friends** (presence, current game, incoming request count, live presence updates from the event ring), **Profiles** (yours and your friends': name, presence, status, bio, game, favourite games, badges count, mutual friends, recent games), **Activity** (this console's detected game from the daemon, your recent games, friends playing now); Connection screen shows the IPC state | **none** — the native 2.1 IPC client has no write function at all | native-IPC 1 |
+| **2.2** (1.0.0-beta.1) | **Messages**: conversations (direct, groups, party), history, send text (**AKENO's own controller keyboard** instead of the system keyboard: no new system function), mark read; the daemon skips its own notification for the conversation that is open (focus signal) | messages | native-IPC 2 |
+| **2.3** (1.0.0-beta.1) | **Parties**: current party, members, party chat, join/leave, invitations inbox. No voice (voice roadmap unchanged) | party actions | native-IPC 2 |
+| **2.4** (1.0.0-beta.1) | **Settings**: notification and activity toggles through the daemon, presence preference; **pictures**: avatars and banners through `/api/media` (JPEG fallback variant, size-capped decoder with fuzz tests in CI) | settings, presence | native-IPC 2 |
 | 2.5 | Parity review against the browser page; the owner decides about the legacy browser page (it stays until then) | — | — |
 
 Each increment: unit tests (parsers, model), the UI integration test with a fake daemon, the
@@ -108,10 +140,10 @@ previously tested builds as byte-verified fallbacks.
 | Level | What runs | Where |
 | --- | --- | --- |
 | Unit | JSON parsing of every server and daemon answer used (friends, requests, profile, activity, state, events), presence updates, sorting, text | `clients/ps5-native/tests/unit` (ASan/UBSan, Valgrind) |
-| UI integration | native app + fake daemon (IPC protocol, events, a daemon without IPC, a wrong key, a 401) through the virtual controller; screenshots; checks that **only GET** reached the daemon in 2.1 | `tests/integration/run.mjs` |
+| UI integration | native app + fake daemon (IPC protocol, events, a daemon without IPC, a wrong key, a 401) through the virtual controller; screenshots; checks that **only GET** reaches an IPC-1 daemon | `tests/integration/run.mjs` |
 | End to end | disposable PostgreSQL + the real server build + TLS with a throwaway CA + the **native-IPC daemon (host build)** paired through its own page API + the native app: friends and profiles from the real API, a presence change and a friend request arriving live through the event ring, IPC security cases (no key, wrong key, forbidden routes, Origin, key file mode and removal, the release daemon ignoring the header) | `tests/e2e/run.mjs`, "PS5 native client" workflow |
 | PS5 build | native ELF + native-IPC daemon ELF, import gates, reproducibility, fallbacks | same workflow |
-| Hardware | the owner, by hand, with [HARDWARE_TEST_PLAN_PS5_NATIVE_0.2.md](HARDWARE_TEST_PLAN_PS5_NATIVE_0.2.md) | PS5 12.20 |
+| Hardware | the owner, by hand, with [HARDWARE_TEST_PLAN_PS5_NATIVE_1.0.0-beta.1.md](HARDWARE_TEST_PLAN_PS5_NATIVE_1.0.0-beta.1.md) (0.2: [plan](HARDWARE_TEST_PLAN_PS5_NATIVE_0.2.md)) | PS5 12.20 |
 
 ## Rollback
 

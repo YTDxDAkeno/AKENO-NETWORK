@@ -347,7 +347,8 @@ async function main() {
     'stick -30000 0 300', 'expect focus audio', // the left stick moves like the D-pad
     'pad left', 'expect focus controller',
     // a later Phase 2 tile only explains itself
-    'pad up', 'pad right', 'expect focus messages', 'pad cross', 'expect screen home', 'expect text Messages arrives in Phase 2.2',
+    'pad up', 'pad right', 'expect focus messages', 'pad cross', 'expect screen messages', 'wait 200', 'expect text Direct messages, your groups and your party', 'expect notext Read only',
+    'pad circle', 'expect screen home',
     'pad left', 'pad down', 'expect focus controller',
     // the release daemon has no native interface: Friends says so and what to do
     'pad up', 'pad cross', 'expect screen friends', 'until ipc 10000', 'wait 300',
@@ -438,7 +439,7 @@ async function main() {
       AKENO_NATIVE_DAEMON_PORT: '1',
       AKENO_NATIVE_SIM_AUDIO: 'open',
       AKENO_NATIVE_SCRIPT: ['until account 15000', 'press down', 'press right', 'press cross', 'press cross', 'until audio 10000', 'wait 200',
-        'expect dialog none', 'expect screen audio', 'press circle', 'press up', 'press left', 'press cross', 'until ipc 10000', 'wait 300',
+        'expect dialog none', 'expect screen audio', 'press circle', 'press up', 'press left', 'press left', 'press cross', 'until ipc 10000', 'wait 300',
         'expect screen friends', 'expect text The AKENO daemon is not running', 'press circle', 'press circle', 'expect dialog exit',
         'press left', 'press cross'].join(';'),
     },
@@ -469,15 +470,15 @@ async function main() {
     'padhold down 900', 'pad r1', 'expect text 6–12 of 12', 'pad l1', 'pad l1', 'expect text 1–7 of 12',
     // a friend's profile and back to the same row
     'pad cross', 'expect screen profile', 'until profile 10000', 'wait 300', 'expect text Speedrunner.', 'expect text Friday crew', 'expect text 3 of 8 members',
-    'expect text Astro Bot', 'expect text @bob', 'expect text PS5 Alpha Tester', 'until pictures 10000',
+    'expect text Astro Bot', 'expect text @bob', 'expect text Friends', 'expect text PS5 Alpha Tester', 'until pictures 10000',
     `shot ${shots}/profile.png`, 'pad triangle', 'until profile 10000',
     'pad circle', 'expect screen friends', 'expect text Bob',
     // a realtime presence change arrives through the daemon's event ring
     'expect notext Playing Zeta Racer', 'sync carol-online', 'until text 8000 Playing Zeta Racer', 'pad circle', 'expect screen home',
     'expect text 4 ONLINE',
     // your own profile, from Home
-    'pad right', 'pad right', 'pad right', 'expect focus profile', 'pad cross', 'expect screen profile', 'until profile 10000', 'wait 300',
-    'expect text @akeno_tester', 'expect text you', 'pad circle', 'expect screen home',
+    'pad right', 'pad right', 'pad right', 'pad right', 'expect focus profile', 'pad cross', 'expect screen profile', 'until profile 10000', 'wait 300',
+    'expect text @akeno_tester', 'expect text You', 'pad circle', 'expect screen home',
     // Activity: this console's game (daemon detection), your games, friends playing now
     'pad right', 'expect focus activity', 'pad cross', 'expect screen activity', 'until activity 10000', 'wait 300',
     'expect text Playing Test Game', 'expect text YOUR RECENT GAMES', 'expect text Gran Turismo 7', 'expect text FRIENDS PLAYING NOW',
@@ -485,7 +486,7 @@ async function main() {
     'pad circle', 'expect screen activity', 'pad circle', 'expect screen home',
     // the daemon restarts with a new key: AKENO Native reads it again and carries on
     // (Dan's new game is only served by the restarted daemon, so seeing it proves the reconnect.)
-    'sync rotate-key', 'pad left', 'pad left', 'pad left', 'pad left', 'expect focus friends', 'pad cross',
+    'sync rotate-key', 'pad left', 'pad left', 'pad left', 'pad left', 'pad left', 'expect focus friends', 'pad cross',
     'until text 15000 Playing Kart Racer', 'pad circle', 'expect text Live from the AKENO daemon',
     // connection screen names the interface
     'pad down', 'pad right', 'pad right', 'expect focus connection', 'pad cross', 'wait 300', 'expect text Connected to the AKENO daemon',
@@ -501,7 +502,7 @@ async function main() {
   const log4 = readFileSync(join(nativeDir, 'native.log'), 'utf8');
   check(report4.includes('State:            Connected to the AKENO daemon: protocol 1, daemon 0.5.0-alpha (fake-ps5-native-ipc)'), 'report 4: IPC state');
   check(/Friends:\s+12 \(4 online, 3 playing\), 1 incoming and 0 outgoing requests/.test(report4), `report 4: friend counts\n${report4}`);
-  check(/Requests:\s+\d+ \(GET only\), \d+ errors, \d+ event polls, [1-9]\d* events, 2 connects/.test(report4), `report 4: request counters\n${report4}`);
+  check(/Requests:\s+\d+ \(0 writes, 0 failed\), \d+ errors, \d+ event polls, [1-9]\d* events, 2 connects/.test(report4), `report 4: request counters\n${report4}`);
   check(log4.includes('ipc.state: Connected to the AKENO daemon'), 'log 4: connected');
   check(log4.includes('social.friends: 12 friends, 3 online, 1 incoming requests'), 'log 4: counts, no names');
   for (const text of [report4, log4]) {
@@ -509,7 +510,8 @@ async function main() {
     for (const name of ['Ada Lovelace', '@bob', 'Speedrunner', 'Zeta Racer', 'Kart Racer', 'Friday crew']) check(!text.includes(name), `no other person's data in report or log (${name})`);
   }
   const methods = new Set(ipc.requests.map((r) => r.method));
-  check(methods.size === 1 && methods.has('GET'), `Phase 2.1 sends GET only: ${[...methods]}`);
+  // A daemon with native interface 1 cannot take writes: AKENO Native sends it GET only (no writes, no focus reports).
+  check(methods.size === 1 && methods.has('GET'), `GET only to an IPC 1 daemon: ${[...methods]}`);
   check(ipc.requests.every((r) => !r.origin), 'no Origin header on native requests');
   check(ipc.requests.filter((r) => r.path !== '/api/instance').every((r) => r.key), 'every interface request carries the native key');
   check(ipc.requests.filter((r) => r.path === '/api/instance').every((r) => !r.key), 'the liveness probe never carries the key');

@@ -114,6 +114,13 @@ static void tile_icon(akn_app *app, akn_item_id id, int cx, int cy, uint32_t c) 
         for (int i = -1; i <= 1; i++) akn_gfx_disc(g, cx + i * 15, cy - 6, 6, i ? with_alpha(c, 170) : c);
         akn_gfx_rrect(g, (akn_rect){ cx - 24, cy + 4, 48, 12 }, 6, with_alpha(c, 200));
         break;
+    case AKN_ITEM_INBOX:
+        akn_gfx_disc(g, cx, cy - 4, 14, c);
+        akn_gfx_rrect(g, (akn_rect){ cx - 14, cy - 4, 28, 14 }, 3, c);
+        akn_gfx_rrect(g, (akn_rect){ cx - 20, cy + 8, 40, 6 }, 3, c);
+        akn_gfx_disc(g, cx, cy + 18, 4, c);
+        akn_gfx_rect(g, (akn_rect){ cx - 1, cy - 22, 3, 5 }, c);
+        break;
     case AKN_ITEM_PROFILE:
         akn_gfx_ring(g, cx, cy, 20, 3, c);
         akn_gfx_disc(g, cx, cy - 5, 7, c);
@@ -196,7 +203,7 @@ static void top_bar(akn_app *app, const akn_account_view *acc) {
     tracked(g, 177, 74, 14, AKN_FONT_REGULAR, C_MUTED, "NETWORK", 6);
     akn_rect pill = { 360, 46, 210, 36 };
     akn_gfx_rrect(g, pill, 18, C_ACCENT_SOFT);
-    akn_gfx_text_center(g, pill.x, pill.w, 52, 18, AKN_FONT_BOLD, 0xFFB7C8FFu, "NATIVE PREVIEW");
+    akn_gfx_text_center(g, pill.x, pill.w, 52, 18, AKN_FONT_BOLD, 0xFFB7C8FFu, "BETA \xC2\xB7 1.0");
 
     int x = AKN_SCREEN_W - AKN_MARGIN_X;
     char text[120];
@@ -223,7 +230,10 @@ static void bottom_bar(akn_app *app) {
     akn_gfx *g = app->gfx;
     akn_gfx_rect(g, (akn_rect){ AKN_MARGIN_X, 996, AKN_SCREEN_W - 2 * AKN_MARGIN_X, 1 }, C_LINE);
     int x = AKN_MARGIN_X, y = 1018;
-    if (app->ui.dialog != AKN_DIALOG_NONE) {
+    if (app->ui.dialog == AKN_DIALOG_KEYBOARD) {
+        prompt(app, &x, y, SYM_CROSS, "Type");
+        prompt(app, &x, y, SYM_CIRCLE, "Close");
+    } else if (app->ui.dialog != AKN_DIALOG_NONE) {
         prompt(app, &x, y, SYM_CROSS, "Select");
         prompt(app, &x, y, SYM_CIRCLE, app->ui.dialog == AKN_DIALOG_HEARD ? "Not sure" : "Cancel");
     } else if (app->ui.screen == AKN_SCREEN_CONTROLLER) {
@@ -231,8 +241,38 @@ static void bottom_bar(akn_app *app) {
     } else if (app->ui.screen == AKN_SCREEN_AUDIO && app->ui.audio_busy) {
         prompt(app, &x, y, SYM_CIRCLE, "Stop the tone");
     } else if (app->ui.screen == AKN_SCREEN_PROFILE) {
+        SDL_LockMutex(app->lock);
+        int friend_profile = !app->social.profile_own && strcmp(app->social.profile.relationship, "friend") == 0;
+        SDL_UnlockMutex(app->lock);
+        prompt(app, &x, y, SYM_CIRCLE, "Back");
+        if (friend_profile) prompt(app, &x, y, SYM_SQUARE, "Message");
+        prompt(app, &x, y, SYM_TRIANGLE, "Reload");
+    } else if (app->ui.screen == AKN_SCREEN_CHAT) {
+        prompt(app, &x, y, SYM_CROSS, "Write");
+        prompt(app, &x, y, SYM_CIRCLE, "Back");
+        prompt(app, &x, y, SYM_SQUARE, "Profile");
+        prompt(app, &x, y, SYM_TRIANGLE, "Reload");
+        akn_gfx_text(g, x, y + 5, 22, AKN_FONT_REGULAR, C_SUBTLE, "Up/Down: scroll");
+    } else if (app->ui.screen == AKN_SCREEN_FRIENDS) {
+        prompt(app, &x, y, SYM_CROSS, "Profile");
+        prompt(app, &x, y, SYM_SQUARE, "Message");
         prompt(app, &x, y, SYM_CIRCLE, "Back");
         prompt(app, &x, y, SYM_TRIANGLE, "Reload");
+    } else if (app->ui.screen == AKN_SCREEN_MESSAGES) {
+        prompt(app, &x, y, SYM_CROSS, "Open");
+        prompt(app, &x, y, SYM_CIRCLE, "Back");
+        prompt(app, &x, y, SYM_TRIANGLE, "Reload");
+    } else if (app->ui.screen == AKN_SCREEN_PARTY || app->ui.screen == AKN_SCREEN_INBOX) {
+        prompt(app, &x, y, SYM_CROSS, "Select / Accept");
+        prompt(app, &x, y, SYM_SQUARE, app->ui.screen == AKN_SCREEN_PARTY ? "Decline / Message" : "Decline");
+        prompt(app, &x, y, SYM_CIRCLE, "Back");
+        prompt(app, &x, y, SYM_TRIANGLE, "Reload");
+    } else if (app->ui.screen == AKN_SCREEN_SETTINGS) {
+        prompt(app, &x, y, SYM_CROSS, "Change / Open");
+        prompt(app, &x, y, SYM_CIRCLE, "Back");
+    } else if (app->ui.screen == AKN_SCREEN_PICKER) {
+        prompt(app, &x, y, SYM_CROSS, app->ui.picker_purpose == AKN_PICK_INVITE ? "Invite" : "Write");
+        prompt(app, &x, y, SYM_CIRCLE, "Back");
     } else if (akn_ui_is_list(app->ui.screen)) {
         prompt(app, &x, y, SYM_CROSS, "Profile");
         prompt(app, &x, y, SYM_CIRCLE, "Back");
@@ -432,8 +472,7 @@ static void centered_note(akn_app *app, akn_rect p, const char *title, const cha
     if (text) akn_gfx_text_center(app->gfx, p.x, p.w, p.y + p.h / 2 + 4, 24, AKN_FONT_REGULAR, C_MUTED, text);
 }
 
-typedef enum { ART_COVER = 0, ART_WIDE, ART_ICON } art_shape;
-static void game_art(akn_app *app, akn_rect r, const akn_art *art, const char *title_id, const char *name, art_shape shape);
+static void game_art(akn_app *app, akn_rect r, const akn_art *art, const char *title_id, const char *name, akn_art_shape shape);
 
 static void friend_row(akn_app *app, akn_rect r, const akn_friend *f, int focused, long long now) {
     akn_gfx *g = app->gfx;
@@ -443,7 +482,7 @@ static void friend_row(akn_app *app, akn_rect r, const akn_friend *f, int focuse
     int x = r.x + 100, w = r.w - 130;
     if (f->presence.game.present) { /* the game's icon at the right end of the row */
         const akn_game *gm = &f->presence.game;
-        game_art(app, (akn_rect){ r.x + r.w - 76, r.y + (r.h - 60) / 2, 60, 60 }, &gm->art, gm->title_id, gm->name, ART_ICON);
+        game_art(app, (akn_rect){ r.x + r.w - 76, r.y + (r.h - 60) / 2, 60, 60 }, &gm->art, gm->title_id, gm->name, AKN_ART_ICON);
         w -= 76;
     }
     int nw = akn_gfx_text_fit(g, x, r.y + 10, 27, AKN_FONT_BOLD, f->deleted ? C_SUBTLE : C_INK, f->display_name, w - 220);
@@ -551,20 +590,30 @@ static void draw_friends(akn_app *app, const akn_social *s, uint64_t now) {
 
 /* Game artwork as on the website: the server's artwork of the verified game (cover, wide banner
  * or icon, falling back between them), else this console's own icon of the title, else initials. */
-static void game_art(akn_app *app, akn_rect r, const akn_art *art, const char *title_id, const char *name, art_shape shape) {
+static void game_art(akn_app *app, akn_rect r, const akn_art *art, const char *title_id, const char *name, akn_art_shape shape) {
     akn_gfx *g = app->gfx;
     int radius = AKN_FIT_RADIUS(r.w, r.h);
-    akn_gfx_rrect(g, r, radius, 0xFF1E2A4Au);
-    char ini[8];
-    akn_initials(name && name[0] ? name : title_id, title_id, ini);
-    int px = (r.w < r.h ? r.w : r.h) / 3;
-    if (px > 12) akn_gfx_text_center(g, r.x, r.w, r.y + r.h / 2 - px * 6 / 10, px, AKN_FONT_BOLD, 0xFF9AA5C4u, ini);
-    const char *media = !art ? NULL
-                        : shape == ART_COVER ? (art->cover[0] ? art->cover : art->icon)
-                        : shape == ART_WIDE  ? (art->banner[0] ? art->banner : art->cover[0] ? art->cover : art->icon)
-                                             : (art->icon[0] ? art->icon : art->cover);
-    if (!(media && media[0] && picture(app, AKN_IMG_MEDIA, media, r, AKN_FIT_ROUNDED)) && title_id && title_id[0])
-        picture(app, AKN_IMG_LOCAL_ART, title_id, r, AKN_FIT_ROUNDED);
+    /* The verified server picture first; the console's icon only when the server has none or it
+     * failed; else the initials (core/artwork.h). */
+    const char *media = akn_art_media_for(art, shape);
+    akn_pic_state server = AKN_PIC_NONE, local = AKN_PIC_NONE;
+    SDL_Texture *st = media[0] ? akn_images_lookup(app->images, AKN_IMG_MEDIA, media, r.w, r.h, AKN_FIT_ROUNDED, &server) : NULL;
+    SDL_Texture *lt = NULL;
+    if (akn_art_want_local(media, server, title_id))
+        lt = akn_images_lookup(app->images, AKN_IMG_LOCAL_ART, title_id, r.w, r.h, AKN_FIT_ROUNDED, &local);
+    SDL_Rect d = { r.x, r.y, r.w, r.h };
+    switch (akn_art_choose(media, server, title_id, local)) {
+    case AKN_ART_SHOW_SERVER: SDL_RenderCopy(app->renderer, st, NULL, &d); break;
+    case AKN_ART_SHOW_LOCAL: SDL_RenderCopy(app->renderer, lt, NULL, &d); break;
+    case AKN_ART_SHOW_PLACEHOLDER: {
+        akn_gfx_rrect(g, r, radius, 0xFF1E2A4Au);
+        char ini[8];
+        akn_initials(name && name[0] ? name : title_id, title_id, ini);
+        int px = (r.w < r.h ? r.w : r.h) / 3;
+        if (px > 12) akn_gfx_text_center(g, r.x, r.w, r.y + r.h / 2 - px * 6 / 10, px, AKN_FONT_BOLD, 0xFF9AA5C4u, ini);
+        break;
+    }
+    }
     akn_gfx_rrect_outline(g, r, radius, 1, C_LINE_STRONG);
 }
 
@@ -611,7 +660,7 @@ static void game_card(akn_app *app, int x, int y, int w, const akn_art *art, con
                       const char *l2) {
     akn_gfx *g = app->gfx;
     int h = w * 3 / 2;
-    game_art(app, (akn_rect){ x, y, w, h }, art, title_id, name, ART_COVER);
+    game_art(app, (akn_rect){ x, y, w, h }, art, title_id, name, AKN_ART_COVER);
     akn_gfx_text_fit(g, x, y + h + 10, 22, AKN_FONT_BOLD, C_INK, name && name[0] ? name : title_id, w);
     if (l1 && l1[0]) akn_gfx_text_fit(g, x, y + h + 40, 19, AKN_FONT_REGULAR, C_MUTED, l1, w);
     if (l2 && l2[0]) akn_gfx_text_fit(g, x, y + h + 66, 19, AKN_FONT_REGULAR, C_SUBTLE, l2, w);
@@ -730,7 +779,7 @@ static void draw_profile(akn_app *app, const akn_social *s, uint64_t now) {
         ly = section_title(app, lx, ly, "NOW PLAYING");
         akn_rect card = { lx, ly, lw, 210 };
         panel(app, card);
-        game_art(app, (akn_rect){ card.x + 18, card.y + 18, 309, 174 }, &gm->art, gm->title_id, gm->name, ART_WIDE);
+        game_art(app, (akn_rect){ card.x + 18, card.y + 18, 309, 174 }, &gm->art, gm->title_id, gm->name, AKN_ART_WIDE);
         akn_gfx_text_fit(g, card.x + 360, card.y + 40, 34, AKN_FONT_BOLD, C_INK, akn_game_label(gm), card.w - 400);
         char dur[40] = "";
         if (gm->started_at > 0) akn_format_duration(unix_now - gm->started_at, dur, sizeof(dur));
@@ -859,7 +908,10 @@ static void draw_activity(akn_app *app, const akn_social *s, uint64_t now) {
     akn_gfx_text(g, x, c.y + 28, 20, AKN_FONT_BOLD, C_SUBTLE, "THIS CONSOLE");
     const akn_daemon_info *d = &s->daemon;
     if (d->console_game.present) {
-        game_art(app, (akn_rect){ x, c.y + 66, 140, 140 }, &d->console_game.art, d->console_game.title_id, d->console_game.name, ART_ICON);
+        /* The daemon knows the title ID; the verified artwork comes from your own activity answer. */
+        akn_art art = d->console_game.art;
+        if (!art.icon[0] && !art.cover[0] && s->own_activity_load == AKN_LOAD_OK) akn_art_for_title(&s->own_activity, d->console_game.title_id, &art);
+        game_art(app, (akn_rect){ x, c.y + 66, 140, 140 }, &art, d->console_game.title_id, d->console_game.name, AKN_ART_ICON);
         x += 166;
         w -= 166;
         snprintf(text, sizeof(text), "Playing %s", akn_game_label(&d->console_game));
@@ -920,7 +972,7 @@ static void draw_activity(akn_app *app, const akn_social *s, uint64_t now) {
         if (!a->recent_count) akn_gfx_text(g, gx, gy, 24, AKN_FONT_REGULAR, C_SUBTLE, "No games tracked yet.");
         for (int i = 0; i < a->recent_count && i < 6; i++) {
             const akn_recent_game *r = &a->recent[i];
-            game_art(app, (akn_rect){ gx, gy - 4, 56, 84 }, &r->art, r->title_id, r->name, ART_COVER);
+            game_art(app, (akn_rect){ gx, gy - 4, 56, 84 }, &r->art, r->title_id, r->name, AKN_ART_COVER);
             int tx = gx + 76, tw = gw - 76;
             akn_gfx_text_fit(g, tx, gy + 8, 24, AKN_FONT_BOLD, C_INK, r->name[0] ? r->name : r->title_id, tw);
             char ago[40];
@@ -1009,9 +1061,16 @@ static void draw_home(akn_app *app, const akn_account_view *acc, uint64_t now) {
     akn_gfx_text(g, AKN_MARGIN_X, 396, 20, AKN_FONT_BOLD, C_SUBTLE, "AKENO SOCIAL");
     akn_gfx_text(g, AKN_MARGIN_X + 186, 396, 20, AKN_FONT_REGULAR, s->ipc == AKN_IPC_READY ? C_SUBTLE : C_WARNING,
                  s->ipc == AKN_IPC_READY ? "Live from the AKENO daemon on this console" : akn_ipc_state_text(s->ipc));
-    char badge[48] = "", playing[16] = "";
+    char badge[48] = "", playing[16] = "", unread[32] = "", party[32] = "", inbox[32] = "";
     if (s->friends) snprintf(badge, sizeof(badge), "%d ONLINE", s->friends->online);
     if (s->daemon.console_game.present) snprintf(playing, sizeof(playing), "PLAYING");
+    if (s->convs && s->convs->unread_total) snprintf(unread, sizeof(unread), "%d NEW", s->convs->unread_total > 99 ? 99 : s->convs->unread_total);
+    int party_invites = 0;
+    for (int i = 0; s->inbox && i < s->inbox->invitation_count; i++) party_invites += s->inbox->invitations[i].kind == AKN_INV_PARTY;
+    if (s->party.present) snprintf(party, sizeof(party), "%d IN PARTY", s->party.member_count);
+    else if (party_invites) snprintf(party, sizeof(party), "%d INVITE%s", party_invites, party_invites == 1 ? "" : "S");
+    int waiting = s->inbox ? s->inbox->incoming_count + s->inbox->invitation_count + s->inbox->notifications_unread : 0;
+    if (waiting) snprintf(inbox, sizeof(inbox), "%d NEW", waiting > 99 ? 99 : waiting);
     SDL_UnlockMutex(app->lock);
     akn_gfx_text(g, AKN_MARGIN_X, 696, 20, AKN_FONT_BOLD, C_SUBTLE, "NATIVE PLATFORM CHECKS");
     akn_gfx_text(g, AKN_MARGIN_X + 296, 696, 20, AKN_FONT_REGULAR, C_SUBTLE, "Controller, sound and connection on this console");
@@ -1020,7 +1079,12 @@ static void draw_home(akn_app *app, const akn_account_view *acc, uint64_t now) {
     int n = akn_ui_screen_items(&app->ui, AKN_SCREEN_HOME, items, AKN_MAX_ITEMS);
     draw_items(app, items, n, app->ui.dialog ? -1 : app->ui.focus[AKN_SCREEN_HOME], now);
     for (int i = 0; i < n; i++) {
-        const char *label = items[i].id == AKN_ITEM_FRIENDS ? badge : items[i].id == AKN_ITEM_ACTIVITY ? playing : "";
+        const char *label = items[i].id == AKN_ITEM_FRIENDS    ? badge
+                            : items[i].id == AKN_ITEM_ACTIVITY ? playing
+                            : items[i].id == AKN_ITEM_MESSAGES ? unread
+                            : items[i].id == AKN_ITEM_PARTIES  ? party
+                            : items[i].id == AKN_ITEM_INBOX    ? inbox
+                                                               : "";
         if (!label[0]) continue;
         int w = akn_gfx_text_width(g, 16, AKN_FONT_BOLD, label, strlen(label)) + 28;
         pill(app, items[i].rect.x + items[i].rect.w - w - 22, items[i].rect.y + 22, 0x2622C55Eu, 0xFF86EFACu, label);
@@ -1273,10 +1337,602 @@ static void draw_system(akn_app *app, uint64_t now) {
     draw_items(app, items, ni, app->ui.dialog ? -1 : app->ui.focus[AKN_SCREEN_SYSTEM], now);
 }
 
+/* ---- Messages, conversation, party, inbox, settings (Native 1.0) --------------------------------- */
+
+/* A small round badge for a group or a party (no single picture). */
+static void group_badge(akn_app *app, int cx, int cy, int r, akn_conv_kind kind, const char *title) {
+    akn_gfx_disc(app->gfx, cx, cy, r, kind == AKN_CONV_PARTY ? 0xFF4F7CFFu : 0xFF7048E8u);
+    if (kind == AKN_CONV_PARTY && r >= 26) {
+        tile_icon(app, AKN_ITEM_PARTIES, cx, cy, C_INK);
+        return;
+    }
+    char ini[8];
+    akn_initials(title, title, ini);
+    int px = r * 9 / 10;
+    akn_gfx_text_center(app->gfx, cx - r, 2 * r, cy - px * 6 / 10, px, AKN_FONT_BOLD, 0xFFFFFFFFu, ini);
+}
+
+static void conv_avatar(akn_app *app, int cx, int cy, int r, const akn_conversation *c) {
+    if (c->kind == AKN_CONV_DIRECT) avatar(app, cx, cy, r, c->target_id, c->title, c->handle, c->avatar, 1, c->presence.status);
+    else group_badge(app, cx, cy, r, c->kind, c->title);
+}
+
+static void conv_subtitle(const akn_conversation *c, long long now, char *out, size_t len) {
+    if (c->kind == AKN_CONV_DIRECT) akn_presence_line(&c->presence, now, out, len);
+    else snprintf(out, len, "%s  \xC2\xB7  %d member%s", c->kind == AKN_CONV_PARTY ? "Party chat" : "Group", c->members, c->members == 1 ? "" : "s");
+}
+
+static void count_pill(akn_app *app, int right_x, int y, int count) {
+    char text[16];
+    snprintf(text, sizeof(text), "%d", count > 99 ? 99 : count);
+    int w = akn_gfx_text_width(app->gfx, 16, AKN_FONT_BOLD, text, strlen(text)) + 28;
+    if (w < 34) w = 34;
+    pill(app, right_x - w, y, C_ACCENT, C_INK, text);
+}
+
+static void conv_row(akn_app *app, akn_rect r, const akn_conversation *c, int focused, long long now) {
+    akn_gfx *g = app->gfx;
+    akn_gfx_rrect(g, r, 18, focused ? 0xF21A2542u : C_SURFACE2);
+    akn_gfx_rrect_outline(g, r, 18, 1, focused ? C_LINE_STRONG : C_LINE);
+    conv_avatar(app, r.x + 50, r.y + r.h / 2, 30, c);
+    int x = r.x + 100, w = r.w - 130;
+    char when[40] = "";
+    if (c->last_at > 0) akn_format_ago(c->last_at, now, when, sizeof(when));
+    int ww = when[0] ? akn_gfx_text_width(g, 20, AKN_FONT_REGULAR, when, strlen(when)) : 0;
+    if (when[0]) akn_gfx_text(g, r.x + r.w - 24 - ww, r.y + 14, 20, AKN_FONT_REGULAR, C_SUBTLE, when);
+    akn_gfx_text_fit(g, x, r.y + 10, 27, AKN_FONT_BOLD, c->unread ? C_INK : 0xFFD6DCEBu, c->title, w - ww - 30);
+    char line[200];
+    if (c->preview[0]) snprintf(line, sizeof(line), "%s%s", c->preview_mine ? "You: " : "", c->preview);
+    else conv_subtitle(c, now, line, sizeof(line));
+    akn_gfx_text_fit(g, x, r.y + 48, 22, c->unread ? AKN_FONT_BOLD : AKN_FONT_REGULAR, c->unread ? 0xFFB7C8FFu : C_MUTED, line, w - 60);
+    if (c->unread) count_pill(app, r.x + r.w - 24, r.y + 46, c->unread);
+}
+
+static void writes_note(akn_app *app, const akn_social *s, int y) {
+    if (s->ipc == AKN_IPC_READY && s->daemon.ipc < 2)
+        akn_gfx_text(app->gfx, AKN_MARGIN_X, y, 20, AKN_FONT_REGULAR, C_WARNING,
+                     "Read only: the running AKENO daemon has no write interface. Send akeno-network-ps5-native-ipc.elf from this release.");
+    else if (s->ipc != AKN_IPC_READY)
+        akn_gfx_text(app->gfx, AKN_MARGIN_X, y, 20, AKN_FONT_REGULAR, C_WARNING, "Not connected to the daemon: this may be out of date.");
+}
+
+static void draw_messages(akn_app *app, const akn_social *s, uint64_t now) {
+    akn_gfx *g = app->gfx;
+    long long unix_now = akn_platform_unix_time();
+    const akn_conv_list *l = s->convs;
+    char sub[200];
+    if (l) snprintf(sub, sizeof(sub), "%d conversation%s  \xC2\xB7  %d unread message%s", l->count, l->count == 1 ? "" : "s", l->unread_total,
+                    l->unread_total == 1 ? "" : "s");
+    else snprintf(sub, sizeof(sub), "Direct messages, your groups and your party, live from the AKENO daemon.");
+    screen_title(app, "Messages", sub);
+    akn_rect area = { AKN_MARGIN_X, 290, 1728, 660 };
+    if (s->ipc != AKN_IPC_READY && !l) {
+        ipc_status_panel(app, s, area);
+        return;
+    }
+    if (!l || l->count == 0) {
+        if (s->convs_load == AKN_LOAD_ERROR) centered_note(app, area, "Your conversations could not be loaded", s->convs_error);
+        else if (!l) centered_note(app, area, "Loading your conversations...", NULL);
+        else centered_note(app, area, "No conversations yet", "On the Friends screen, press Square on a friend to write to them.");
+        return;
+    }
+    int focus = app->ui.focus[AKN_SCREEN_MESSAGES];
+    akn_rect focus_rect = { 0, 0, 0, 0 };
+    for (int i = app->ui.list_top[AKN_SCREEN_MESSAGES]; i < l->count && i < app->ui.list_top[AKN_SCREEN_MESSAGES] + AKN_FRIEND_ROWS_VISIBLE; i++) {
+        akn_rect r = akn_ui_row_rect(&app->ui, AKN_SCREEN_MESSAGES, i);
+        conv_row(app, r, &l->items[i], i == focus && !app->ui.dialog, unix_now);
+        if (i == focus) focus_rect = r;
+    }
+    scroll_info(app, AKN_SCREEN_MESSAGES, AKN_MARGIN_X + 1000, 966, AKN_FRIEND_ROWS_VISIBLE);
+    writes_note(app, s, 966);
+    akn_rect d = { 1136, 290, 688, 660 };
+    panel(app, d);
+    if (focus >= 0 && focus < l->count) {
+        const akn_conversation *c = &l->items[focus];
+        int y = d.y + 40;
+        conv_avatar(app, d.x + d.w / 2, y + 74, 74, c);
+        y += 176;
+        akn_gfx_text_center(g, d.x, d.w, y, 38, AKN_FONT_BOLD, C_INK, c->title);
+        char text[200];
+        conv_subtitle(c, unix_now, text, sizeof(text));
+        akn_gfx_text_center(g, d.x, d.w, y + 56, 24, AKN_FONT_REGULAR, C_MUTED, text);
+        y += 120;
+        if (c->unread) {
+            snprintf(text, sizeof(text), "%d unread message%s", c->unread, c->unread == 1 ? "" : "s");
+            akn_gfx_text_center(g, d.x, d.w, y, 26, AKN_FONT_BOLD, 0xFFB7C8FFu, text);
+            y += 50;
+        }
+        if (c->preview[0]) akn_gfx_text_wrap(g, d.x + 48, y, 23, AKN_FONT_REGULAR, C_INK, c->preview, d.w - 96, 32, 4);
+        if (!c->can_send)
+            akn_gfx_text_wrap(g, d.x + 48, d.y + d.h - 130, 21, AKN_FONT_REGULAR, C_WARNING,
+                              "You cannot write here right now (privacy settings or a block).", d.w - 96, 30, 2);
+        akn_gfx_text_center(g, d.x, d.w, d.y + d.h - 56, 21, AKN_FONT_REGULAR, C_SUBTLE, "Cross: open  \xC2\xB7  Triangle: reload");
+    }
+    if (focus_rect.w && !app->ui.dialog) focus_ring(app, focus_rect, 18, now);
+}
+
+#define BUBBLE_PX 26
+#define BUBBLE_LINE 36
+#define BUBBLE_MAX_W 1000
+#define BUBBLE_LINES 40
+#define BUBBLE_PAD 22
+
+/* Height of one message in the conversation (bubble, sender line, time line). */
+static int message_height(akn_app *app, const akn_message *m, int show_sender, int *text_w, int *lines) {
+    *lines = akn_gfx_text_block(app->gfx, BUBBLE_PX, AKN_FONT_REGULAR, m->body, BUBBLE_MAX_W - 2 * BUBBLE_PAD, BUBBLE_LINES, text_w);
+    if (*lines < 1) *lines = 1;
+    return (show_sender ? 32 : 0) + *lines * BUBBLE_LINE + 2 * 14 + 30 + 14;
+}
+
+static void draw_chat(akn_app *app, const akn_social *s) {
+    akn_gfx *g = app->gfx;
+    long long unix_now = akn_platform_unix_time();
+    const akn_conversation *c = &s->thread_conv;
+    const akn_thread *t = s->thread;
+    /* header */
+    conv_avatar(app, AKN_MARGIN_X + 50, 192, 50, c);
+    akn_gfx_text_fit(g, AKN_MARGIN_X + 124, 138, 44, AKN_FONT_BOLD, C_INK, c->title, 1200);
+    char text[300];
+    conv_subtitle(c, unix_now, text, sizeof(text));
+    akn_gfx_text_fit(g, AKN_MARGIN_X + 124, 200, 24, AKN_FONT_REGULAR, c->kind == AKN_CONV_DIRECT && c->presence.game.present ? 0xFFB7C8FFu : C_MUTED,
+                     text, 1200);
+    akn_gfx_rect(g, (akn_rect){ AKN_MARGIN_X, 266, AKN_SCREEN_W - 2 * AKN_MARGIN_X, 1 }, C_LINE);
+
+    akn_rect view = { AKN_MARGIN_X, AKN_CHAT_VIEW_Y, AKN_SCREEN_W - 2 * AKN_MARGIN_X, AKN_CHAT_VIEW_H };
+    if (!t || t->count == 0) {
+        const char *msg = s->thread_load == AKN_LOAD_ERROR ? s->thread_error
+                          : s->thread_load != AKN_LOAD_OK  ? "Loading the conversation..."
+                          : c->can_send                    ? "No messages yet. Press Cross to say hello."
+                                                           : "No messages yet.";
+        akn_gfx_text_center(g, view.x, view.w, view.y + view.h / 2 - 20, 28, AKN_FONT_REGULAR, C_MUTED, msg);
+        akn_ui_set_chat_height(&app->ui, 0);
+    } else {
+        int group = c->kind != AKN_CONV_DIRECT;
+        /* heights first: the newest message sits at the bottom of the view */
+        int total = 0;
+        static int heights[AKN_CHAT_MSGS], widths[AKN_CHAT_MSGS], nlines[AKN_CHAT_MSGS], sender[AKN_CHAT_MSGS];
+        for (int i = 0; i < t->count; i++) {
+            const akn_message *m = &t->items[i];
+            sender[i] = group && !m->mine && (i == 0 || strcmp(t->items[i - 1].sender_id, m->sender_id) != 0);
+            heights[i] = message_height(app, m, sender[i], &widths[i], &nlines[i]);
+            total += heights[i];
+        }
+        int top_extra = t->has_more ? 56 : 0;
+        akn_ui_set_chat_height(&app->ui, total + top_extra + 10);
+        SDL_Rect clip = { view.x, view.y, view.w, view.h };
+        SDL_RenderSetClipRect(app->renderer, &clip);
+        int y = view.y + view.h + app->ui.chat_scroll; /* bottom of the newest message */
+        if (total + top_extra < view.h) y = view.y + total + top_extra; /* a short conversation starts at the top */
+        for (int i = t->count - 1; i >= 0; i--) {
+            const akn_message *m = &t->items[i];
+            int h = heights[i];
+            int top = y - h;
+            y = top;
+            if (top > view.y + view.h || top + h < view.y) continue;
+            int bw = widths[i] + 2 * BUBBLE_PAD, bh = nlines[i] * BUBBLE_LINE + 28;
+            int left = AKN_MARGIN_X + (m->mine ? 0 : 76);
+            int bx = m->mine ? AKN_SCREEN_W - AKN_MARGIN_X - 24 - bw : left;
+            int by = top + (sender[i] ? 32 : 0);
+            if (sender[i]) akn_gfx_text_fit(g, bx + 6, top + 2, 20, AKN_FONT_BOLD, C_MUTED, m->sender_name, 600);
+            if (!m->mine && (i == t->count - 1 || strcmp(t->items[i + 1].sender_id, m->sender_id) != 0))
+                avatar(app, AKN_MARGIN_X + 30, by + bh - 28, 28, m->sender_id, m->sender_name, m->sender_name, m->sender_avatar, 0, AKN_PRES_OFFLINE);
+            uint32_t fill = m->mine ? (m->state == AKN_MSG_FAILED ? 0xFF5A1F2Eu : 0xFF3554C9u) : 0xFF1C2742u;
+            akn_gfx_rrect(g, (akn_rect){ bx, by, bw, bh }, 22, fill);
+            akn_gfx_text_wrap(g, bx + BUBBLE_PAD, by + 14, BUBBLE_PX, AKN_FONT_REGULAR, C_INK, m->body, BUBBLE_MAX_W - 2 * BUBBLE_PAD, BUBBLE_LINE,
+                              BUBBLE_LINES);
+            char meta[120];
+            if (m->state == AKN_MSG_SENDING) snprintf(meta, sizeof(meta), "Sending...");
+            else if (m->state == AKN_MSG_FAILED) snprintf(meta, sizeof(meta), "Not sent  \xC2\xB7  Triangle: try again");
+            else akn_format_ago(m->created_at, unix_now, meta, sizeof(meta));
+            if (m->truncated) {
+                size_t ml = strlen(meta);
+                snprintf(meta + ml, sizeof(meta) - ml, "  \xC2\xB7  shortened here");
+            }
+            int mw = akn_gfx_text_width(g, 19, AKN_FONT_REGULAR, meta, strlen(meta));
+            akn_gfx_text(g, m->mine ? bx + bw - mw - 6 : bx + 6, by + bh + 6, 19, AKN_FONT_REGULAR, m->state == AKN_MSG_FAILED ? C_DANGER : C_SUBTLE, meta);
+        }
+        if (t->has_more && y - 56 + 10 >= view.y - 60)
+            akn_gfx_text_center(g, view.x, view.w, y - 46, 21, AKN_FONT_REGULAR, C_SUBTLE,
+                                s->older_loading ? "Loading older messages..." : "Older messages: scroll up");
+        SDL_RenderSetClipRect(app->renderer, NULL);
+        if (app->ui.chat_scroll > 0)
+            pill(app, AKN_SCREEN_W - AKN_MARGIN_X - 230, view.y + view.h - 40, 0xE6223056u, C_INK, "Down: newest messages");
+    }
+    /* the composer */
+    akn_rect comp = { AKN_MARGIN_X, 856, AKN_SCREEN_W - 2 * AKN_MARGIN_X, 88 };
+    akn_gfx_rrect(g, comp, 44, C_SURFACE2);
+    akn_gfx_rrect_outline(g, comp, 44, 1, C_LINE_STRONG);
+    akn_gfx_disc(g, comp.x + 44, comp.y + 44, 22, 0xFF222D4Au);
+    symbol(app, SYM_CROSS, comp.x + 44, comp.y + 44, 24, C_INK);
+    const char *hint;
+    uint32_t hc = C_MUTED;
+    if (s->ipc == AKN_IPC_READY && s->daemon.ipc < 2) hint = "Read only: this AKENO daemon cannot send messages (send the native-IPC daemon of this release).", hc = C_WARNING;
+    else if (!c->can_send) hint = "You cannot write in this conversation right now.", hc = C_WARNING;
+    else if (strcmp(app->draft_conv, c->id) == 0 && app->ui.osk.len) hint = app->ui.osk.text, hc = C_INK;
+    else hint = "Press Cross to write a message";
+    akn_gfx_text_fit(g, comp.x + 84, comp.y + 28, 26, AKN_FONT_REGULAR, hc, hint, comp.w - 120);
+}
+
+/* An action row of the Party screen (create, chat, invite, leave). */
+static void action_row(akn_app *app, akn_rect r, int focused, akn_item_id icon, uint32_t tint, const char *title, const char *sub, int badge) {
+    akn_gfx *g = app->gfx;
+    akn_gfx_rrect(g, r, 18, focused ? 0xF21A2542u : C_SURFACE2);
+    akn_gfx_rrect_outline(g, r, 18, 1, focused ? C_LINE_STRONG : C_LINE);
+    akn_gfx_disc(g, r.x + 50, r.y + r.h / 2, 30, with_alpha(tint, 0x40));
+    tile_icon(app, icon, r.x + 50, r.y + r.h / 2, tint);
+    akn_gfx_text_fit(g, r.x + 100, r.y + 12, 27, AKN_FONT_BOLD, C_INK, title, r.w - 200);
+    if (sub) akn_gfx_text_fit(g, r.x + 100, r.y + 48, 21, AKN_FONT_REGULAR, C_MUTED, sub, r.w - 200);
+    if (badge > 0) count_pill(app, r.x + r.w - 24, r.y + 27, badge);
+}
+
+/* who: the person's name (the picture's initials); name: the row's title. */
+static void person_row(akn_app *app, akn_rect r, int focused, const char *id, const char *who, const char *name, const char *handle, const char *image,
+                       int presence, akn_presence status, const char *line, uint32_t line_color, const char *tag) {
+    akn_gfx *g = app->gfx;
+    akn_gfx_rrect(g, r, 18, focused ? 0xF21A2542u : C_SURFACE2);
+    akn_gfx_rrect_outline(g, r, 18, 1, focused ? C_LINE_STRONG : C_LINE);
+    avatar(app, r.x + 50, r.y + r.h / 2, 30, id, who, handle, image, presence, status);
+    int tw = tag && tag[0] ? akn_gfx_text_width(g, 16, AKN_FONT_BOLD, tag, strlen(tag)) + 28 : 0;
+    int nw = akn_gfx_text_fit(g, r.x + 100, r.y + 10, 27, AKN_FONT_BOLD, C_INK, name, r.w - 150 - tw);
+    if (tw) pill(app, r.x + 100 + nw + 14, r.y + 12, C_ACCENT_SOFT, 0xFFB7C8FFu, tag);
+    akn_gfx_text_fit(g, r.x + 100, r.y + 48, 21, AKN_FONT_REGULAR, line_color, line, r.w - 130);
+}
+
+static void draw_party(akn_app *app, const akn_social *s, uint64_t now) {
+    akn_gfx *g = app->gfx;
+    long long unix_now = akn_platform_unix_time();
+    const akn_party *p = &s->party;
+    char sub[240];
+    if (p->present)
+        snprintf(sub, sizeof(sub), "%s  \xC2\xB7  %d of %d members  \xC2\xB7  %s", p->name[0] ? p->name : "Your party", p->member_count, p->max_members,
+                 strcmp(p->privacy, "invite_only") == 0 ? "invited friends only" : "friends can join");
+    else snprintf(sub, sizeof(sub), "You are not in a party. Create one, accept an invitation or join a friend's party.");
+    screen_title(app, "Party", sub);
+    akn_rect area = { AKN_MARGIN_X, 290, 1728, 660 };
+    if (s->ipc != AKN_IPC_READY && s->party_load != AKN_LOAD_OK) {
+        ipc_status_panel(app, s, area);
+        return;
+    }
+    if (s->party_load != AKN_LOAD_OK) {
+        if (s->party_load == AKN_LOAD_ERROR) centered_note(app, area, "Your party could not be loaded", s->party_error);
+        else centered_note(app, area, "Loading your party...", NULL);
+        return;
+    }
+    akn_party_row rows[AKN_PARTY_ROWS_MAX];
+    int n = akn_party_rows(p, s->inbox, s->joinable, rows, AKN_PARTY_ROWS_MAX);
+    int focus = app->ui.focus[AKN_SCREEN_PARTY];
+    akn_rect focus_rect = { 0, 0, 0, 0 };
+    int party_unread = 0;
+    int ci = s->convs && p->present ? akn_conversations_find(s->convs, p->conversation_id) : -1;
+    if (ci >= 0) party_unread = s->convs->items[ci].unread;
+    for (int i = app->ui.list_top[AKN_SCREEN_PARTY]; i < n && i < app->ui.list_top[AKN_SCREEN_PARTY] + AKN_FRIEND_ROWS_VISIBLE; i++) {
+        akn_rect r = akn_ui_row_rect(&app->ui, AKN_SCREEN_PARTY, i);
+        int f = i == focus && !app->ui.dialog;
+        char line[240], title[200];
+        switch (rows[i].kind) {
+        case AKN_PROW_CREATE: action_row(app, r, f, AKN_ITEM_PARTIES, C_ACCENT, "Create a party", "Your friends can join it; you can invite them.", 0); break;
+        case AKN_PROW_CHAT:
+            if (ci >= 0 && s->convs->items[ci].preview[0])
+                snprintf(line, sizeof(line), "%s%s", s->convs->items[ci].preview_mine ? "You: " : "", s->convs->items[ci].preview);
+            else snprintf(line, sizeof(line), "Write to everyone in the party.");
+            action_row(app, r, f, AKN_ITEM_MESSAGES, C_ACCENT, "Party chat", line, party_unread);
+            break;
+        case AKN_PROW_INVITE: action_row(app, r, f, AKN_ITEM_FRIENDS, C_SUCCESS, "Invite friends", "Choose a friend; they get an invitation.", 0); break;
+        case AKN_PROW_LEAVE: action_row(app, r, f, AKN_ITEM_EXIT, C_DANGER, "Leave the party", "You can join again while it is open.", 0); break;
+        case AKN_PROW_MEMBER: {
+            const akn_party_member *m = &p->members[rows[i].index];
+            char pres[160];
+            akn_presence_line(&m->presence, unix_now, pres, sizeof(pres));
+            const char *voice = m->voice_connected ? (m->voice_muted == 1 ? "in voice (muted)" : "in voice") : "not in voice";
+            snprintf(line, sizeof(line), "%s  \xC2\xB7  %s", pres, voice);
+            int self = strcmp(m->id, s->me.id) == 0;
+            person_row(app, r, f, m->id, m->display_name, m->display_name, m->online_id, m->avatar, 1, m->presence.status, line, C_MUTED,
+                       m->leader ? (self ? "LEADER \xC2\xB7 YOU" : "LEADER") : self ? "YOU" : "");
+            break;
+        }
+        case AKN_PROW_INVITATION: {
+            const akn_invitation *v = &s->inbox->invitations[rows[i].index];
+            snprintf(title, sizeof(title), "%s invited you", v->inviter_name);
+            snprintf(line, sizeof(line), "Party \"%s\"  \xC2\xB7  Cross: accept  \xC2\xB7  Square: decline", v->target_name);
+            person_row(app, r, f, v->inviter_handle, v->inviter_name, title, v->inviter_handle, v->inviter_avatar, 0, AKN_PRES_OFFLINE, line, 0xFFB7C8FFu,
+                       "INVITATION");
+            break;
+        }
+        case AKN_PROW_JOINABLE: {
+            const akn_party *j = &s->joinable->items[rows[i].index];
+            snprintf(title, sizeof(title), "Join %s", j->name[0] ? j->name : "a friend's party");
+            snprintf(line, sizeof(line), "%d of %d members%s", j->member_count, j->max_members, j->members_shown ? "" : "");
+            action_row(app, r, f, AKN_ITEM_PARTIES, C_VIOLET, title, line, 0);
+            break;
+        }
+        }
+        if (i == focus) focus_rect = r;
+    }
+    scroll_info(app, AKN_SCREEN_PARTY, AKN_MARGIN_X + 1000, 966, AKN_FRIEND_ROWS_VISIBLE);
+    writes_note(app, s, 966);
+
+    /* the party and its voice, honestly */
+    akn_rect d = { 1136, 290, 688, 660 };
+    panel(app, d);
+    int x = d.x + 40, w = d.w - 80, y = d.y + 36;
+    y = section_title(app, x, y, p->present ? "YOUR PARTY" : "PARTIES");
+    if (p->present) {
+        akn_gfx_text_fit(g, x, y, 34, AKN_FONT_BOLD, C_INK, p->name[0] ? p->name : "Party", w);
+        y += 56;
+        char t[200];
+        int leader = akn_party_member_find(p, p->leader_id);
+        snprintf(t, sizeof(t), "Leader: %s", leader >= 0 ? p->members[leader].display_name : "-");
+        akn_gfx_text_fit(g, x, y, 24, AKN_FONT_REGULAR, C_MUTED, t, w);
+        y += 40;
+        snprintf(t, sizeof(t), "%d of %d members", p->member_count, p->max_members);
+        akn_gfx_text_fit(g, x, y, 24, AKN_FONT_REGULAR, C_MUTED, t, w);
+        y += 64;
+    } else {
+        akn_gfx_text_wrap(g, x, y, 24, AKN_FONT_REGULAR, C_MUTED,
+                          "A party keeps you and your friends together across games: see who is in it, chat, and invite more friends.", w, 34, 4);
+        y += 170;
+    }
+    y = section_title(app, x, y, "VOICE");
+    char voice[600];
+    if (p->present && p->voice_available)
+        snprintf(voice, sizeof(voice),
+                 "Party voice runs on this server for the website and the desktop and mobile apps. AKENO Native cannot join voice yet: "
+                 "PS5 voice is still in research (listening first, then the microphone only with your approval). Members in voice are marked.");
+    else if (p->present)
+        snprintf(voice, sizeof(voice), "Party voice is not available here: %s", p->voice_reason[0] ? p->voice_reason : "the server does not offer it.");
+    else snprintf(voice, sizeof(voice), "Voice is part of a party. AKENO Native shows who is in voice but has no voice of its own yet.");
+    akn_gfx_text_wrap(g, x, y, 22, AKN_FONT_REGULAR, C_MUTED, voice, w, 32, 7);
+    if (focus_rect.w && !app->ui.dialog) focus_ring(app, focus_rect, 18, now);
+}
+
+static void draw_inbox(akn_app *app, const akn_social *s, uint64_t now) {
+    akn_gfx *g = app->gfx;
+    long long unix_now = akn_platform_unix_time();
+    const akn_inbox *in = s->inbox;
+    char sub[200];
+    if (in) snprintf(sub, sizeof(sub), "%d friend request%s  \xC2\xB7  %d invitation%s  \xC2\xB7  %d unread notification%s", in->incoming_count,
+                     in->incoming_count == 1 ? "" : "s", in->invitation_count, in->invitation_count == 1 ? "" : "s", in->notifications_unread,
+                     in->notifications_unread == 1 ? "" : "s");
+    else snprintf(sub, sizeof(sub), "Friend requests, invitations and notifications.");
+    screen_title(app, "Notifications", sub);
+    akn_rect area = { AKN_MARGIN_X, 290, 1728, 660 };
+    if (s->ipc != AKN_IPC_READY && !in) {
+        ipc_status_panel(app, s, area);
+        return;
+    }
+    if (!in) {
+        centered_note(app, area, s->inbox_load == AKN_LOAD_ERROR ? "Your notifications could not be loaded" : "Loading...",
+                      s->inbox_load == AKN_LOAD_ERROR ? s->inbox_error : NULL);
+        return;
+    }
+    akn_inbox_row rows[AKN_INBOX_ROWS_MAX];
+    int n = akn_social_inbox_rows(s, rows, AKN_INBOX_ROWS_MAX);
+    int focus = app->ui.focus[AKN_SCREEN_INBOX];
+    akn_rect focus_rect = { 0, 0, 0, 0 };
+    if (n == 0) {
+        centered_note(app, (akn_rect){ AKN_MARGIN_X, 290, 1000, 660 }, "Nothing waiting", "Friend requests and invitations appear here.");
+    }
+    for (int i = app->ui.list_top[AKN_SCREEN_INBOX]; i < n && i < app->ui.list_top[AKN_SCREEN_INBOX] + AKN_FRIEND_ROWS_VISIBLE; i++) {
+        akn_rect r = akn_ui_row_rect(&app->ui, AKN_SCREEN_INBOX, i);
+        int f = i == focus && !app->ui.dialog;
+        char title[200], line[240], ago[40];
+        if (rows[i].kind == AKN_IROW_REQUEST) {
+            const akn_friend_request *q = &in->incoming[rows[i].index];
+            snprintf(title, sizeof(title), "%s wants to be your friend", q->display_name);
+            akn_format_ago(q->created_at, unix_now, ago, sizeof(ago));
+            snprintf(line, sizeof(line), "@%s  \xC2\xB7  %s  \xC2\xB7  Cross: accept  \xC2\xB7  Square: decline", q->online_id, ago);
+            person_row(app, r, f, q->user_id, q->display_name, title, q->online_id, q->avatar, 0, AKN_PRES_OFFLINE, line, C_MUTED, "FRIEND REQUEST");
+        } else if (rows[i].kind == AKN_IROW_INVITATION) {
+            const akn_invitation *v = &in->invitations[rows[i].index];
+            snprintf(title, sizeof(title), "%s invited you", v->inviter_name);
+            snprintf(line, sizeof(line), "The %s \"%s\"  \xC2\xB7  Cross: accept  \xC2\xB7  Square: decline", akn_invitation_kind_label(v->kind), v->target_name);
+            person_row(app, r, f, v->inviter_handle, v->inviter_name, title, v->inviter_handle, v->inviter_avatar, 0, AKN_PRES_OFFLINE, line, 0xFFB7C8FFu,
+                       "INVITATION");
+        } else {
+            snprintf(line, sizeof(line), "%d unread  \xC2\xB7  Cross: mark everything as read", in->notifications_unread);
+            action_row(app, r, f, AKN_ITEM_INBOX, C_ACCENT, "Mark notifications as read", line, 0);
+        }
+        if (i == focus) focus_rect = r;
+    }
+    scroll_info(app, AKN_SCREEN_INBOX, AKN_MARGIN_X + 1000, 966, AKN_FRIEND_ROWS_VISIBLE);
+    writes_note(app, s, 966);
+    akn_rect d = { 1136, 290, 688, 660 };
+    panel(app, d);
+    int x = d.x + 36, w = d.w - 72, y = section_title(app, x, d.y + 32, "RECENT NOTIFICATIONS");
+    if (in->notification_count == 0) akn_gfx_text(g, x, y, 23, AKN_FONT_REGULAR, C_MUTED, "No notifications yet.");
+    for (int i = 0; i < in->notification_count && y < d.y + d.h - 70; i++) {
+        const akn_notification *nt = &in->notifications[i];
+        if (nt->unread) akn_gfx_disc(g, x + 6, y + 14, 6, C_ACCENT);
+        int lines = akn_gfx_text_wrap(g, x + 22, y, 22, nt->unread ? AKN_FONT_BOLD : AKN_FONT_REGULAR, nt->unread ? C_INK : C_MUTED, nt->text, w - 22, 30, 2);
+        char ago[40];
+        akn_format_ago(nt->created_at, unix_now, ago, sizeof(ago));
+        akn_gfx_text(g, x + 22, y + lines * 30 + 2, 18, AKN_FONT_REGULAR, C_SUBTLE, ago);
+        y += lines * 30 + 40;
+    }
+    if (focus_rect.w && !app->ui.dialog) focus_ring(app, focus_rect, 18, now);
+}
+
+static void toggle(akn_app *app, int right_x, int y, int on, int known) {
+    const char *t = !known ? "..." : on ? "ON" : "OFF";
+    pill(app, right_x - 90, y, on && known ? 0x3322C55Eu : 0x2694A3D1u, on && known ? 0xFF86EFACu : C_MUTED, t);
+}
+
+static void draw_settings(akn_app *app, const akn_social *s, uint64_t now) {
+    akn_gfx *g = app->gfx;
+    screen_title(app, "Settings", "Notifications and activity are kept by the AKENO daemon on this console; your status by your AKENO account.");
+    const akn_daemon_info *d = &s->daemon;
+    const char *pref = s->presence_pref[0] ? s->presence_pref
+                       : s->me.presence.status == AKN_PRES_AWAY ? "away"
+                       : s->me.presence.status == AKN_PRES_DND  ? "dnd"
+                                                                : "online";
+    const char *status = strcmp(pref, "away") == 0 ? "Away" : strcmp(pref, "dnd") == 0 ? "Busy" : strcmp(pref, "invisible") == 0 ? "Invisible" : "Online";
+    static const char *const titles[AKN_SET_COUNT] = { "Message notifications", "Friend and invitation notifications", "Share the game I'm playing",
+                                                       "Online status", "Connection", "System and diagnostic report", "Audio test", "Controller test" };
+    const char *subs[AKN_SET_COUNT] = { "System notifications for new messages (not for the conversation open here).",
+                                        "Friend requests, accepted requests and invitations.",
+                                        "Your friends see the game this console detects; nothing is shared while it is off.",
+                                        "Cross: next status  \xC2\xB7  Square: previous. Invisible: you appear offline.",
+                                        "The AKENO daemon, your server and the account this console is paired with.",
+                                        "Build, firmware and process; save a report for troubleshooting.",
+                                        "Play a tone to check the sound (milestone V1).",
+                                        "Every button and stick of the DualSense." };
+    int focus = app->ui.focus[AKN_SCREEN_SETTINGS];
+    akn_rect focus_rect = { 0, 0, 0, 0 };
+    for (int i = app->ui.list_top[AKN_SCREEN_SETTINGS]; i < AKN_SET_COUNT && i < app->ui.list_top[AKN_SCREEN_SETTINGS] + AKN_FRIEND_ROWS_VISIBLE; i++) {
+        akn_rect r = akn_ui_row_rect(&app->ui, AKN_SCREEN_SETTINGS, i);
+        int f = i == focus && !app->ui.dialog;
+        akn_gfx_rrect(g, r, 18, f ? 0xF21A2542u : C_SURFACE2);
+        akn_gfx_rrect_outline(g, r, 18, 1, f ? C_LINE_STRONG : C_LINE);
+        akn_gfx_text_fit(g, r.x + 32, r.y + 12, 27, AKN_FONT_BOLD, C_INK, titles[i], r.w - 220);
+        akn_gfx_text_fit(g, r.x + 32, r.y + 48, 20, AKN_FONT_REGULAR, C_MUTED, subs[i], r.w - 220);
+        int right = r.x + r.w - 28;
+        if (i == AKN_SET_NOTIFY_MESSAGES) toggle(app, right, r.y + 27, d->notify_messages, d->settings_known);
+        else if (i == AKN_SET_NOTIFY_SOCIAL) toggle(app, right, r.y + 27, d->notify_social, d->settings_known);
+        else if (i == AKN_SET_ACTIVITY) toggle(app, right, r.y + 27, d->activity_enabled, d->settings_known);
+        else if (i == AKN_SET_PRESENCE) {
+            int w = akn_gfx_text_width(g, 16, AKN_FONT_BOLD, status, strlen(status)) + 28;
+            pill(app, right - w, r.y + 27, C_ACCENT_SOFT, 0xFFB7C8FFu, status);
+        } else {
+            float mid = (float)r.y + (float)r.h / 2.0f;
+            triangle(app->renderer, (float)right - 10, mid, (float)right - 24, mid - 10, (float)right - 24, mid + 10, C_MUTED);
+        }
+        if (i == focus) focus_rect = r;
+    }
+    scroll_info(app, AKN_SCREEN_SETTINGS, AKN_MARGIN_X + 1000, 966, AKN_FRIEND_ROWS_VISIBLE);
+    writes_note(app, s, 966);
+    akn_rect p = { 1136, 290, 688, 660 };
+    panel(app, p);
+    int x = p.x + 36, w = p.w - 72, y = section_title(app, x, p.y + 32, "THIS BUILD");
+    char t[300];
+    snprintf(t, sizeof(t), "AKENO NETWORK Native %s", AKN_NATIVE_VERSION);
+    akn_gfx_text_fit(g, x, y, 24, AKN_FONT_BOLD, C_INK, t, w);
+    y += 38;
+    snprintf(t, sizeof(t), "Build %s", AKN_BUILD_ID);
+    akn_gfx_text_fit(g, x, y, 22, AKN_FONT_REGULAR, C_MUTED, t, w);
+    y += 34;
+    if (d->version[0]) snprintf(t, sizeof(t), "Daemon %s, native interface %d", d->version, d->ipc);
+    else snprintf(t, sizeof(t), "%s", akn_ipc_state_text(s->ipc));
+    akn_gfx_text_fit(g, x, y, 22, AKN_FONT_REGULAR, C_MUTED, t, w);
+    y += 34;
+    snprintf(t, sizeof(t), "Server connection: %s", d->realtime[0] ? d->realtime : "unknown");
+    akn_gfx_text_fit(g, x, y, 22, AKN_FONT_REGULAR, C_MUTED, t, w);
+    y += 34;
+    if (d->online_id[0]) {
+        snprintf(t, sizeof(t), "Signed in as @%s", d->online_id);
+        akn_gfx_text_fit(g, x, y, 22, AKN_FONT_REGULAR, C_MUTED, t, w);
+    }
+    y += 60;
+    y = section_title(app, x, y, "NOT CHANGED HERE");
+    akn_gfx_text_wrap(g, x, y, 21, AKN_FONT_REGULAR, C_SUBTLE,
+                      "Pairing, the server address, the console name and your profile, privacy and account stay on the AKENO page and the "
+                      "website. AKENO Native never changes them.",
+                      w, 30, 6);
+    if (focus_rect.w && !app->ui.dialog) focus_ring(app, focus_rect, 18, now);
+}
+
+static void draw_picker(akn_app *app, const akn_social *s, uint64_t now) {
+    long long unix_now = akn_platform_unix_time();
+    int invite = app->ui.picker_purpose == AKN_PICK_INVITE;
+    screen_title(app, invite ? "Invite a friend" : "Write to a friend",
+                 invite ? "Cross sends an invitation to your party. Circle goes back." : "Cross opens your conversation. Circle goes back.");
+    const akn_friend_list *list = s->friends;
+    akn_rect area = { AKN_MARGIN_X, 290, 1728, 660 };
+    if (!list || list->count == 0) {
+        centered_note(app, area, list ? "No friends yet" : "Loading your friends...", NULL);
+        return;
+    }
+    int focus = app->ui.focus[AKN_SCREEN_PICKER];
+    akn_rect focus_rect = { 0, 0, 0, 0 };
+    for (int i = app->ui.list_top[AKN_SCREEN_PICKER]; i < list->count && i < app->ui.list_top[AKN_SCREEN_PICKER] + AKN_FRIEND_ROWS_VISIBLE; i++) {
+        akn_rect r = akn_ui_row_rect(&app->ui, AKN_SCREEN_PICKER, i);
+        friend_row(app, r, &list->items[i], i == focus && !app->ui.dialog, unix_now);
+        if (invite && akn_party_member_find(&s->party, list->items[i].id) >= 0) pill(app, r.x + r.w - 190, r.y + 27, C_ACCENT_SOFT, 0xFFB7C8FFu, "IN THE PARTY");
+        if (i == focus) focus_rect = r;
+    }
+    scroll_info(app, AKN_SCREEN_PICKER, AKN_MARGIN_X + 1000, 966, AKN_FRIEND_ROWS_VISIBLE);
+    if (focus_rect.w && !app->ui.dialog) focus_ring(app, focus_rect, 18, now);
+}
+
+/* The on-screen keyboard (core/osk.h), over the screen it was opened from. */
+#define KEY_W 140
+#define KEY_H 70
+#define KEY_GAP 12
+static void draw_keyboard(akn_app *app, uint64_t now) {
+    akn_gfx *g = app->gfx;
+    const akn_osk *k = &app->ui.osk;
+    akn_gfx_rect(g, (akn_rect){ 0, 0, AKN_SCREEN_W, AKN_SCREEN_H }, 0xB3040710u);
+    akn_rect p = { 150, 150, 1620, 830 };
+    akn_gfx_rrect(g, p, 28, 0xFA121A2Fu);
+    akn_gfx_rrect_outline(g, p, 28, 1, C_LINE_STRONG);
+    akn_gfx_gradient(g, (akn_rect){ p.x + 28, p.y, p.w - 56, 3 }, C_ACCENT, C_VIOLET, 0);
+    akn_gfx_text_fit(g, p.x + 50, p.y + 34, 32, AKN_FONT_BOLD, C_INK, app->ui.osk_title, p.w - 300);
+    char count[32];
+    snprintf(count, sizeof(count), "%d / %d", akn_osk_chars(k), k->max_chars);
+    int cw = akn_gfx_text_width(g, 22, AKN_FONT_REGULAR, count, strlen(count));
+    akn_gfx_text(g, p.x + p.w - 50 - cw, p.y + 42, 22, AKN_FONT_REGULAR, akn_osk_chars(k) >= k->max_chars ? C_WARNING : C_SUBTLE, count);
+    /* the text with a cursor: what is before the cursor, a bar, what follows */
+    akn_rect field = { p.x + 50, p.y + 96, p.w - 100, 150 };
+    akn_gfx_rrect(g, field, 18, 0xFF0B1120u);
+    akn_gfx_rrect_outline(g, field, 18, 1, C_LINE_STRONG);
+    if (k->len == 0) {
+        akn_gfx_text(g, field.x + 24, field.y + 20, 28, AKN_FONT_REGULAR, C_SUBTLE, "Type with the keys below");
+    } else {
+        static char shown[AKN_OSK_TEXT_MAX + 8];
+        snprintf(shown, sizeof(shown), "%.*s|%s", (int)k->cursor, k->text, k->text + k->cursor);
+        /* the last lines that fit, so the cursor stays visible at the end */
+        int widest = 0;
+        int lines = akn_gfx_text_block(g, 28, AKN_FONT_REGULAR, shown, field.w - 48, 200, &widest);
+        const char *start = shown;
+        while (lines > 3 && *start) { /* drop leading words until three lines remain */
+            const char *sp = strpbrk(start + 1, " \n");
+            start = sp ? sp + 1 : start + strlen(start);
+            lines = akn_gfx_text_block(g, 28, AKN_FONT_REGULAR, start, field.w - 48, 200, &widest);
+        }
+        akn_gfx_text_wrap(g, field.x + 24, field.y + 18, 28, AKN_FONT_REGULAR, C_INK, start, field.w - 48, 40, 3);
+    }
+    /* the keys */
+    int x0 = (AKN_SCREEN_W - (AKN_OSK_COLS * KEY_W + (AKN_OSK_COLS - 1) * KEY_GAP)) / 2, y0 = p.y + 280;
+    akn_rect focus_rect = { 0, 0, 0, 0 };
+    for (int row = 0; row < AKN_OSK_ROWS; row++) {
+        akn_osk_key keys[AKN_OSK_COLS];
+        int n = akn_osk_row_keys(k, row, keys, AKN_OSK_COLS);
+        for (int i = 0; i < n; i++) {
+            const akn_osk_key *key = &keys[i];
+            akn_rect r = { x0 + key->col * (KEY_W + KEY_GAP), y0 + row * (KEY_H + KEY_GAP), key->span * KEY_W + (key->span - 1) * KEY_GAP, KEY_H };
+            int f = row == k->row && key->col <= k->col && k->col < key->col + key->span;
+            int active = (key->kind == AKN_KEY_SHIFT && (k->shift || k->caps)) || (key->kind == AKN_KEY_LAYER && k->layer == AKN_OSK_SYMBOLS);
+            uint32_t fill = f ? C_ACCENT : key->kind == AKN_KEY_DONE ? 0xFF2B3F8Fu : active ? 0xFF2A3A66u : 0xFF1C2742u;
+            akn_gfx_rrect(g, r, 14, fill);
+            const char *label = key->text;
+            switch (key->kind) {
+            case AKN_KEY_SHIFT: label = k->caps ? "CAPS" : "Shift"; break;
+            case AKN_KEY_LAYER: label = k->layer == AKN_OSK_LETTERS ? "?123" : "ABC"; break;
+            case AKN_KEY_SPACE: label = "Space"; break;
+            case AKN_KEY_BACKSPACE: label = "Delete"; break;
+            case AKN_KEY_DONE: label = app->ui.osk_purpose == AKN_KB_MESSAGE ? "Send" : "Done"; break;
+            case AKN_KEY_CHAR: break;
+            }
+            int px = key->kind == AKN_KEY_CHAR ? 32 : 24;
+            akn_gfx_text_center(g, r.x, r.w, r.y + (r.h - px * 13 / 10) / 2, px, key->kind == AKN_KEY_CHAR ? AKN_FONT_REGULAR : AKN_FONT_BOLD, C_INK, label);
+            if (f) focus_rect = r;
+        }
+    }
+    if (focus_rect.w) focus_ring(app, focus_rect, 14, now);
+    akn_gfx_text_center(g, p.x, p.w, p.y + p.h - 52, 21, AKN_FONT_REGULAR, C_MUTED,
+                        "Square: delete  \xC2\xB7  Triangle: space  \xC2\xB7  L1: Shift  \xC2\xB7  R1: symbols  \xC2\xB7  L2/R2: move the cursor  \xC2\xB7  "
+                        "Options: send  \xC2\xB7  Circle: close (kept as a draft)");
+}
+
 static void draw_dialog(akn_app *app, uint64_t now) {
     akn_gfx *g = app->gfx;
+    if (app->ui.dialog == AKN_DIALOG_KEYBOARD) {
+        draw_keyboard(app, now);
+        return;
+    }
     akn_gfx_rect(g, (akn_rect){ 0, 0, AKN_SCREEN_W, AKN_SCREEN_H }, 0xB3040710u);
-    akn_rect p = app->ui.dialog == AKN_DIALOG_EXIT ? (akn_rect){ 560, 340, 800, 380 } : (akn_rect){ 460, 330, 1000, 380 };
+    akn_rect p = app->ui.dialog == AKN_DIALOG_EXIT      ? (akn_rect){ 560, 340, 800, 380 }
+                 : app->ui.dialog == AKN_DIALOG_CONFIRM ? (akn_rect){ 560, 330, 800, 400 }
+                                                         : (akn_rect){ 460, 330, 1000, 380 };
     akn_gfx_rrect(g, p, 28, 0xFA121A2Fu);
     akn_gfx_rrect_outline(g, p, 28, 1, C_LINE_STRONG);
     akn_gfx_gradient(g, (akn_rect){ p.x + 28, p.y, p.w - 56, 3 }, C_ACCENT, C_VIOLET, 0);
@@ -1284,6 +1940,9 @@ static void draw_dialog(akn_app *app, uint64_t now) {
         akn_gfx_text_center(g, p.x, p.w, p.y + 60, 44, AKN_FONT_BOLD, C_INK, "Exit AKENO Native?");
         akn_gfx_text_center(g, p.x, p.w, p.y + 130, 24, AKN_FONT_REGULAR, C_MUTED, "You return to the PS5. The AKENO daemon keeps running.");
         akn_gfx_text_center(g, p.x, p.w, p.y + 166, 24, AKN_FONT_REGULAR, C_MUTED, "A diagnostic report is saved on the way out.");
+    } else if (app->ui.dialog == AKN_DIALOG_CONFIRM) {
+        akn_gfx_text_center(g, p.x, p.w, p.y + 60, 44, AKN_FONT_BOLD, C_INK, app->ui.confirm_title);
+        akn_gfx_text_wrap(g, p.x + 60, p.y + 136, 24, AKN_FONT_REGULAR, C_MUTED, app->ui.confirm_text, p.w - 120, 34, 3);
     } else {
         akn_gfx_text_center(g, p.x, p.w, p.y + 56, 44, AKN_FONT_BOLD, C_INK, "Did you hear the tone?");
         akn_gfx_text_center(g, p.x, p.w, p.y + 126, 24, AKN_FONT_REGULAR, C_MUTED, "A 440 Hz beep for 1.5 seconds, on the TV or your headset.");
@@ -1313,10 +1972,24 @@ void akn_screens_draw(akn_app *app, uint64_t now) {
     case AKN_SCREEN_FRIENDS:
     case AKN_SCREEN_PROFILE:
     case AKN_SCREEN_ACTIVITY:
+    case AKN_SCREEN_MESSAGES:
+    case AKN_SCREEN_CHAT:
+    case AKN_SCREEN_PARTY:
+    case AKN_SCREEN_INBOX:
+    case AKN_SCREEN_SETTINGS:
+    case AKN_SCREEN_PICKER:
         SDL_LockMutex(app->lock); /* the worker replaces the data under the same lock */
-        if (app->ui.screen == AKN_SCREEN_FRIENDS) draw_friends(app, &app->social, now);
-        else if (app->ui.screen == AKN_SCREEN_PROFILE) draw_profile(app, &app->social, now);
-        else draw_activity(app, &app->social, now);
+        switch (app->ui.screen) {
+        case AKN_SCREEN_FRIENDS: draw_friends(app, &app->social, now); break;
+        case AKN_SCREEN_PROFILE: draw_profile(app, &app->social, now); break;
+        case AKN_SCREEN_MESSAGES: draw_messages(app, &app->social, now); break;
+        case AKN_SCREEN_CHAT: draw_chat(app, &app->social); break;
+        case AKN_SCREEN_PARTY: draw_party(app, &app->social, now); break;
+        case AKN_SCREEN_INBOX: draw_inbox(app, &app->social, now); break;
+        case AKN_SCREEN_SETTINGS: draw_settings(app, &app->social, now); break;
+        case AKN_SCREEN_PICKER: draw_picker(app, &app->social, now); break;
+        default: draw_activity(app, &app->social, now); break;
+        }
         SDL_UnlockMutex(app->lock);
         break;
     case AKN_SCREEN_COUNT: break;

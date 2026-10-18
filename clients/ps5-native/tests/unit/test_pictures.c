@@ -179,6 +179,15 @@ static void test_vector(void) {
     for (int i = 0; i < AKN_PATH_MAX_POINTS + 10; i++) w += sprintf(w, "l1 0");
     CHECK(akn_path_parse(longd, p) == -1 && p->npts <= AKN_PATH_MAX_POINTS);
     free(longd);
+    /* coordinates far outside an int (fuzz_path finding): the stroke's box is clamped, nothing drawn off the image */
+    memset(p, 0, sizeof(*p));
+    memset(px, 0, 16 * 16 * 4);
+    CHECK(akn_path_parse("M13 5v22 9222222222222222222223 0 0 1 0 6v2", p) == 0);
+    akn_raster_stroke(px, 16, p, 1.0f, 2.0f, 0xFFFFFFFFu);
+    memset(p, 0, sizeof(*p));
+    CHECK(akn_path_parse("M-9e30 -9e30 L9e30 9e30", p) == 0);
+    akn_raster_stroke(px, 16, p, 1.0f, 2.0f, 0xFFFFFFFFu);
+    CHECK(1);
     free(px);
     free(p);
 }

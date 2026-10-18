@@ -1,6 +1,6 @@
 # Project status
 
-_Last updated: 2026-10-14 (session 5, part 2)._ This file is the source of truth for continuing work
+_Last updated: 2026-10-18 (AKENO Native 1.0.0-beta.1; see [HANDOFF_PS5_NATIVE.md](HANDOFF_PS5_NATIVE.md))._ Earlier: 2026-10-14 (session 5, part 2). This file is the source of truth for continuing work
 across sessions. Do not mark anything complete that has not actually been run.
 
 Branches: **`claude/vibrant-mendel-v55zqf`** (session 5; based on `claude/elegant-wright-4qi8gh`
@@ -24,7 +24,11 @@ VPS-only commits must be pushed or merged (procedure in the session-2 section be
 | Alpha 0.3 console-page images (profile pictures, artwork, local console icons) | Implemented, tested on Linux; **not run on a PS5** |
 | **Alpha 0.4** (voice parties, desktop + mobile browsers) | **Implemented; tested against a real LiveKit server in Chromium** (session 5, part 2); real two-device test, phones, Firefox/Safari still open; not deployed |
 | Alpha 0.4 PS5 audio | Research done; experimental **audio lab** ELF (prototypes A and C) builds and passes the import gate; **never run on a PS5**; microphone capture blocked (no SDK interface) |
-| Native Game Base / PSN, Control Center card, overlay | **Unsupported** (no safe documented mechanism) |
+| **AKENO NETWORK Native (PS5) 0.1** | **Ran on a real PS5, firmware 12.20** (foreground, 1920×1080, DualSense, audible audio, account) — [results](PS5_NATIVE_HARDWARE_RESULTS_FW12.20.md) |
+| AKENO Native 0.2 preview | Ran on the owner's PS5, firmware 12.20 (real friend profiles and game activity; owner report, build ID not recorded); not fully tested |
+| **AKENO Native 1.0.0-beta.1** (messages + controller keyboard, party, inbox, settings, verified artwork; daemon IPC protocol 2) | **Beta**: implemented, PC tests and real-server end-to-end tests pass, PS5 builds gated and reproducible; **not run on a PS5** — branch `claude/affectionate-cannon-s38t7k`, [handoff](HANDOFF_PS5_NATIVE.md), [test plan](HARDWARE_TEST_PLAN_PS5_NATIVE_1.0.0-beta.1.md) |
+| In-Game Companion (OnionHEN Toolbox plugin) | **Experimental**: PC-tested, PS5 build gated; needs OnionHEN (owner decision); never run on a PS5 — [IN_GAME_ACCESS.md](IN_GAME_ACCESS.md) |
+| Native Game Base / PSN, Control Center card, overlay | **Unsupported** (no safe documented mechanism); in-game access only through a third-party host (above) |
 | Production VPS | Not verified, not deployed (network policy, see above) |
 
 ## Session 5, part 2 — Alpha 0.4 voice parties

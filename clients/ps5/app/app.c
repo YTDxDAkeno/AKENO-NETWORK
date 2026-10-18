@@ -483,6 +483,15 @@ static void on_message(akeno_app *app, const char *self, const akeno_json *data)
     if (strcmp(kind, "party") == 0) app_copy_str(open, sizeof(open), "party");
     else if (strcmp(kind, "direct") == 0 && is_uuid(conversation)) snprintf(open, sizeof(open), "conversation:%s", conversation);
     remember_message(app, open, kind, name, body);
+#ifdef AKENO_NATIVE_IPC
+    /* The user is reading this conversation in AKENO Native: the message is on screen already. */
+    pthread_mutex_lock(&app->lock);
+    int on_screen = app->native_focus[0] && strcmp(app->native_focus, conversation) == 0 &&
+                    akeno_now_ms() - app->native_focus_at < AKENO_NATIVE_FOCUS_MS;
+    if (on_screen) app->native_quieted++;
+    pthread_mutex_unlock(&app->lock);
+    if (on_screen) return;
+#endif
 
     const char *where = strcmp(kind, "party") == 0 ? " (party)" : strcmp(kind, "group") == 0 ? " (group)" : "";
     char plain[400], title[160];
