@@ -218,6 +218,8 @@ export async function buildApp(options: BuildAppOptions): Promise<BuiltApp> {
     }
     // Tell clients to reconnect with backoff instead of treating this as a failure.
     ctx.hub.closeAll(REALTIME_CLOSE_CODES.serviceRestart, 'Server restarting');
+    // Voice removals still in flight finish before the database closes.
+    await ctx.voice.settle();
   });
 
   app.addHook('onClose', async () => {
