@@ -11,6 +11,8 @@ export default defineConfig(
       'clients/ps5/build*/**',
       'clients/ps5-native/build*/**',
       'clients/ps5-native/third_party/**',
+      'clients/ps5-ingame/build*/**',
+      'clients/ps5-ingame/third_party/**',
       '**/node_modules/**',
       '**/coverage/**',
       '**/playwright-report/**',

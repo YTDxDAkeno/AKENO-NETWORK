@@ -68,6 +68,12 @@ key gives such a program nothing it did not have. This is documented, not hidden
 | `POST /api/settings` | **only** `notifyMessages`, `notifySocial`, `activityEnabled` (2.4); anything else in the body is refused |
 | `POST /api/realtime/reconnect` | ask the daemon to reconnect its own session |
 
+### IPC protocol 3 (1.1.0-beta.1)
+
+Adds one write: `POST /parties/:id/voice/device-token`, the party voice pass for this console
+(docs/PS5_VOICE.md). `hello` answers `"ipc":3`; the daemon logs it as
+`native.write POST /parties/:id/voice/device-token` like every write.
+
 ### IPC protocol 2: the write list (1.0.0-beta.1)
 
 `GET /api/native/hello` answers `"ipc":2`, `"writes":true` and `"focusMs":20000`. Through the

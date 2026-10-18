@@ -23,6 +23,20 @@ other people's names, IDs or message texts, and never keys or tokens.
 | Controller banner "No controller" | the DualSense is off or assigned to another user | press the PS button; Control Center → Accessories |
 | The screen freezes | | PS button → close AKENO Native; if the console does not respond, hold power until it beeps twice; send the logs |
 
+## Voice (1.1)
+
+| What you see | Why | What to do |
+| --- | --- | --- |
+| No "Join voice" row | the server does not offer party voice for this party | voice and the voice gateway must be set up on the server (docs/VOICE.md) |
+| "Voice needs the native-IPC daemon of this package (native interface 3)." | an older daemon runs | send this package's daemon |
+| "Console voice is not set up on this AKENO server." | `VOICE_GATEWAY_URL` is empty | set up the voice gateway (docs/VOICE.md) |
+| "This console may not use parties…" | the console lacks the "parties" permission | allow it on the website's device page |
+| "The voice gateway could not be reached." | gateway down, Caddy route missing, TLS | check `/voice-gateway` on the server |
+| "No microphone function on this system: …" / "The microphone could not be opened (0x…)" | the system refused the microphone | report the exact text and code (hardware result); listening still works |
+| You hear nothing | deafened, volume 0 %, nobody speaking, or the TV/headset routing | check the voice rows; the report's "Playback: level" |
+| Echo for the friend | TV speakers reach the DualSense microphone | use a headset, or mute when not talking |
+| "You joined this voice chat on another device." | the same account joined voice on the website/app | expected: one voice connection per account |
+
 ## Logs
 
 | File | Written by | Holds |

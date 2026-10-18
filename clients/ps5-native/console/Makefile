@@ -35,6 +35,9 @@ endif
 ifeq ($(wildcard $(THIRD_PARTY)/stb_truetype.h),)
 $(error stb_truetype is missing; run clients/ps5-native/scripts/fetch-deps.sh)
 endif
+ifeq ($(wildcard $(THIRD_PARTY)/opus/include/opus.h),)
+$(error libopus is missing; run clients/ps5-native/scripts/fetch-deps.sh)
+endif
 ifeq ($(wildcard $(SDL_PREFIX)/lib/libSDL2.a),)
 $(error SDL2 for the PS5 is missing; run clients/ps5-native/scripts/build-sdl-ps5.sh)
 endif
@@ -44,8 +47,12 @@ CLIENT_SRC  := $(addprefix $(PS5_ROOT)/src/,buf.c json.c json_write.c crypto_uti
                client.c realtime.c net_posix.c transport_mbedtls.c)
 SHARED_SRC  := $(addprefix $(PS5_ROOT)/app/,audio_lab_pcm.c game_detect.c)
 CORE_SRC    := $(addprefix $(ROOT)/src/core/,nav.c input.c audio_test.c redact.c log.c context.c logo.c png.c text.c ui.c \
-               script.c account.c social.c image.c vector.c badges.c artwork.c chat.c osk.c party.c)
-APP_SRC     := $(addprefix $(ROOT)/src/app/,main.c app.c screens.c gfx.c net.c report.c ipc.c social.c images.c)
+               script.c account.c social.c image.c vector.c badges.c artwork.c chat.c osk.c party.c \
+               voice.c voice_codec.c voice_dsp.c voice_proto.c jitter.c)
+APP_SRC     := $(addprefix $(ROOT)/src/app/,main.c app.c screens.c gfx.c net.c report.c ipc.c social.c images.c voice_app.c)
+# libopus 1.5.2: the same portable C files and defines as the PC build (cmake/opus_sources.txt).
+OPUS_DIR    := $(THIRD_PARTY)/opus
+OPUS_SRC    := $(addprefix $(OPUS_DIR)/,$(shell cat $(ROOT)/cmake/opus_sources.txt))
 PLAT_SRC    := $(ROOT)/src/platform/platform_ps5.c
 STB_SRC     := $(ROOT)/src/app/font_stb.c
 
@@ -57,6 +64,7 @@ APP_OBJ     := $(patsubst $(ROOT)/src/app/%.c,$(OBJ)/app/%.o,$(APP_SRC))
 PLAT_OBJ    := $(OBJ)/platform/platform_ps5.o
 STB_OBJ     := $(OBJ)/third_party/font_stb.o
 STBI_OBJ    := $(OBJ)/third_party/stb_image_impl.o
+OPUS_OBJ    := $(patsubst $(OPUS_DIR)/%.c,$(OBJ)/opus/%.o,$(OPUS_SRC))
 
 # Paths are mapped so the ELF (and the debug ELF) do not depend on where the repository is checked out.
 COMMON_FLAGS := -O2 -g -std=c11 -DMBEDTLS_CONFIG_FILE='"akeno_mbedtls_config.h"' -I$(PS5_ROOT)/config \
@@ -66,7 +74,10 @@ WARNINGS     := -Wall -Wextra -Wshadow -Wformat=2 -Wstrict-prototypes -Wvla -Wun
                 -Wno-unreachable-code-generic-assoc
 SDL_FLAGS    := -isystem $(SDL_PREFIX)/include/SDL2 -D_REENTRANT
 AKN_FLAGS    := $(COMMON_FLAGS) $(WARNINGS) -DAKN_PLATFORM_PS5 -I$(PS5_ROOT)/include -I$(PS5_ROOT)/src -I$(PS5_ROOT)/app \
-                -I$(ROOT)/src/core -I$(ROOT)/src/app -I$(ROOT)/src/platform -I$(THIRD_PARTY)
+                -I$(ROOT)/src/core -I$(ROOT)/src/app -I$(ROOT)/src/platform -I$(THIRD_PARTY) -isystem $(OPUS_DIR)/include
+OPUS_FLAGS   := -O2 -g -std=c11 -w -ffile-prefix-map=$(REPO_ROOT)=. -ffile-prefix-map=$(PS5_PAYLOAD_SDK)=ps5-payload-sdk \
+                -DOPUS_BUILD -DVAR_ARRAYS -DHAVE_LRINT -DHAVE_LRINTF -DPACKAGE_VERSION='"1.5.2"' -I$(OPUS_DIR)/include -I$(OPUS_DIR) \
+                -I$(OPUS_DIR)/celt -I$(OPUS_DIR)/silk -I$(OPUS_DIR)/silk/float
 CLIENT_FLAGS := $(COMMON_FLAGS) -Wall -Wextra -Werror -Wno-unreachable-code-generic-assoc -I$(PS5_ROOT)/include \
                 -I$(PS5_ROOT)/src \
                 -DAKENO_CA_BUNDLE_PATH='"$(AKENO_TP)/cacert.pem"' \
@@ -119,7 +130,11 @@ $(STBI_OBJ): $(ROOT)/src/third/stb_image_impl.c $(ROOT)/src/core/stb_image_akn.h
 	$(CC) -O2 -g -std=c11 -w -ffile-prefix-map=$(REPO_ROOT)=. -ffile-prefix-map=$(PS5_PAYLOAD_SDK)=ps5-payload-sdk \
 	      -I$(THIRD_PARTY) -I$(ROOT)/src/core -c $< -o $@
 
-$(DEBUG_ELF): $(APP_OBJ) $(PLAT_OBJ) $(CORE_OBJ) $(SHARED_OBJ) $(STB_OBJ) $(STBI_OBJ) $(CLIENT_OBJ) $(MBEDTLS_OBJ)
+$(OBJ)/opus/%.o: $(OPUS_DIR)/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(OPUS_FLAGS) -c $< -o $@
+
+$(DEBUG_ELF): $(APP_OBJ) $(PLAT_OBJ) $(CORE_OBJ) $(SHARED_OBJ) $(STB_OBJ) $(STBI_OBJ) $(CLIENT_OBJ) $(MBEDTLS_OBJ) $(OPUS_OBJ)
 	$(CC) -o $@ $^ $(LIBS)
 
 $(ELF): $(DEBUG_ELF)

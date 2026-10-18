@@ -7,8 +7,8 @@ is **never recorded, stored, transcribed or analysed**.
 
 Status, as of 2026-10-14: implemented and tested against a real LiveKit server (see
 [Testing](#testing)). **Not deployed.** Voice stays off until an operator configures it and
-opens the firewall ports listed below. Native PS5 voice is not part of this feature (see
-[PS5_AUDIO_RESEARCH.md](PS5_AUDIO_RESEARCH.md)).
+opens the firewall ports listed below. PS5 consoles join the same rooms through the AKENO voice
+gateway (AKENO Native 1.1, [PS5_VOICE.md](PS5_VOICE.md); not yet run on a PS5).
 
 ## Choosing the media server
 

@@ -23,7 +23,7 @@
 #include "ui.h"
 #include "voice.h"
 
-#define AKN_NATIVE_VERSION "1.0.0-beta.1"
+#define AKN_NATIVE_VERSION "1.1.0-beta.1"
 #ifndef AKN_BUILD_ID
 #define AKN_BUILD_ID "dev"
 #endif
