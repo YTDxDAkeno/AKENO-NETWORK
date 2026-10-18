@@ -348,15 +348,21 @@ if (livekitBinary) {
   }, 'the voice gateway');
   await startTlsProxy(gatewayTlsPort, gatewayPort);
 }
-const backend = spawn('node', ['apps/server/dist/main.js'], { cwd: root, env: serverEnv, stdio: ['ignore', 'ignore', 'pipe'] });
-children.add(backend);
-await waitFor(async () => {
-  try {
-    return (await fetch(`http://127.0.0.1:${backendPort}/health/ready`)).ok;
-  } catch {
-    return false;
-  }
-}, 'the server');
+/** Starts the AKENO server; the voice revocation test restarts it while LiveKit keeps its rooms. */
+async function startBackend() {
+  const child = spawn('node', ['apps/server/dist/main.js'], { cwd: root, env: serverEnv, stdio: ['ignore', 'ignore', 'pipe'] });
+  children.add(child);
+  child.exited = new Promise((done) => child.once('exit', done));
+  await waitFor(async () => {
+    try {
+      return (await fetch(`http://127.0.0.1:${backendPort}/health/ready`)).ok;
+    } catch {
+      return false;
+    }
+  }, 'the server');
+  return child;
+}
+let backend = await startBackend();
 const tlsPort = await freePort();
 const tlsServer = await startTlsProxy(tlsPort);
 const serverUrl = `https://127.0.0.1:${tlsPort}`;
@@ -931,6 +937,84 @@ if (livekitBinary) await step('Party voice: AKENO Native and a website member ta
   for (const line of daemonLog.split('\n').filter((l) => /native\.write/.test(l))) assert.ok(!line.includes(party.body.id), line);
   // still one realtime session to the AKENO server (voice uses the gateway, not the server)
   assert.equal(tlsRequests.filter((x) => x.upgrade).length, 1);
+});
+
+/** Pairs an API-only console for a user (the device flow the daemon uses) and returns its bearer token and ID. */
+async function pairApiDevice(owner, name) {
+  const api = (method, path, body, token) => fetch(`http://127.0.0.1:${backendPort}/api/v1${path}`, {
+    method, headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => null) }));
+  const started = await api('POST', '/devices/pairings', { deviceName: name, platform: 'PlayStation 5 (homebrew)', clientVersion: '1.1.0-beta.1' });
+  assert.equal(started.status, 201, JSON.stringify(started.body));
+  assert.equal((await owner.request('POST', '/devices/pairings/approve', { userCode: started.body.userCode })).status, 204);
+  let redeemed = null;
+  await waitFor(async () => {
+    redeemed = await api('POST', '/devices/pairings/token', { deviceCode: started.body.deviceCode });
+    if (redeemed.status === 400 && redeemed.body?.error?.code === 'SLOW_DOWN') await sleep(1000);
+    return redeemed.status === 200;
+  }, `pairing ${name}`, 30_000);
+  const token = redeemed.body.accessToken;
+  const current = await api('GET', '/devices/current', undefined, token);
+  return { token, id: current.body.device.id, pass: (partyId) => api('POST', `/parties/${partyId}/voice/device-token`, undefined, token) };
+}
+
+// The two cases of the security review of 196ca13, against the real LiveKit server and its webhooks. A console's voice
+// pass is a LiveKit token (the gateway only carries audio), so the connection here joins LiveKit with it directly.
+if (livekitBinary) await step('Voice revocation follows the connection in the room: an unused newer pass, a backend restart (real LiveKit)', async () => {
+  const rtc = createRequire(resolve(root, 'apps/voice-gateway/package.json'))('@livekit/rtc-node');
+  const livekitUrl = `ws://127.0.0.1:${livekitPort}`;
+  const current = (await carol.request('GET', '/parties/current')).body?.party;
+  if (current) await carol.request('POST', `/parties/${current.id}/leave`);
+  const party = await carol.request('POST', '/parties', { name: 'Revocation', privacy: 'friends' });
+  assert.equal(party.status, 201, JSON.stringify(party.body));
+  const inVoice = async () => (await carol.request('GET', `/parties/${party.body.id}`)).body.members.find((m) => m.user.id === carol.user.id)?.voice?.connected === true;
+  /** Connects with a console's pass like the gateway does, and reports when LiveKit removes the connection. */
+  const connectConsole = async (device) => {
+    const pass = await device.pass(party.body.id);
+    assert.equal(pass.status, 200, JSON.stringify(pass.body));
+    // Nothing private in what every participant can read.
+    const claims = JSON.parse(Buffer.from(pass.body.token.split('.')[1], 'base64url').toString('utf8'));
+    assert.ok(!JSON.stringify(claims).includes(device.id), 'no device ID in the pass');
+    const room = new rtc.Room();
+    const connection = { room, removed: false };
+    room.on(rtc.RoomEvent.Disconnected, () => (connection.removed = true));
+    await room.connect(livekitUrl, pass.body.token, { autoSubscribe: false, dynacast: false });
+    await waitFor(inVoice, 'the server sees the console in voice', 15_000);
+    return connection;
+  };
+
+  // 1. Console A is in voice; console B and a browser session then ask for passes they never use.
+  const a = await pairApiDevice(carol, 'PS5 A');
+  const b = await pairApiDevice(carol, 'PS5 B');
+  const first = await connectConsole(a);
+  assert.equal((await b.pass(party.body.id)).status, 200);
+  assert.equal((await carol.request('POST', `/parties/${party.body.id}/voice/token`)).status, 200);
+  // Unpairing B (unused) leaves A connected ...
+  const devices = (await carol.request('GET', '/devices')).body.devices;
+  assert.equal((await carol.request('DELETE', `/devices/${b.id}`)).status, 204);
+  await sleep(1500);
+  assert.equal(first.removed, false, 'revoking an unused pass does not touch the connection in the room');
+  // ... and A losing "parties:write" removes A.
+  const scopes = devices.find((d) => d.id === a.id).scopes.filter((scope) => scope !== 'parties:write');
+  assert.equal((await carol.request('PATCH', `/devices/${a.id}`, { scopes })).status, 200);
+  await waitFor(() => first.removed, 'LiveKit removes console A', 10_000);
+  await waitFor(async () => !(await inVoice()), 'the server no longer shows carol in voice', 10_000);
+  await first.room.disconnect();
+
+  // 2. Console C is in voice; the AKENO server restarts (LiveKit keeps the room) and C is unpaired
+  //    before any webhook or reconciliation of the new process has seen the connection.
+  const c = await pairApiDevice(carol, 'PS5 C');
+  const second = await connectConsole(c);
+  backend.kill('SIGTERM');
+  await backend.exited;
+  children.delete(backend);
+  backend = await startBackend();
+  assert.equal(second.removed, false, 'a restart alone does not end the voice connection');
+  assert.equal((await carol.request('DELETE', `/devices/${c.id}`)).status, 204);
+  await waitFor(() => second.removed, 'LiveKit removes console C after the restart', 10_000);
+  await second.room.disconnect();
+  await carol.request('POST', `/parties/${party.body.id}/close`);
 });
 
 await step('native-IPC daemon: stopping removes the key; the release daemon ignores it', async () => {
