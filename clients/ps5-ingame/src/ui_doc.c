@@ -20,12 +20,12 @@ static void fit(char *dst, size_t len, const char *src, const char *fallback) {
     if (n < len) {
         memcpy(dst, src, n + 1);
         akn_utf8_whole(dst); /* a model text that was cut by bytes before */
+        if (!dst[0]) snprintf(dst, len, "%s", fallback);
         return;
     }
     n = len - 4;
     while (n > 0 && ((unsigned char)src[n] & 0xC0) == 0x80) n--;
-    memcpy(dst, src, n);
-    memcpy(dst + n, "...", 4);
+    snprintf(dst, len, "%.*s...", (int)n, src);
 }
 
 static onion_ui_node_desc_v1 node(uint32_t kind, const char *id, const char *parent, const char *title) {

@@ -738,7 +738,7 @@ await step('AKENO Native: an uninstalled game keeps its administrator-verified c
   assert.match(report, /Pictures:\s+\d+ asked for, [1-9]\d* shown/);
 });
 
-if (companionBinary) await step('In-Game Companion (experimental): the menu from the real server, a status change and an accepted invitation', async () => {
+if (companionBinary) await step('In-Game Companion (experimental): the pages from the real server; status, invitation, reply, read, message, party and friend-request presses', async () => {
   // asynchronous: this process also runs the TLS terminator the daemon talks to
   const check = (...extra) => new Promise((done) => {
     const child = spawn(companionBinary, ['--port', String(daemon.port), '--akeno-dir', akenoDir, ...extra], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -775,6 +775,57 @@ if (companionBinary) await step('In-Game Companion (experimental): the menu from
   await waitFor(async () => (await bob.request('GET', '/friends')).body.friends.find((f) => f.id === alice.user.id)?.presence.status === 'away',
     'alice away for bob', 10_000);
   assert.equal((await check('--presence', 'online')).status, 0);
+
+  // The pages (1.10) and their presses, delivered as onionHEN delivers them from the PS5: the node
+  // ID that names the item, and for a text field the text typed with the PS5 keyboard. A run
+  // presses several controls in a row and reloads only what each press changed, like the plugin
+  // (the server limits each account's requests per minute; the console shares that budget).
+  // 1. a reply on bob's conversation page, then Mark as read
+  r = await check('--pages', '--event', `reply.${conv.body.id}`, 'on my way', '--event', `read.${conv.body.id}`);
+  assert.equal(r.status, 0, r.stderr + r.stdout);
+  assert.match(r.stdout, /Action reply\.[0-9a-f-]+: ok: Sent to .+\./);
+  assert.match(r.stdout, /Action read\.[0-9a-f-]+: ok: Marked .+ as read\./);
+  assert.match(r.stdout, new RegExp(`Conversation [^\\n]+ \\[${conv.body.id}\\]:\\n(  [^\\n]*\\n)*  [^\\n:]+: gg, party\\?\\n  You: on my way\\n`));
+  assert.doesNotMatch(r.stdout, /Unread:\n/);
+  assert.match(r.stdout, new RegExp(`\\nPage c\\.${conv.body.id}\\n`));
+  assert.match(r.stdout, new RegExp(`\\nPage f\\.${bob.user.id}\\n`));
+  assert.match(r.stdout, /\nMember [^\n]+ \(leader\)\n/);
+  const thread = await bob.request('GET', `/conversations/${conv.body.id}/messages`);
+  assert.ok(thread.body.messages.some((m) => m.body === 'on my way' && m.sender.id === alice.user.id), 'bob has the reply');
+  assert.equal((await alice.request('GET', '/conversations')).body.conversations.find((c) => c.id === conv.body.id).unreadCount, 0);
+  // 2. an empty reply sends nothing; a message from carol's friend page; leave bob's party; create one
+  r = await check('--event', `reply.${conv.body.id}`, '   ', '--event', `dm.${carol.user.id}`, 'hi carol', '--event', `pleave.${party.body.id}`,
+    '--event', 'pcreate', 'Companion night');
+  assert.match(r.stdout, /Action reply\.[0-9a-f-]+: failed: Nothing to send/);
+  assert.match(r.stdout, /Action dm\.[0-9a-f-]+: ok: Sent to .+\./);
+  assert.match(r.stdout, /Action pleave\.[0-9a-f-]+: ok: You left the party\./);
+  assert.match(r.stdout, /Action pcreate: ok: Party created\./);
+  assert.match(r.stdout, /Party\s+Companion night, 1 member/);
+  await waitFor(async () => (await carol.request('GET', '/conversations')).body.conversations.some((c) => c.otherUser.id === alice.user.id && c.lastMessage?.body === 'hi carol'),
+    'carol has the message', 10_000);
+  assert.equal((await bob.request('GET', `/parties/${party.body.id}`)).body.memberCount, 1);
+  // 3. invite bob from the party (leaving it would close it and withdraw the invitation)
+  const mine = (await alice.request('GET', '/parties/current')).body.party;
+  r = await check('--event', `pinv.${bob.user.id}`);
+  assert.equal(r.status, 0, r.stderr + r.stdout);
+  assert.match(r.stdout, /Action pinv\.[0-9a-f-]+: ok: Invited .+ to your party\./);
+  assert.ok((await bob.request('GET', '/invitations')).body.invitations.some((i) => i.target?.id === mine.id), 'bob is invited');
+  // 4. leave it; friend requests: accept dave's, decline erin's; a control that is not the companion's
+  const dave = await registerUser(admin, 'it_dave');
+  const daveAsks = await dave.request('POST', '/friends/requests', { userId: alice.user.id });
+  assert.equal(daveAsks.status, 201, JSON.stringify(daveAsks.body));
+  const erin = await registerUser(admin, 'it_erin');
+  const erinAsks = await erin.request('POST', '/friends/requests', { userId: alice.user.id });
+  assert.equal(erinAsks.status, 201, JSON.stringify(erinAsks.body));
+  r = await check('--event', `pleave.${mine.id}`, '--event', `racc.${daveAsks.body.request.id}`, '--event', `rdec.${erinAsks.body.request.id}`,
+    '--event', 'id_onion_ui_0000000000000000');
+  assert.match(r.stdout, /Action pleave\.[0-9a-f-]+: ok: You left the party\./);
+  assert.match(r.stdout, /Party\s+Not in a party/);
+  assert.match(r.stdout, /Action racc\.[0-9a-f-]+: ok: Friend request accepted\./);
+  assert.match(r.stdout, /Action rdec\.[0-9a-f-]+: ok: Friend request declined\./);
+  assert.match(r.stdout, /Action id_onion_ui_0+: unknown/);
+  assert.ok((await dave.request('GET', '/friends')).body.friends.some((f) => f.id === alice.user.id), 'dave and alice are friends');
+  assert.ok(!(await erin.request('GET', '/friends')).body.friends.some((f) => f.id === alice.user.id), 'erin was declined');
   // still the daemon's single realtime session; the companion opened none
   assert.equal(tlsRequests.filter((x) => x.upgrade).length, 1);
 });

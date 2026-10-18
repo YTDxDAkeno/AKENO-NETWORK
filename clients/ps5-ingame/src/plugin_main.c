@@ -157,7 +157,14 @@ int main(void) {
     char (*prev_ids)[AKN_UI_PAGE_ID_MAX] = calloc(AKN_UI_PAGES_MAX, AKN_UI_PAGE_ID_MAX);
     char (*cur_ids)[AKN_UI_PAGE_ID_MAX] = calloc(AKN_UI_PAGES_MAX, AKN_UI_PAGE_ID_MAX);
     tombstones *tomb = calloc(1, sizeof(*tomb));
-    if (!store || !model || !prev_ids || !cur_ids || !tomb) return 1;
+    if (!store || !model || !prev_ids || !cur_ids || !tomb) {
+        akn_store_free(store);
+        free(model);
+        free(prev_ids);
+        free(cur_ids);
+        free(tomb);
+        return 1;
+    }
     int prev_n = 0;
     char note[200] = "";
     long long note_until = 0;

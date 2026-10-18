@@ -632,6 +632,11 @@ static void test_largest_document(void) {
         CHECK(n == pages - AKN_UI_TOMBSTONES && n < AKN_UI_PAGES_MAX);
         for (int i = 0; i < n; i++) CHECK(find(w, ids[i]) && find(w, ids[i])->kind == ONION_UI_NODE_PAGE);
     }
+    /* a name that is nothing but half a character still gives a title */
+    snprintf(f->items[0].display_name, sizeof(f->items[0].display_name), "\xC3");
+    f->items[0].online_id[0] = '\0';
+    akn_companion_build_ex(m, AKN_COMP_READY, &d, f, c, p, in, "online", 1000, &x);
+    CHECK(check_doc(m, NULL, w) == NULL);
     free(w);
     free(f);
     free(c);

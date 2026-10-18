@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "actions.h"
 #include "fetch.h"
@@ -42,28 +43,39 @@ int main(int argc, char **argv) {
         }
     }
     akn_companion *c = calloc(1, sizeof(*c));
-    if (!c) return 1;
+    akn_store *store = akn_store_new();
+    char *text = malloc(16384);
+    if (!c || !store || !text) {
+        free(c);
+        akn_store_free(store);
+        free(text);
+        return 1;
+    }
     char err[200] = "";
     int rc = 0;
     if (presence && akn_companion_set_presence(&link, presence, err, sizeof(err)) != 0) {
         fprintf(stderr, "presence: %s\n", err);
         rc = 1;
     }
-    akn_companion_load(&link, c);
-    if (accept && akn_companion_accept_invitation(&link, c->invite_id, err, sizeof(err)) != 0) {
-        fprintf(stderr, "accept: %s\n", err);
-        rc = 1;
+    /* the plugin's own store: one full load, then only what a press changed, as on the console */
+    akn_store_load(&link, store, AKN_LOAD_ALL, (long long)time(NULL));
+    akn_store_model(store, c, (long long)time(NULL));
+    if (accept) {
+        if (akn_companion_accept_invitation(&link, c->invite_id, err, sizeof(err)) != 0) {
+            fprintf(stderr, "accept: %s\n", err);
+            rc = 1;
+        }
+        akn_store_load(&link, store, AKN_LOAD_PARTY | AKN_LOAD_INBOX | AKN_LOAD_MESSAGES, (long long)time(NULL));
+        akn_store_model(store, c, (long long)time(NULL));
     }
     for (int i = 0; i < events; i++) {
         akn_action_result res;
         akn_companion_action(&link, c, event_ids[i], event_values[i], &res);
         printf("Action %s: %s: %s\n", event_ids[i], res.ok ? "ok" : res.handled ? "failed" : "unknown", res.message);
         if (!res.ok) rc = 1;
-        akn_companion_load(&link, c); /* the next press sees what this one changed, as on the console */
+        if (res.reload) akn_store_load(&link, store, res.reload, (long long)time(NULL));
+        akn_store_model(store, c, (long long)time(NULL));
     }
-    if (presence || accept) akn_companion_load(&link, c);
-    char *text = malloc(16384);
-    if (!text) return 1;
     akn_companion_text(c, text, 16384);
     fputs(text, stdout);
     free(text);
@@ -80,6 +92,7 @@ int main(int argc, char **argv) {
     }
     printf("Daemon requests: %lu (%lu failed)\n", link.requests, link.failures);
     onion_ui_document_destroy(doc);
+    akn_store_free(store);
     free(c);
     return st == ONION_OK ? rc : 1;
 }
