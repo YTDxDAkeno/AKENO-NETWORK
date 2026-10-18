@@ -18,6 +18,10 @@ console run is the owner's hardware test
 
 ## Requirements
 
+**Server deployment required first:** the device voice pass and the voice gateway are new server
+code that is not deployed anywhere yet ([DEPLOYMENT_REVIEW_PS5_VOICE.md](DEPLOYMENT_REVIEW_PS5_VOICE.md)).
+
+
 - The native-IPC daemon of this package (native interface 3).
 - The AKENO server with voice **and the voice gateway** (`VOICE_GATEWAY_URL`, compose `voice`
   profile, docs/VOICE.md). Without it the Party screen shows that voice is not available.

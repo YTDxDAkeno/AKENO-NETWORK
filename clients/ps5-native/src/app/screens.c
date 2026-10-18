@@ -1729,7 +1729,6 @@ static void draw_party(akn_app *app, const akn_social *s, uint64_t now) {
             }
             snprintf(voice, sizeof(voice), "Microphone: %s%s  \xC2\xB7  heard %d%%", akn_mic_state_text(v->mic), v->muted ? " (muted)" : "", v->rx_level);
             akn_gfx_text_fit(g, x, y + 6, 20, AKN_FONT_REGULAR, C_MUTED, voice, w);
-            y += 36;
         } else if (v->error[0]) {
             akn_gfx_text_wrap(g, x, y, 22, AKN_FONT_REGULAR, C_MUTED, v->error, w, 32, 3);
         }

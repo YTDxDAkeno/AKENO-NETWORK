@@ -106,6 +106,11 @@ it muted); deafen stops audio to the console (and AKENO Native also mutes).
 
 ## Operating the gateway (owner; nothing is deployed by this work)
 
+> **Separate server deployment required.** The device voice pass (AKENO server) and the voice
+> gateway are new server-side code. Neither runs anywhere yet; without both, Join voice on the PS5
+> cannot work. Review and plan: [DEPLOYMENT_REVIEW_PS5_VOICE.md](DEPLOYMENT_REVIEW_PS5_VOICE.md).
+
+
 1. `compose.yaml` voice profile now contains `voice-gateway` (image from
    `infrastructure/docker/voice-gateway.Dockerfile`, Debian-based because LiveKit's Node SDK ships
    glibc builds only); Caddy routes `/voice-gateway` to it.

@@ -593,7 +593,8 @@ static int cap_thread(void *arg) {
         uint64_t t0 = akn_platform_now_us();
         int32_t rc = mic->read(handle, in);
         if (rc < 0) {
-            if (++errors == 1 || errors % 50 == 0)
+            errors++;
+            if (errors == 1 || errors % 50 == 0)
                 akn_logf(&app->log, AKN_LOG_WARN, "voice.mic", "Microphone read failed: 0x%08X (%d times)", (unsigned)rc, errors);
             set_mic(app, errors >= 50 ? AKN_MIC_FAILED : AKN_MIC_OPEN, rc, NULL);
             SDL_Delay(16);
