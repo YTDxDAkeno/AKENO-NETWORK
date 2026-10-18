@@ -23,9 +23,10 @@
 #include "fetch.h"
 #include "ui_doc.h"
 
+/* OnionHEN v0.9.0's host rejects AUTO_START; startup must be verified on real hardware. */
 ONION_PLUGIN_DEFINE(AKN_COMPANION_PLUGIN_ID, AKN_COMPANION_VERSION, "AKENO NETWORK (experimental)",
                     ONION_PLUGIN_CAP_IPC | ONION_PLUGIN_CAP_UI,
-                    ONION_PLUGIN_FLAG_AUTO_START | ONION_PLUGIN_FLAG_LONG_RUNNING | ONION_PLUGIN_FLAG_STOP_SUPPORTED);
+                    ONION_PLUGIN_FLAG_LONG_RUNNING | ONION_PLUGIN_FLAG_STOP_SUPPORTED);
 
 #define REFRESH_MS 10000
 #define RECONNECT_MS 5000
