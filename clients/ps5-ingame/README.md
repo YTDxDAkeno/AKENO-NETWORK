@@ -17,3 +17,20 @@ PS5_PAYLOAD_SDK=/opt/ps5-payload-sdk make -C console && console/check-plugin.sh 
 ```
 
 Sources are MIT (AKENO); the plugin ELF links the OnionHEN SDK runtime and is therefore GPLv3.
+
+## Phase 3 compatibility fixes (software only)
+
+The pinned plugin SDK accepts an `AUTO_START` descriptor bit and
+`DISABLED` UI nodes, but Phase 2.5's host-side checks found that the
+onionHEN v0.9.0 host rejects the former and its Settings renderer does
+not handle the latter. This plugin now omits `AUTO_START` and renders
+informational labels instead of unavailable status/invitation actions.
+Regression tests inspect the encoded UI for unsupported disabled flags.
+
+**Not yet verified on PS5 firmware 12.20:** that onionHEN discovers and
+starts this descriptor, that its UI is available during gameplay, or
+that this plugin reads live daemon data there. PC validation and CI are
+not hardware evidence. Do not install or change HEN frameworks on the
+console as part of building/testing this branch. The custom onionHEN
+build and any system-partition write avoidance are separate, pending
+work requiring review and console-owner approval.
