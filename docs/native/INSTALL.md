@@ -28,7 +28,7 @@ Nothing in this package installs a HEN, a kstuff, a launcher or a system file.
 | `experimental/in-game-companion/` | the In-Game Companion (OnionHEN plugin), **experimental, not part of this release** | not run on a PS5; needs OnionHEN (owner decision) |
 | `fallback/native-0.1-d094e62bcaf1/` | Native 0.1 | **hardware-tested** (FW 12.20) |
 | `fallback/akeno-network-ps5-alpha-0.5-rc-7e28255.elf` | the Alpha 0.5 RC daemon | **hardware-tested** (FW 12.20) |
-| `fallback/native-0.2-preview-4b4602c7d0b7/` | Native 0.2 preview and its IPC-1 daemon | not run on a PS5 (rebuilt, byte-verified against CI) |
+| `fallback/native-0.2-preview-4b4602c7d0b7/` | Native 0.2 preview and its IPC-1 daemon | not run on a PS5 (rebuilt, byte-identical to CI run 39065377144) |
 | `fallback/native-0.1-47488b65f4c2/` | Native 0.1 with the pull-request build ID | not run on a PS5; reference only |
 | `docs/`, `CHANGELOG.md`, `RELEASE_NOTES.md`, `LICENSES.md`, `licenses/` | documentation and licences | — |
 | `SHA256SUMS`, `BUILDINFO.txt` | checksums, source commit, inputs, gates | — |

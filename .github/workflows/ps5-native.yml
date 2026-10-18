@@ -42,10 +42,9 @@ env:
   NATIVE_01_PR_SHA256: 0856094cf434b7e8114bad396fe8f942e87b408e2c847d015cf811aec913e4db
   NATIVE_01_HOMEBREW_JS_SHA256: fa5334012df469535faf991c2635ac55a2e3100d2a6f38c43885e276f8b28c63
   NATIVE_01_ICON_SHA256: e3870ccfc517da69f9c4e25e34a98a39d4c488a2825326f63353063220f033a9
-  # Native 0.2 preview, build 4b4602c7d0b7 (push run 39065377144) with its IPC-1 daemon: NOT run on a
-  # PS5 (no hardware results exist). Shipped as an untested fallback and rebuilt from its commit; the
-  # checksums were recorded from a rebuild with the pinned SDK (the same procedure reproduces the
-  # 0.1 CI file above byte for byte) and every run must reproduce them.
+  # Native 0.2 preview, build 4b4602c7d0b7, with its IPC-1 daemon: NOT run on a PS5 (no hardware
+  # results exist). Shipped as an untested fallback, rebuilt from its commit; these are the checksums
+  # of the files of push run 39065377144 (listed in PR #7) and every run must reproduce them.
   NATIVE_02_COMMIT: 4b4602c7d0b7bc8315130341205d4b98cc1114ef
   NATIVE_02_BUILD_ID: 4b4602c7d0b7
   NATIVE_02_SHA256: fab3dfb8f6a4819bd81a41064b065098d433cd4c383097d436564801bcddbefa
@@ -449,8 +448,8 @@ jobs:
             echo "    clean exit were not itemised (docs/HARDWARE_RESULTS_NATIVE_0.1.md)."
             echo "  fallback/native-0.1-$NATIVE_01_PR_BUILD_ID/: the same code with the PR merge build ID (CI run 39058834341);"
             echo "    NOT run on a PS5, reference only."
-            echo "  $n02/: Native 0.2 preview and its IPC-1 daemon, rebuilt from $NATIVE_02_COMMIT"
-            echo "    (CI run 39065377144 built the same commit); NOT run on a PS5 - no hardware results exist."
+            echo "  $n02/: Native 0.2 preview and its IPC-1 daemon, rebuilt from $NATIVE_02_COMMIT,"
+            echo "    byte-identical to CI run 39065377144; NOT run on a PS5 - no hardware results exist."
             echo
             echo "SHA-256:"
             sed 's/^/  /' "$out/SHA256SUMS"
