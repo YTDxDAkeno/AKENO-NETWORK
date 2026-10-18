@@ -6,6 +6,7 @@
  *   AKENO_NATIVE_DAEMON_PORT the daemon's port (default 8642)
  *   AKENO_NATIVE_SIM_AUDIO   init|open|output|unpaced: simulate an audio failure / no pacing
  *   AKENO_NATIVE_SIM_MIC     tone:<Hz>|silence|fail: a simulated microphone (unset: none)
+ *   AKENO_NATIVE_SIM_CONTEXT background: start as if launched as a background payload (opens nothing)
  * Audio goes to SDL's default output device (SDL_AUDIODRIVER=dummy in CI).
  */
 #define _POSIX_C_SOURCE 200809L
@@ -46,7 +47,7 @@ long long akn_platform_unix_time(void) { return (long long)time(NULL); }
 
 akn_context_kind akn_platform_context(akn_context_raw *raw) {
     memset(raw, 0, sizeof(*raw));
-    return AKN_CTX_DESKTOP;
+    return strcmp(env_or("AKENO_NATIVE_SIM_CONTEXT", ""), "background") == 0 ? AKN_CTX_BACKGROUND : AKN_CTX_DESKTOP;
 }
 
 int akn_platform_notify(const char *text) {

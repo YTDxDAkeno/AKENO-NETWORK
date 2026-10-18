@@ -48,7 +48,7 @@ CLIENT_SRC  := $(addprefix $(PS5_ROOT)/src/,buf.c json.c json_write.c crypto_uti
 SHARED_SRC  := $(addprefix $(PS5_ROOT)/app/,audio_lab_pcm.c game_detect.c)
 CORE_SRC    := $(addprefix $(ROOT)/src/core/,nav.c input.c audio_test.c redact.c log.c context.c logo.c png.c text.c ui.c \
                script.c account.c social.c image.c vector.c badges.c artwork.c chat.c osk.c party.c \
-               voice.c voice_codec.c voice_dsp.c voice_proto.c jitter.c)
+               voice.c voice_codec.c voice_dsp.c voice_proto.c jitter.c mic_test.c)
 APP_SRC     := $(addprefix $(ROOT)/src/app/,main.c app.c screens.c gfx.c net.c report.c ipc.c social.c images.c voice_app.c)
 # libopus 1.5.2: the same portable C files and defines as the PC build (cmake/opus_sources.txt).
 OPUS_DIR    := $(THIRD_PARTY)/opus

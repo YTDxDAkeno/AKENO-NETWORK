@@ -1017,6 +1017,42 @@ if (livekitBinary) await step('Voice revocation follows the connection in the ro
   await carol.request('POST', `/parties/${party.body.id}/close`);
 });
 
+// The hardware report of 196ca13 lost the foreground microphone test: an accidental background start rewrote the report.
+await step('AKENO Native: the last microphone test survives a later background start (counts and levels only)', async () => {
+  const micDir = join(work, 'native-mic');
+  const run = await runNative({ AKENO_NATIVE_AKENO_DIR: akenoDir, AKENO_NATIVE_DIR: micDir, AKENO_NATIVE_DAEMON_PORT: String(daemon.port),
+    AKENO_NATIVE_SYNC_DIR: syncDir, AKENO_NATIVE_SIM_MIC: 'tone:440' }, [
+    'until ipc 15000', 'until friends 15000', 'wait 300', 'pad right', 'pad right', 'pad right', 'pad right', 'pad right', 'pad right',
+    'expect focus settings', 'pad cross', 'expect screen settings', 'wait 300',
+    'pad down', 'pad down', 'pad down', 'pad down', 'pad down', 'pad down', 'pad down', 'pad down', 'expect text Microphone test',
+    'pad cross', 'expect dialog confirm', 'expect text Test your microphone?', 'pad left', 'pad cross', 'until text 10000 Cross: stop', 'wait 1500', 'pad cross', 'until text 10000 nothing is sent or stored', 'wait 500',
+    'pad circle', 'pad circle', 'expect dialog exit', 'pad left', 'pad cross',
+  ], {});
+  assert.equal(run.code, 0, run.output.slice(-3000));
+  const kept = readFileSync(join(micDir, 'mic-test-last.txt'), 'utf8');
+  assert.match(kept, /^AKENO Native microphone test v1\n/);
+  assert.match(kept, /\nopen: opened\n/);
+  assert.match(kept, /\nrate: 16000\n/);
+  assert.ok(Number(/\nframes: (\d+)\n/.exec(kept)?.[1]) > 30, `frames captured: ${kept}`);
+  assert.match(kept, /\nclosed: 1\n/);
+  assert.equal(readFileSync(join(micDir, 'mic-test-last-ok.txt'), 'utf8'), kept, 'a successful test is also kept as the last successful one');
+  for (const name of ['mic-test-last.txt', 'mic-test-last-ok.txt']) assert.equal(statSync(join(micDir, name)).mode & 0o077, 0, `${name} is private`);
+  assert.ok(Buffer.byteLength(kept) < 1024, 'counts and levels only, no audio');
+
+  // An accidental background start: nothing is opened, and the report still carries the test.
+  const background = await runNative({ AKENO_NATIVE_AKENO_DIR: akenoDir, AKENO_NATIVE_DIR: micDir, AKENO_NATIVE_SIM_CONTEXT: 'background' }, [], {});
+  assert.equal(background.code, 0, background.output.slice(-3000));
+  const report = readFileSync(join(micDir, 'native-report.txt'), 'utf8');
+  assert.match(report, /Context:\s+.*background/i);
+  assert.match(report, /\[Last microphone test\]\nResult:\s+the microphone captured sound\n/);
+  assert.match(report, /Microphone:\s+opened \(simulated microphone \(PC test\), 16000 Hz, 256 frames per read\)/);
+  assert.match(report, /Levels:\s+peak \d+%, loudest \d+%, average \d+%/);
+  assert.match(report, /Read errors:\s+none/);
+  assert.match(report, /Closed:\s+yes/);
+  assert.match(report, /Local only:\s+yes/);
+  assert.equal(readFileSync(join(micDir, 'mic-test-last.txt'), 'utf8'), kept, 'the background start did not touch the kept test');
+});
+
 await step('native-IPC daemon: stopping removes the key; the release daemon ignores it', async () => {
   const stop = await local(daemon.port, 'POST', '/api/exit', { 'X-Akeno-Token': daemon.token });
   assert.equal(stop.status, 200);

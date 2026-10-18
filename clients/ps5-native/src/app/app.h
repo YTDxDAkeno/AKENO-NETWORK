@@ -15,6 +15,7 @@
 #include "gfx.h"
 #include "input.h"
 #include "log.h"
+#include "mic_test.h"
 #include "akn_platform.h"
 #include "party.h"
 #include "script.h"
@@ -297,6 +298,8 @@ int akn_social_playing_count(const akn_social *s);
 /* report.c: the plain-text diagnostic report (no tokens, no server address). */
 void akn_report_build(akn_app *app, char *buf, size_t len);
 int akn_report_save(akn_app *app);
+/* Keeps the result of a local microphone test in its own files (see mic_test.h). */
+int akn_report_save_mic_test(akn_app *app, const akn_mic_test_record *r);
 
 /* app.c */
 /* Runs the app. *opened_devices is set when it ran as the foreground app (screen, controller,

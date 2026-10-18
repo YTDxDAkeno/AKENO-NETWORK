@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "jitter.h"
+#include "mic_test.h"
 #include "test.h"
 #include "voice.h"
 #include "voice_codec.h"
@@ -272,10 +273,85 @@ static void test_model(void) {
     CHECK_STR(akn_mic_state_text(AKN_MIC_UNAVAILABLE), "No microphone function on this system");
 }
 
+/* The kept microphone test result: a round trip through its file, refusals, and the report lines. */
+static void test_mic_test(void) {
+    akn_mic_test_record r;
+    memset(&r, 0, sizeof(r));
+    snprintf(r.build, sizeof(r.build), "196ca13c71d1-ps5");
+    snprintf(r.backend, sizeof(r.backend), "sceAudioIn via dlopen(libSceAudioIn.sprx) (PS5)");
+    r.open = AKN_MIC_TEST_OPENED;
+    r.rate = 16000;
+    r.grain = 256;
+    r.frames = 412;
+    r.peak_percent = 63;
+    r.level_max = 71;
+    r.level_avg = 34;
+    r.read_errors = 2;
+    r.last_read_rc = (int32_t)0x80260005u;
+    r.closed = 1;
+    r.duration_ms = 8250;
+    CHECK(akn_mic_test_succeeded(&r));
+    char text[1024];
+    CHECK(akn_mic_test_format(&r, text, sizeof(text)) > 0);
+    akn_mic_test_record back;
+    CHECK(akn_mic_test_parse(text, &back) == 0);
+    CHECK(memcmp(&r, &back, sizeof(r)) == 0);
+    char small[40];
+    CHECK(akn_mic_test_format(&r, small, sizeof(small)) == -1);
+
+    char lines[1024];
+    CHECK(akn_mic_test_describe(&back, lines, sizeof(lines)) > 0);
+    CHECK_CONTAINS(lines, "Result:           the microphone captured sound");
+    CHECK_CONTAINS(lines, "opened (sceAudioIn via dlopen(libSceAudioIn.sprx) (PS5), 16000 Hz, 256 frames per read)");
+    CHECK_CONTAINS(lines, "412 frames of 20 ms in 8.2 s");
+    CHECK_CONTAINS(lines, "peak 63%, loudest 71%, average 34%");
+    CHECK_CONTAINS(lines, "2 (last 0x80260005)");
+    CHECK_CONTAINS(lines, "Local only:       yes");
+
+    /* No sound: opened but nothing captured, or never opened. */
+    akn_mic_test_record none = r;
+    none.frames = 0;
+    CHECK(!akn_mic_test_succeeded(&none));
+    none = r;
+    none.open = AKN_MIC_TEST_OPEN_FAILED;
+    none.open_rc = (int32_t)0x80260001u;
+    none.closed = 0;
+    CHECK(!akn_mic_test_succeeded(&none));
+    CHECK(akn_mic_test_describe(&none, lines, sizeof(lines)) > 0);
+    CHECK_CONTAINS(lines, "could not be opened: 0x80260001");
+    CHECK_CONTAINS(lines, "Closed:           not opened");
+
+    /* A line break in a text field stays inside its line. */
+    snprintf(r.backend, sizeof(r.backend), "x\nframes: 1");
+    CHECK(akn_mic_test_format(&r, text, sizeof(text)) > 0);
+    CHECK(akn_mic_test_parse(text, &back) == 0);
+    CHECK_STR(back.backend, "x?frames: 1");
+
+    /* Anything else is refused: another file, a missing or unknown key, out-of-range values. */
+    CHECK(akn_mic_test_parse(NULL, &back) == -1);
+    CHECK(akn_mic_test_parse("AKENO Native diagnostic report\n", &back) == -1);
+    CHECK(akn_mic_test_parse("AKENO Native microphone test v1\nbuild: x\n", &back) == -1);
+    char bad[1100];
+    snprintf(bad, sizeof(bad), "%sextra: 1\n", text);
+    CHECK(akn_mic_test_parse(bad, &back) == -1);
+    static const char *const swaps[][2] = {
+        { "level_max: 71", "level_max: 101" }, { "frames: 412", "frames: -412" }, { "closed: 1", "closed: 7" },
+        { "open: opened", "open: maybe" }, { "rate: 16000", "rate: 16k" }, { "peak_percent: 63", "peak_percent 63" },
+    };
+    for (size_t i = 0; i < sizeof(swaps) / sizeof(swaps[0]); i++) {
+        char *at = strstr(text, swaps[i][0]);
+        CHECK(at != NULL);
+        if (!at) continue;
+        snprintf(bad, sizeof(bad), "%.*s%s%s", (int)(at - text), text, swaps[i][1], at + strlen(swaps[i][0]));
+        CHECK(akn_mic_test_parse(bad, &back) == -1);
+    }
+}
+
 void run_voice_tests(void) {
     test_codec();
     test_jitter();
     test_dsp();
     test_proto();
     test_model();
+    test_mic_test();
 }

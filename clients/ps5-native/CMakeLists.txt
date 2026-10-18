@@ -92,7 +92,7 @@ add_library(akn_core STATIC
   src/core/nav.c src/core/input.c src/core/audio_test.c src/core/redact.c src/core/log.c src/core/context.c
   src/core/logo.c src/core/png.c src/core/text.c src/core/ui.c src/core/script.c src/core/account.c src/core/social.c
   src/core/image.c src/core/vector.c src/core/badges.c src/core/artwork.c src/core/chat.c src/core/osk.c src/core/party.c
-  src/core/voice.c src/core/voice_codec.c src/core/voice_dsp.c src/core/voice_proto.c src/core/jitter.c
+  src/core/voice.c src/core/voice_codec.c src/core/voice_dsp.c src/core/voice_proto.c src/core/jitter.c src/core/mic_test.c
   "${PS5_DIR}/app/audio_lab_pcm.c" "${PS5_DIR}/app/game_detect.c")
 target_include_directories(akn_core PUBLIC src/core "${PS5_DIR}/app")
 target_compile_options(akn_core PRIVATE ${AKN_WARNINGS} ${AKN_HARDENING})

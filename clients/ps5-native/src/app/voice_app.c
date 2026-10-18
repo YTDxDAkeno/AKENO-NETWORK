@@ -554,25 +554,47 @@ done:
 
 /* ---- Capture thread --------------------------------------------------------------------------- */
 
+/* The local microphone test keeps its result (counts and levels only) for the report. */
+static void keep_mic_test(akn_voice_rt *rt, akn_mic_test_record *rec, uint64_t started) {
+    if (!rt->test) return;
+    rec->duration_ms = (unsigned long)(akn_platform_now_ms() - started);
+    akn_report_save_mic_test(rt->app, rec);
+}
+
 static int cap_thread(void *arg) {
     akn_voice_rt *rt = arg;
     akn_app *app = rt->app;
+    uint64_t started = akn_platform_now_ms();
+    akn_mic_test_record rec;
+    memset(&rec, 0, sizeof(rec));
+    snprintf(rec.build, sizeof(rec.build), "%s", AKN_BUILD_ID);
+    rec.grain = VOICE_MIC_GRAIN;
+    unsigned long level_sum = 0;
     char why[160] = "";
     const akn_mic_ops *mic = akn_platform_mic(why, sizeof(why));
     if (!mic) {
         set_mic(app, AKN_MIC_UNAVAILABLE, 0, why);
         akn_logf(&app->log, AKN_LOG_WARN, "voice.mic", "No microphone: %s", why);
+        rec.open = AKN_MIC_TEST_UNAVAILABLE;
+        snprintf(rec.backend, sizeof(rec.backend), "%s", why);
+        keep_mic_test(rt, &rec, started);
         rt->cap_done = 1;
         return 0;
     }
+    snprintf(rec.backend, sizeof(rec.backend), "%s", mic->backend);
     unsigned rate = 0;
     int32_t handle = mic->open(VOICE_MIC_GRAIN, &rate);
     if (handle < 0) {
         set_mic(app, AKN_MIC_FAILED, handle, mic->backend);
         akn_logf(&app->log, AKN_LOG_WARN, "voice.mic", "The microphone could not be opened: 0x%08X (%s)", (unsigned)handle, mic->backend);
+        rec.open = AKN_MIC_TEST_OPEN_FAILED;
+        rec.open_rc = handle;
+        keep_mic_test(rt, &rec, started);
         rt->cap_done = 1;
         return 0;
     }
+    rec.open = AKN_MIC_TEST_OPENED;
+    rec.rate = rate;
     set_mic(app, AKN_MIC_OPEN, 0, mic->backend);
     SDL_LockMutex(app->lock);
     app->voice.mic_rate = (int)rate;
@@ -594,6 +616,8 @@ static int cap_thread(void *arg) {
         int32_t rc = mic->read(handle, in);
         if (rc < 0) {
             errors++;
+            rec.read_errors++;
+            rec.last_read_rc = rc;
             if (errors == 1 || errors % 50 == 0)
                 akn_logf(&app->log, AKN_LOG_WARN, "voice.mic", "Microphone read failed: 0x%08X (%d times)", (unsigned)rc, errors);
             set_mic(app, errors >= 50 ? AKN_MIC_FAILED : AKN_MIC_OPEN, rc, NULL);
@@ -633,6 +657,10 @@ static int cap_thread(void *arg) {
             app->voice.mic_frames++;
             int monitor = app->voice.mic_monitor;
             SDL_UnlockMutex(app->lock);
+            rec.frames++;
+            level_sum += (unsigned long)level;
+            if (level > rec.level_max) rec.level_max = level;
+            if (peak * 100 / 32767 > rec.peak_percent) rec.peak_percent = peak * 100 / 32767;
             if (rt->test) {
                 if (monitor) {
                     SDL_LockMutex(rt->lock);
@@ -669,6 +697,9 @@ done:
     app->voice.mic_level = 0;
     SDL_UnlockMutex(app->lock);
     akn_logf(&app->log, AKN_LOG_INFO, "voice.mic", "Microphone closed");
+    rec.closed = 1;
+    rec.level_avg = rec.frames ? (int)(level_sum / rec.frames) : 0;
+    keep_mic_test(rt, &rec, started);
     akn_voice_encoder_free(enc);
     free(up);
     free(acc);
