@@ -342,6 +342,19 @@ export class DevicesService {
     };
   }
 
+  /**
+   * Whether a device credential of this user still exists, is not expired and holds a scope
+   * (voice reconciliation: a console's voice connection lives only as long as its credential).
+   */
+  async hasScope(deviceId: string, userId: string, scope: DeviceScope): Promise<boolean> {
+    const [row] = await this.ctx.db
+      .select({ scopes: deviceCredentials.scopes, expiresAt: deviceCredentials.expiresAt })
+      .from(deviceCredentials)
+      .where(and(eq(deviceCredentials.id, deviceId), eq(deviceCredentials.userId, userId)))
+      .limit(1);
+    return Boolean(row && row.expiresAt.getTime() > Date.now() && normalizeScopes(row.scopes).includes(scope));
+  }
+
   async touch(deviceId: string, ip?: string): Promise<void> {
     await this.ctx.db
       .update(deviceCredentials)
@@ -408,6 +421,8 @@ export class DevicesService {
     if (removed.includes('activity:write')) await this.ctx.activity.endForDevice(userId, deviceId);
     // Live updates were opened with the old permissions; the device reconnects with the new ones.
     if (removed.length > 0) this.ctx.hub.disconnectSession(deviceId, 'The permissions of this device changed.', REALTIME_CLOSE_CODES.sessionRevoked);
+    // Console voice is authorized by "parties:write": without it the voice connection ends.
+    if (removed.includes('parties:write')) this.ctx.voice.onDevicesRevoked(userId, (id) => id === deviceId);
     this.ctx.audit.recordInBackground({
       actorId: userId,
       action: 'device.scopes_changed',
@@ -510,6 +525,7 @@ export class DevicesService {
     const [device] = deleted;
     if (!device) throw Errors.notFound('The device');
     this.ctx.hub.disconnectSession(deviceId, reason, REALTIME_CLOSE_CODES.sessionRevoked);
+    this.ctx.voice.onDevicesRevoked(userId, (id) => id === deviceId);
     this.ctx.audit.recordInBackground({
       actorId: userId,
       action: 'device.revoked',

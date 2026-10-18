@@ -1,0 +1,28 @@
+{
+  "name": "@akeno/voice-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AKENO voice gateway: lets paired consoles take part in LiveKit party voice over a TLS WebSocket with Opus audio.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false src/main.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@livekit/rtc-node": "1.1.0",
+    "livekit-server-sdk": "2.19.1",
+    "opusscript": "0.1.1",
+    "pino": "10.4.0",
+    "ws": "8.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/ws": "8.18.2",
+    "tsx": "4.23.15",
+    "vitest": "5.0.4"
+  }
+}

@@ -154,6 +154,9 @@ static void load_settings(akeno_app *app) {
     app->notify_social = 1;
     app->activity_enabled = 1;
     app->actionable_notifications = 0;
+    app->qa_shortcut = 0;
+    app_copy_str(app->qa_combo, sizeof(app->qa_combo), akeno_shortcut_default_combo()->id);
+    app->qa_hold_ms = 1000;
     int fd = open(app->settings_path, O_RDONLY);
     if (fd < 0) return;
     char data[SETTINGS_MAX_BYTES];
@@ -172,6 +175,11 @@ static void load_settings(akeno_app *app) {
     app->notify_social = akeno_json_get_bool(root, "notifySocial", 1);
     app->activity_enabled = akeno_json_get_bool(root, "activityEnabled", 1);
     app->actionable_notifications = akeno_json_get_bool(root, "actionableNotifications", 0);
+    app->qa_shortcut = akeno_json_get_bool(root, "quickAccessShortcut", 0);
+    const char *combo = akeno_json_get_string(root, "quickAccessCombo", "");
+    if (akeno_shortcut_combo_find(combo)) app_copy_str(app->qa_combo, sizeof(app->qa_combo), combo);
+    int64_t hold = 0;
+    if (akeno_json_int64(akeno_json_get(root, "quickAccessHoldMs"), &hold) == 0 && akeno_shortcut_hold_valid((int)hold)) app->qa_hold_ms = (int)hold;
     akeno_json_free(doc);
 }
 
@@ -183,9 +191,12 @@ akeno_status app_save_settings(akeno_app *app) {
     rc |= akeno_buf_append_json_string(&out, app->server);
     rc |= akeno_buf_append_str(&out, ",\"deviceName\":");
     rc |= akeno_buf_append_json_string(&out, app->device_name);
-    rc |= akeno_buf_printf(&out, ",\"notifyMessages\":%s,\"notifySocial\":%s,\"activityEnabled\":%s,\"actionableNotifications\":%s}\n",
+    rc |= akeno_buf_printf(&out, ",\"notifyMessages\":%s,\"notifySocial\":%s,\"activityEnabled\":%s,\"actionableNotifications\":%s",
                            app->notify_messages ? "true" : "false", app->notify_social ? "true" : "false",
                            app->activity_enabled ? "true" : "false", app->actionable_notifications ? "true" : "false");
+    rc |= akeno_buf_printf(&out, ",\"quickAccessShortcut\":%s,\"quickAccessCombo\":", app->qa_shortcut ? "true" : "false");
+    rc |= akeno_buf_append_json_string(&out, app->qa_combo);
+    rc |= akeno_buf_printf(&out, ",\"quickAccessHoldMs\":%d}\n", app->qa_hold_ms);
     pthread_mutex_unlock(&app->lock);
     akeno_status status = AKENO_ERR_NO_MEMORY;
     if (rc == 0) status = write_private_file(app->settings_path, out.data, out.len) == 0 ? AKENO_OK : AKENO_ERR_STORAGE;
@@ -382,9 +393,10 @@ static int is_uuid(const char *s) {
 
 int app_valid_open(const char *target) {
     if (!target) return 0;
-    static const char *const plain[] = { "", "messages", "party", "friends", "games", "invitations" };
+    static const char *const plain[] = { "", "messages", "party", "friends", "games", "invitations", "profile" };
     for (size_t i = 0; i < sizeof(plain) / sizeof(plain[0]); i++)
         if (strcmp(target, plain[i]) == 0) return 1;
+    if (strncmp(target, "profile:", 8) == 0) return is_uuid(target + 8);
     return strncmp(target, "conversation:", 13) == 0 && is_uuid(target + 13);
 }
 
@@ -478,6 +490,15 @@ static void on_message(akeno_app *app, const char *self, const akeno_json *data)
     if (strcmp(kind, "party") == 0) app_copy_str(open, sizeof(open), "party");
     else if (strcmp(kind, "direct") == 0 && is_uuid(conversation)) snprintf(open, sizeof(open), "conversation:%s", conversation);
     remember_message(app, open, kind, name, body);
+#ifdef AKENO_NATIVE_IPC
+    /* The user is reading this conversation in AKENO Native: the message is on screen already. */
+    pthread_mutex_lock(&app->lock);
+    int on_screen = app->native_focus[0] && strcmp(app->native_focus, conversation) == 0 &&
+                    akeno_now_ms() - app->native_focus_at < AKENO_NATIVE_FOCUS_MS;
+    if (on_screen) app->native_quieted++;
+    pthread_mutex_unlock(&app->lock);
+    if (on_screen) return;
+#endif
 
     const char *where = strcmp(kind, "party") == 0 ? " (party)" : strcmp(kind, "group") == 0 ? " (group)" : "";
     char plain[400], title[160];
@@ -775,6 +796,7 @@ void app_tick(akeno_app *app) {
     pthread_mutex_unlock(&app->lock);
     if (paired && wanted && !app->rt_thread_running && !app->stop) start_realtime(app);
     app_activity_tick(app);
+    app_quick_access_tick(app);
 }
 
 int app_open_ui(akeno_app *app) { return app_open_ui_at(app, ""); }
@@ -829,6 +851,7 @@ static void shutdown_workers(akeno_app *app) {
     app->stop = 1;
     app->pair_cancel = 1;
     app->rt_stop = 1;
+    app_quick_access_shutdown(app);
     app_activity_shutdown(app); /* Reports the end of a running game session first (bounded by the I/O timeout). */
     if (app->pair_thread_running) {
         pthread_join(app->pair_thread, NULL);
@@ -853,12 +876,19 @@ int akeno_app_main(const akeno_app_options *options) {
     app->notify_tokens = NOTIFY_BURST;
     app->notify_refill_at = app->started_at;
     app_copy_str(app->rt_state, sizeof(app->rt_state), "idle");
+    app_copy_str(app->qa.state, sizeof(app->qa.state), "off");
+    app->qa.config_gen = 1; /* != failed_gen (0): a shortcut turned on in the settings starts at launch */
+    app->qa.pad.user_id = -1;
+    app->qa.pad.handle = -1;
 
     app_copy_str(app->data_dir, sizeof(app->data_dir), options->data_dir);
     snprintf(app->settings_path, sizeof(app->settings_path), "%s/settings.json", app->data_dir);
     snprintf(app->credential_path, sizeof(app->credential_path), "%s/device.json", app->data_dir);
     snprintf(app->log_path, sizeof(app->log_path), "%s/akeno.log", app->data_dir);
     snprintf(app->instance_path, sizeof(app->instance_path), "%s/instance.key", app->data_dir);
+#ifdef AKENO_NATIVE_IPC
+    snprintf(app->native_path, sizeof(app->native_path), "%s/native.key", app->data_dir);
+#endif
     snprintf(app->ca_path, sizeof(app->ca_path), "%s/ca.pem", app->data_dir);
 
     akeno_platform_init(&app->platform);
@@ -891,6 +921,11 @@ int akeno_app_main(const akeno_app_options *options) {
 
     load_settings(app);
     app_activity_init(app);
+#ifdef AKENO_EXPERIMENTAL_AUDIO
+    char report_path[620];
+    snprintf(report_path, sizeof(report_path), "%s/audiolab-report.txt", app->data_dir);
+    audio_lab_init(report_path, AKENO_BUILD_ID, app->platform.firmware);
+#endif
     if (options->server && options->server[0]) {
         app_copy_str(app->server, sizeof(app->server), options->server);
         app_save_settings(app);
@@ -925,9 +960,17 @@ int akeno_app_main(const akeno_app_options *options) {
     random_hex(app, app->instance_key, 32);
     if (write_private_file(app->instance_path, app->instance_key, strlen(app->instance_key)) != 0)
         app_log(app, AKENO_LOG_WARN, "app.instance_key", "Could not write the instance key; a second launch cannot reopen the page.");
+#ifdef AKENO_NATIVE_IPC
+    random_hex(app, app->native_key, 32);
+    if (write_private_file(app->native_path, app->native_key, strlen(app->native_key)) != 0)
+        app_log(app, AKENO_LOG_WARN, "native.key", "Could not write the native key; AKENO Native cannot connect.");
+    else
+        app_log(app, AKENO_LOG_INFO, "native.ready", "Native interface %d ready for AKENO Native (key file readable by the owner only).",
+                AKENO_NATIVE_IPC_VERSION);
+#endif
     app_log(app, AKENO_LOG_INFO, "ui.listening", "Local page on http://127.0.0.1:%d/ (this console only).", app->port);
 
-    akeno_platform_notify("AKENO NETWORK Alpha 0.2 started.");
+    akeno_platform_notify("AKENO NETWORK " AKENO_APP_RELEASE " started.");
     if (options->open_browser) {
         if (app_open_ui(app) != 0) pair_without_page(app);
     } else {
@@ -945,6 +988,9 @@ int akeno_app_main(const akeno_app_options *options) {
     shutdown_workers(app);
     close(listen_fd);
     unlink(app->instance_path);
+#ifdef AKENO_NATIVE_IPC
+    unlink(app->native_path);
+#endif
     akeno_platform_notify("AKENO NETWORK stopped.");
 
 out_tls:
@@ -958,6 +1004,9 @@ out:
     if (app->log) fclose(app->log);
     memset(app->session_token, 0, sizeof(app->session_token));
     memset(app->instance_key, 0, sizeof(app->instance_key));
+#ifdef AKENO_NATIVE_IPC
+    memset(app->native_key, 0, sizeof(app->native_key));
+#endif
     pthread_mutex_destroy(&app->lock);
     pthread_mutex_destroy(&app->log_lock);
     free(app);

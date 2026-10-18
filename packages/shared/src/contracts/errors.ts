@@ -52,6 +52,8 @@ export const ERROR_CODES = [
   'PLAYER2_TAKEN',
   'NO_REQUEST',
   'GRANT_CHANGED',
+  // Console voice (Native 1.1)
+  'VOICE_GATEWAY_UNAVAILABLE',
   'INTERNAL_ERROR',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];

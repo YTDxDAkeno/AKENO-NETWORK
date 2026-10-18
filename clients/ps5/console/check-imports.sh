@@ -23,10 +23,13 @@ allowed_sce='^(sceKernelSendNotificationRequest|sceSystemServiceLaunchWebBrowser
 optional_sce='^(sceKernelGetAppInfo)$'
 
 # Functions resolved at run time with dlopen/dlsym by the platform layer only (never imported):
-#   app/platform_ps5.c:
-#     libSceNotification.sprx: sceNotificationSend (experimental button notifications, opt-in)
+#     app/platform_ps5.c:
+#     libSceNotification.sprx: sceNotificationSend (button notifications, opt-in)
+#     libScePad.sprx: scePadInit/Open/GetHandle/ReadState/Close (experimental controller shortcut,
+#     off by default, read-only), libSceUserService.sprx: sceUserServiceGetForegroundUser /
+#     GetLoginUserIdList (which user's controller; the library itself is already linked)
 #     audio lab build only: libSceAudioOut.sprx (sceAudioOutInit/Open/Output/Close, test tone) and
-#     symbol lookups in libSceAudioOut.sprx / libSceAudioIn.sprx (prototype A, nothing called)
+#     name lookups in libSceAudioOut.sprx / libSceAudioIn.sprx (nothing called)
 #   app/platform_ps5_account.c (Account Bridge, opt-in, read-only; see docs/PS5_ACCOUNT_BRIDGE.md):
 #     libSceUserService.sprx, libSceRegMgr.sprx, libSceRemoteplay.sprx; no write or Remote Play call
 
@@ -77,12 +80,31 @@ for object in "$build"/obj/app/*.o "$build"/obj/client/*.o; do
   fi
 done
 
+# Microphone: no AKENO platform code may declare or resolve a capture function (libSceAudioIn
+# names are only looked up by the audio lab, never called).
+src="$(cd "$(dirname "$0")/.." && pwd)/app"
+if grep -n 'sceAudioIn' "$src/platform_ps5.c" "$src/platform.h" "$src/platform_host.c" >&2; then
+  echo "Platform code mentions libSceAudioIn functions (no capture code is allowed)" >&2
+  status=1
+fi
+
+# The release ELF must not contain the audio lab at all: no audio function names, no lab page
+# script, no report file name. (Bare library names such as libSceAudioOut.sprx appear in every
+# payload: they are part of the SDK runtime's own list of system libraries.)
+if [[ "$(basename "$elf")" != *audiolab* ]]; then
+  if strings -a "$elf" | grep -E 'sceAudio(Out|In)[A-Za-z0-9]|AkenoAudioLab = function|audiolab-report|audio_lab' >&2; then
+    echo "The release ELF contains audio lab code or strings" >&2
+    status=1
+  fi
+fi
+
 if [[ $status -eq 0 ]]; then
   echo "Imports OK: $(echo "$imports" | grep -c .) dynamic imports; system functions:"
   echo "$imports" | grep '^sce' | while read -r symbol; do
     if grep -qx "$symbol" <<< "$weak_imports"; then echo "  $symbol (weak, optional)"; else echo "  $symbol"; fi
   done
-  echo "Loaded at run time by platform_ps5.o (opt-in): sceNotificationSend from libSceNotification.sprx"
+  echo "Loaded at run time by platform_ps5.o (opt-in): sceNotificationSend from libSceNotification.sprx;"
+  echo "  experimental controller shortcut (off by default): scePad* from libScePad.sprx (read-only)"
   echo "Loaded at run time by platform_ps5_account.o (opt-in, read-only): libSceUserService.sprx, libSceRegMgr.sprx, libSceRemoteplay.sprx"
   if [[ "$(basename "$elf")" == *audiolab* ]]; then
     echo "Audio lab build: libSceAudioOut.sprx / libSceAudioIn.sprx loaded at run time only when the user starts a check"

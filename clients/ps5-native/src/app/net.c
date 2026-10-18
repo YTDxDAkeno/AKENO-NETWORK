@@ -1,0 +1,135 @@
+#define _POSIX_C_SOURCE 200809L
+
+#include "net.h"
+
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include "akeno/akeno.h"
+#include "ipc.h"
+#include "redact.h"
+
+#define DAEMON_REPLY_MAX 4096
+#define DEVICE_RESPONSE_MAX (64 * 1024)
+
+void akn_net_probe_daemon(int port, int timeout_ms, akn_account_view *view) {
+    view->daemon = AKN_DAEMON_NOT_RUNNING;
+    view->daemon_version[0] = '\0';
+    view->daemon_ipc = 0;
+    akn_http_reply reply;
+    akn_loopback_get(port, "/api/instance", NULL, timeout_ms, DAEMON_REPLY_MAX, &reply);
+    if (!reply.connected) {
+        akn_http_reply_free(&reply);
+        return;
+    }
+    /* Something answered on the port: it is the daemon only if it says so. */
+    view->daemon = AKN_DAEMON_OTHER;
+    if (reply.status == 200 &&
+        akn_parse_daemon_instance(reply.body, reply.len, view->daemon_version, sizeof(view->daemon_version), &view->daemon_ipc) == 0)
+        view->daemon = AKN_DAEMON_RUNNING;
+    akn_http_reply_free(&reply);
+}
+
+static void library_log(void *user, akeno_log_level level, const char *event, const char *message) {
+    akn_log *log = user;
+    akn_log_level l = level == AKENO_LOG_ERROR ? AKN_LOG_ERROR : level == AKENO_LOG_WARN ? AKN_LOG_WARN
+                    : level == AKENO_LOG_INFO  ? AKN_LOG_INFO  : AKN_LOG_DEBUG;
+    if (log) akn_logf(log, l, event, "client library: %s", message);
+}
+
+static akn_account_state state_of(akeno_status status) {
+    switch (status) {
+    case AKENO_OK: return AKN_ACC_SIGNED_IN;
+    case AKENO_ERR_NOT_PAIRED: return AKN_ACC_NOT_PAIRED;
+    case AKENO_ERR_UNAUTHORIZED: return AKN_ACC_UNAUTHORIZED;
+    case AKENO_ERR_FORBIDDEN: return AKN_ACC_FORBIDDEN;
+    case AKENO_ERR_NETWORK:
+    case AKENO_ERR_TIMEOUT: return AKN_ACC_OFFLINE;
+    case AKENO_ERR_TLS: return AKN_ACC_TLS;
+    case AKENO_ERR_SERVER:
+    case AKENO_ERR_PROTOCOL:
+    case AKENO_ERR_TOO_LARGE: return AKN_ACC_SERVER_ERROR;
+    default: return AKN_ACC_ERROR;
+    }
+}
+
+void akn_net_check(const akn_platform_info *platform, akn_account_view *view, akn_log *log) {
+    uint64_t started = akn_platform_now_ms();
+    view->checks++;
+    view->http_status = 0;
+    view->error_code[0] = '\0';
+    view->status_name[0] = '\0';
+    view->online_id[0] = view->display_name[0] = view->device_name[0] = '\0';
+    view->scope_count = 0;
+    view->scopes[0] = '\0';
+    view->have_skew = 0;
+
+    akn_net_probe_daemon(platform->daemon_port, 1500, view);
+    akn_logf(log, AKN_LOG_INFO, "daemon.probe", "AKENO daemon: %s%s%s", akn_daemon_state_text(view->daemon),
+             view->daemon_version[0] ? " " : "", view->daemon_version);
+
+    char settings_path[300], credential_path[300], ca_path[300], server[320];
+    snprintf(settings_path, sizeof(settings_path), "%s/settings.json", platform->akeno_dir);
+    snprintf(credential_path, sizeof(credential_path), "%s/device.json", platform->akeno_dir);
+    snprintf(ca_path, sizeof(ca_path), "%s/ca.pem", platform->akeno_dir);
+    if (akn_read_server_setting(settings_path, server, sizeof(server)) != 0) server[0] = '\0';
+    view->server_desc = akn_describe_server_url(server);
+    akn_inspect_credential(credential_path, view);
+    akn_logf(log, AKN_LOG_INFO, "account.inputs", "server: %s; credential file: %s%s", view->server_desc,
+             view->credential_present ? "present" : "missing",
+             view->credential_present ? (view->credential_private ? ", private" : ", READABLE BY OTHERS") : "");
+
+    if (!server[0]) {
+        view->state = AKN_ACC_NO_SERVER;
+    } else if (!view->credential_present) {
+        view->state = AKN_ACC_NOT_PAIRED;
+    } else {
+        struct stat st;
+        akeno_config config;
+        memset(&config, 0, sizeof(config));
+        config.base_url = server;
+        config.ca_file = stat(ca_path, &st) == 0 && S_ISREG(st.st_mode) ? ca_path : NULL; /* as the daemon */
+        config.credential_path = credential_path;
+        config.connect_timeout_ms = 8000;
+        config.io_timeout_ms = 10000;
+        config.max_response_bytes = DEVICE_RESPONSE_MAX;
+        config.log = library_log;
+        config.log_user = log;
+        config.log_level = AKENO_LOG_INFO;
+        akeno_client *client = NULL;
+        akeno_status status = akeno_client_create(&config, &client);
+        if (status == AKENO_OK && !akeno_client_is_paired(client)) status = AKENO_ERR_NOT_PAIRED;
+        if (status == AKENO_OK) {
+            akeno_response response;
+            akeno_response_init(&response);
+            status = akeno_request(client, "GET", "/devices/current", NULL, &response);
+            view->http_status = response.http_status;
+            snprintf(view->error_code, sizeof(view->error_code), "%s", response.error_code);
+            if (status == AKENO_OK &&
+                akn_fill_device_self(akeno_response_json(&response), akn_platform_unix_time(), view) != 0)
+                status = AKENO_ERR_PROTOCOL;
+            akeno_response_free(&response);
+        }
+        akeno_client_destroy(client);
+        snprintf(view->status_name, sizeof(view->status_name), "%s", akeno_status_name(status));
+        view->state = state_of(status);
+    }
+    view->duration_ms = (unsigned)(akn_platform_now_ms() - started);
+    if (view->state == AKN_ACC_SIGNED_IN)
+        akn_logf(log, AKN_LOG_INFO, "account.signed_in", "signed in; %d device permissions%s; clock offset %s%llds (%u ms)",
+                 view->scope_count, view->has_realtime_scope ? " incl. realtime" : "", view->have_skew ? "" : "unknown ",
+                 view->have_skew ? view->clock_skew_s : 0LL, view->duration_ms);
+    else
+        akn_logf(log, AKN_LOG_WARN, "account.state", "%s (library %s, HTTP %d %s, %u ms)", akn_account_state_text(view->state),
+                 view->status_name[0] ? view->status_name : "-", view->http_status, view->error_code, view->duration_ms);
+}

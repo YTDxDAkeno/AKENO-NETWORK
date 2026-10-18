@@ -89,6 +89,17 @@ static void route_state(akeno_app *app, ui_response *r) {
     pthread_mutex_lock(&app->lock);
     akeno_buf_append_str(b, "{\"ok\":true,\"app\":{");
     json_kv_str(b, "version", AKENO_APP_VERSION, 0);
+#ifdef AKENO_EXPERIMENTAL_AUDIO
+    /* The lab names itself here (app.js is shared with the release and only appends "Audio lab v2"
+     * for the old audioLab flag, which this build no longer sends). */
+    json_kv_str(b, "release", AKENO_APP_RELEASE " \xc2\xb7 Audio lab v3", 1);
+    json_kv_int(b, "audioLabVersion", 3, 1);
+#elif defined(AKENO_NATIVE_IPC)
+    json_kv_str(b, "release", AKENO_APP_RELEASE " \xc2\xb7 native IPC", 1);
+    json_kv_int(b, "nativeIpc", AKENO_NATIVE_IPC_VERSION, 1);
+#else
+    json_kv_str(b, "release", AKENO_APP_RELEASE, 1);
+#endif
     json_kv_str(b, "build", AKENO_BUILD_ID, 1);
     json_kv_str(b, "platform", app->platform.name, 1);
     json_kv_str(b, "firmware", app->platform.firmware, 1);
@@ -125,6 +136,8 @@ static void route_state(akeno_app *app, ui_response *r) {
     app_activity_json(app, b, 0);
     akeno_buf_append_str(b, ",\"inbox\":");
     inbox_summary_json(app, b);
+    akeno_buf_append_str(b, ",\"quickAccess\":");
+    app_quick_access_json(app, b);
     json_kv_int(b, "eventsNext", (long long)app->next_seq, 1);
     akeno_buf_append_str(b, "}");
     pthread_mutex_unlock(&app->lock);
@@ -223,6 +236,17 @@ static void route_settings(akeno_app *app, const akeno_json *root, ui_response *
         respond_error(r, 400, "INVALID_NAME", "The console name must be 1 to 48 characters long.");
         return;
     }
+    const char *combo = akeno_json_get_string(root, "quickAccessCombo", NULL);
+    if (combo && !akeno_shortcut_combo_find(combo)) {
+        respond_error(r, 400, "INVALID_SHORTCUT", "Choose one of the offered controller combinations.");
+        return;
+    }
+    int64_t hold = 0;
+    const akeno_json *hold_json = akeno_json_get(root, "quickAccessHoldMs");
+    if (hold_json && (akeno_json_int64(hold_json, &hold) != 0 || !akeno_shortcut_hold_valid((int)hold))) {
+        respond_error(r, 400, "INVALID_HOLD", "Choose a hold time of 1, 1.5 or 2 seconds.");
+        return;
+    }
     pthread_mutex_lock(&app->lock);
     if (server_changed) snprintf(app->server, sizeof(app->server), "%s", server);
     if (name) snprintf(app->device_name, sizeof(app->device_name), "%s", name);
@@ -232,6 +256,12 @@ static void route_settings(akeno_app *app, const akeno_json *root, ui_response *
     app->activity_enabled = akeno_json_get_bool(root, "activityEnabled", app->activity_enabled);
     if (app->activity_enabled && !activity_before) app->act_wanted = 1;
     app->actionable_notifications = akeno_json_get_bool(root, "actionableNotifications", app->actionable_notifications);
+    int qa_before = app->qa_shortcut;
+    app->qa_shortcut = akeno_json_get_bool(root, "quickAccessShortcut", app->qa_shortcut);
+    int qa_changed = qa_before != app->qa_shortcut || combo || hold_json;
+    if (combo) app_copy_str(app->qa_combo, sizeof(app->qa_combo), combo);
+    if (hold_json) app->qa_hold_ms = (int)hold;
+    if (qa_changed) app->qa.config_gen++;
     if (server_changed) app->credentials_changed = 1;
     pthread_mutex_unlock(&app->lock);
     if (app_save_settings(app) != AKENO_OK) {
@@ -239,6 +269,9 @@ static void route_settings(akeno_app *app, const akeno_json *root, ui_response *
         return;
     }
     if (server_changed) app_log(app, AKENO_LOG_INFO, "settings.server", "Server set to %s.", server);
+    if (qa_changed)
+        app_log(app, AKENO_LOG_INFO, "settings.quickaccess", "Controller shortcut %s (%s, hold %d ms).", app->qa_shortcut ? "on" : "off",
+                app->qa_combo, app->qa_hold_ms);
     app_tick(app);
     respond_ok(r);
 }
@@ -304,12 +337,15 @@ static void respond_image(ui_response *r, const char *type, const unsigned char 
     free(encoded);
 }
 
-/* GET /api/media?id=<media id>&v=sm|md|fallback: a profile picture or game artwork from the server. */
+/* GET /api/media?id=<media id>&v=sm|md|lg|fallback: a profile picture, banner or game artwork. */
 static void route_media(akeno_app *app, const ui_request *req, ui_response *r) {
     char id[40] = "", variant[16] = "";
     ui_http_query_param(req->query, "id", id, sizeof(id));
     ui_http_query_param(req->query, "v", variant, sizeof(variant));
-    const char *file = strcmp(variant, "sm") == 0 ? "sm.webp" : strcmp(variant, "md") == 0 ? "md.webp" : "fallback.jpg";
+    const char *file = strcmp(variant, "sm") == 0   ? "sm.webp"
+                       : strcmp(variant, "md") == 0 ? "md.webp"
+                       : strcmp(variant, "lg") == 0 ? "lg.webp"
+                                                    : "fallback.jpg";
     if (!app->ui_client || !akeno_client_is_paired(app->ui_client)) {
         respond_error(r, 401, "NOT_PAIRED", "This console is not paired.");
         return;
@@ -518,7 +554,8 @@ static void route_diagnostics(akeno_app *app, ui_response *r) {
     akeno_buf_append_str(b, ",\"realtime\":{");
     json_kv_str(b, "state", app->rt_state, 0);
     json_kv_str(b, "detail", app->rt_detail, 1);
-    akeno_buf_append_str(b, "}");
+    akeno_buf_append_str(b, "},\"quickAccess\":");
+    app_quick_access_json(app, b);
     pthread_mutex_unlock(&app->lock);
 #ifdef AKENO_EXPERIMENTAL_AUDIO
     json_kv_bool(b, "experimentalAudio", 1, 1); /* audio lab build: the page shows its section */
@@ -588,20 +625,131 @@ static void respond_audio_status(ui_response *r) {
     respond_json(r, 200);
 }
 
-/* POST /api/diagnostics/audio/tone {"confirm":"play"}: the explicit confirmation is required. */
+/*
+ * POST /api/diagnostics/audio/tone {"confirm":"play","preset":"stereo16-1024","level":"moderate","delaySeconds":0}:
+ * the explicit confirmation is required; presets and levels are the ones audio_lab.c offers.
+ */
 static void route_audio_tone(akeno_app *app, const akeno_json *root, ui_response *r) {
     const char *confirm = akeno_json_get_string(root, "confirm", NULL);
     if (!confirm || strcmp(confirm, "play") != 0) {
         respond_error(r, 400, "CONFIRMATION_REQUIRED", "Confirm the experimental test tone first.");
         return;
     }
-    int rc = audio_lab_tone_start();
-    if (rc == 1) {
-        respond_error(r, 409, "BUSY", "The test tone is already playing.");
+    int64_t delay = 0;
+    const akeno_json *delay_json = akeno_json_get(root, "delaySeconds");
+    if (delay_json && akeno_json_int64(delay_json, &delay) != 0) delay = -1;
+    char err[160] = "";
+    int rc = audio_lab_tone_start(akeno_json_get_string(root, "preset", NULL), akeno_json_get_string(root, "level", NULL), (int)delay, err,
+                                  sizeof(err));
+    if (rc != 0) {
+        respond_error(r, rc == -1 ? 400 : rc == -2 ? 500 : rc == 3 ? 429 : 409,
+                      rc == -1 ? "INVALID" : rc == 1 ? "BUSY" : rc == 2 ? "TOO_SOON" : rc == 3 ? "LIMIT" : "THREAD", err);
+        if (rc == -2) app_log(app, AKENO_LOG_WARN, "audio.tone", "The experimental test tone could not start: %s", err);
         return;
     }
-    app_log(app, rc == 0 ? AKENO_LOG_INFO : AKENO_LOG_WARN, "audio.tone", rc == 0 ? "Experimental test tone started by the user."
-                                                                                  : "The experimental test tone could not start.");
+    app_log(app, AKENO_LOG_INFO, "audio.tone", "Experimental test tone started by the user (preset %s, level %s, delay %d s).",
+            akeno_json_get_string(root, "preset", "default"), akeno_json_get_string(root, "level", "default"), (int)delay);
+    respond_audio_status(r);
+}
+
+/* POST /api/diagnostics/audio/feedback {"run":N,"heard":true|false,"route":"tv"}: the user's own report. */
+static void route_audio_feedback(akeno_app *app, const akeno_json *root, ui_response *r) {
+    int64_t run = 0;
+    const akeno_json *heard = akeno_json_get(root, "heard");
+    const char *route = akeno_json_get_string(root, "route", "");
+    static const char *const routes[] = { "", "tv", "controller-headset", "usb-headset", "other" };
+    int route_ok = 0;
+    for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) route_ok |= strcmp(route, routes[i]) == 0;
+    if (!root || akeno_json_int64(akeno_json_get(root, "run"), &run) != 0 || !heard ||
+        heard->type != AKENO_JSON_BOOL || !route_ok) {
+        respond_error(r, 400, "INVALID_BODY", "Expected {\"run\": number, \"heard\": boolean, \"route\": string}.");
+        return;
+    }
+    int yes = heard->boolean != 0;
+    if (audio_lab_feedback((int)run, yes, route) != 0) {
+        respond_error(r, 404, "UNKNOWN_RUN", "That test is unknown or still running.");
+        return;
+    }
+    app_log(app, AKENO_LOG_INFO, "audio.feedback", "User report for test %d: %s%s%s.", (int)run, yes ? "heard" : "not heard",
+            yes && route[0] ? " on " : "", yes ? route : "");
+    respond_audio_status(r);
+}
+
+/* POST /api/diagnostics/audio/browser: the page's own Web Audio test, reported for comparison. */
+static void route_audio_browser(akeno_app *app, const akeno_json *root, ui_response *r) {
+    if (!root || root->type != AKENO_JSON_OBJECT) {
+        respond_error(r, 400, "INVALID_BODY", "Expected a JSON object.");
+        return;
+    }
+    audio_lab_browser_result result;
+    memset(&result, 0, sizeof(result));
+    result.api_available = akeno_json_get_bool(root, "apiAvailable", 0);
+    app_copy_str(result.state, sizeof(result.state), akeno_json_get_string(root, "state", ""));
+    int64_t rate = 0;
+    if (akeno_json_int64(akeno_json_get(root, "sampleRate"), &rate) == 0 && rate > 0 && rate < 1000000) result.sample_rate = (int)rate;
+    result.clock_advanced = akeno_json_get_bool(root, "clockAdvanced", 0);
+    const akeno_json *heard = akeno_json_get(root, "heard");
+    result.heard = heard && heard->type == AKENO_JSON_BOOL ? (heard->boolean ? 1 : 0) : -1;
+    const char *route = akeno_json_get_string(root, "route", "");
+    app_copy_str(result.route, sizeof(result.route),
+                 strcmp(route, "tv") == 0 || strcmp(route, "controller-headset") == 0 || strcmp(route, "usb-headset") == 0 ||
+                         strcmp(route, "other") == 0
+                     ? route
+                     : "");
+    app_copy_str(result.error, sizeof(result.error), akeno_json_get_string(root, "error", ""));
+    for (char *c = result.state; *c; c++)
+        if ((unsigned char)*c < 0x20) *c = ' ';
+    for (char *c = result.error; *c; c++)
+        if ((unsigned char)*c < 0x20) *c = ' ';
+    audio_lab_browser_report(&result);
+    app_log(app, AKENO_LOG_INFO, "audio.browser", "Browser audio test: API %s, state %s, heard %d.", result.api_available ? "available" : "missing",
+            result.state, result.heard);
+    respond_audio_status(r);
+}
+
+static void printable(char *s) {
+    for (char *c = s; *c; c++)
+        if ((unsigned char)*c < 0x20) *c = ' ';
+}
+
+static double json_seconds(const akeno_json *root, const char *key) {
+    const akeno_json *v = akeno_json_get(root, key);
+    return v && v->type == AKENO_JSON_NUMBER && v->number >= 0 && v->number < 3600 ? v->number : -1;
+}
+
+/* POST /api/diagnostics/audio/media: the page's HTML <audio> element test (v3), for comparison. */
+static void route_audio_media(akeno_app *app, const akeno_json *root, ui_response *r) {
+    if (!root || root->type != AKENO_JSON_OBJECT) {
+        respond_error(r, 400, "INVALID_BODY", "Expected a JSON object.");
+        return;
+    }
+    audio_lab_media_result result;
+    memset(&result, 0, sizeof(result));
+    const char *source = akeno_json_get_string(root, "source", "");
+    app_copy_str(result.source, sizeof(result.source), strcmp(source, "blob") == 0 || strcmp(source, "data") == 0 ? source : "");
+    app_copy_str(result.play_result, sizeof(result.play_result), akeno_json_get_string(root, "playResult", ""));
+    result.loaded_metadata = akeno_json_get_bool(root, "loadedMetadata", 0);
+    result.can_play = akeno_json_get_bool(root, "canPlay", 0);
+    result.playing = akeno_json_get_bool(root, "playing", 0);
+    result.ended = akeno_json_get_bool(root, "ended", 0);
+    int64_t code = 0;
+    if (akeno_json_int64(akeno_json_get(root, "errorCode"), &code) == 0 && code >= 0 && code <= 4) result.error_code = (int)code;
+    result.duration = json_seconds(root, "duration");
+    result.current_time = json_seconds(root, "currentTime");
+    const akeno_json *heard = akeno_json_get(root, "heard");
+    result.heard = heard && heard->type == AKENO_JSON_BOOL ? (heard->boolean ? 1 : 0) : -1;
+    const char *route = akeno_json_get_string(root, "route", "");
+    app_copy_str(result.route, sizeof(result.route),
+                 strcmp(route, "tv") == 0 || strcmp(route, "controller-headset") == 0 || strcmp(route, "usb-headset") == 0 ||
+                         strcmp(route, "other") == 0
+                     ? route
+                     : "");
+    app_copy_str(result.features, sizeof(result.features), akeno_json_get_string(root, "features", ""));
+    printable(result.play_result);
+    printable(result.features);
+    audio_lab_media_report(&result);
+    app_log(app, AKENO_LOG_INFO, "audio.media", "Browser audio element test: %s URL, play() %s, ended %d, error %d, heard %d.",
+            result.source[0] ? result.source : "unknown", result.play_result, result.ended, result.error_code, result.heard);
     respond_audio_status(r);
 }
 #endif
@@ -666,6 +814,193 @@ static void route_shareplay(akeno_app *app, ui_response *r) {
     akeno_buf_append_str(&r->body, "}");
 }
 
+#ifdef AKENO_NATIVE_IPC
+/* ---- AKENO Native (native-IPC build only, docs/PS5_NATIVE_PHASE2.md) ----------------------- */
+
+/* The only settings AKENO Native may change; the server, the console name and the experimental
+ * functions stay with the page. */
+static int native_settings_allowed(const akeno_json *root) {
+    static const char *const keys[] = { "notifyMessages", "notifySocial", "activityEnabled" };
+    if (!root || root->type != AKENO_JSON_OBJECT || root->count == 0) return 0;
+    for (const akeno_json *m = root->child; m; m = m->next) {
+        int known = 0;
+        for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++)
+            if (m->key && strcmp(m->key, keys[i]) == 0 && m->type == AKENO_JSON_BOOL) known = 1;
+        if (!known) return 0;
+    }
+    return 1;
+}
+
+/*
+ * Server writes AKENO Native may make through the proxy (IPC protocol 2), each one an existing
+ * device route the server checks against the console's scopes again. ":id" is one path segment of
+ * 1-64 letters, digits and '-'; no query string. Everything else that is not GET stays refused:
+ * account, profile and privacy changes, blocks, group administration, party administration
+ * (close, leader, kick), game sessions and device management.
+ */
+static const char *const NATIVE_WRITES[] = {
+    "POST /conversations",                 /* open a direct conversation with a friend */
+    "POST /conversations/:id/messages",    /* direct, group and party chats alike, as on the website */
+    "POST /conversations/:id/read",
+    "POST /parties",
+    "POST /parties/:id/join",
+    "POST /parties/:id/leave",
+    "POST /parties/:id/invitations",
+    "POST /parties/:id/voice/device-token", /* party voice pass for this console (protocol 3, docs/PS5_VOICE.md) */
+    "POST /friends/requests/:id/accept",
+    "POST /friends/requests/:id/decline",
+    "POST /invitations/:id/accept",
+    "POST /invitations/:id/decline",
+    "POST /notifications/read",
+    "PUT /presence",
+};
+
+static int native_segment_ok(const char *s, size_t n) {
+    if (n == 0 || n > 64) return 0;
+    for (size_t i = 0; i < n; i++) {
+        char c = s[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-')) return 0;
+    }
+    return 1;
+}
+
+/* "POST /parties/:id/join" against method and path: the matching entry, or NULL. */
+static const char *native_write_allowed(const char *method, const char *path, const char *query) {
+    if (query[0]) return NULL;
+    for (size_t i = 0; i < sizeof(NATIVE_WRITES) / sizeof(NATIVE_WRITES[0]); i++) {
+        const char *entry = NATIVE_WRITES[i];
+        const char *pattern = strchr(entry, ' ');
+        if ((size_t)(pattern - entry) != strlen(method) || strncmp(entry, method, strlen(method)) != 0) continue;
+        pattern++;
+        const char *p = path;
+        int ok = 1;
+        while (ok && *pattern) {
+            if (strncmp(pattern, "/:id", 4) == 0) {
+                if (*p != '/') {
+                    ok = 0;
+                    break;
+                }
+                p++;
+                size_t n = strcspn(p, "/");
+                ok = native_segment_ok(p, n);
+                p += n;
+                pattern += 4;
+            } else {
+                if (*pattern != *p) ok = 0;
+                pattern++;
+                p++;
+            }
+        }
+        if (ok && *p == '\0') return entry;
+    }
+    return NULL;
+}
+
+/* POST /api/native/focus {"conversationId":"<uuid>"} or {"conversationId":null}: the conversation
+ * AKENO Native shows now; repeated while it stays open (AKENO_NATIVE_FOCUS_MS). */
+static void route_native_focus(akeno_app *app, const akeno_json *root, ui_response *r) {
+    const akeno_json *v = akeno_json_get(root, "conversationId");
+    const char *id = v && v->type == AKENO_JSON_STRING ? v->string : "";
+    if (!root || root->type != AKENO_JSON_OBJECT || !v || (v->type != AKENO_JSON_NULL && v->type != AKENO_JSON_STRING) ||
+        (id[0] && !native_segment_ok(id, strlen(id))) || strlen(id) >= sizeof(app->native_focus)) {
+        respond_error(r, 400, "INVALID_FOCUS", "Send {\"conversationId\": \"<id>\"} or null.");
+        return;
+    }
+    pthread_mutex_lock(&app->lock);
+    app_copy_str(app->native_focus, sizeof(app->native_focus), id);
+    app->native_focus_at = akeno_now_ms();
+    pthread_mutex_unlock(&app->lock);
+    respond_ok(r);
+}
+
+static void route_native_hello(akeno_app *app, ui_response *r) {
+    akeno_buf *b = &r->body;
+    respond_json(r, 200);
+    pthread_mutex_lock(&app->lock);
+    akeno_buf_printf(b, "{\"ok\":true,\"ipc\":%d", AKENO_NATIVE_IPC_VERSION);
+    json_kv_str(b, "app", "akeno-network-console", 1);
+    json_kv_str(b, "version", AKENO_APP_VERSION, 1);
+    json_kv_str(b, "build", AKENO_BUILD_ID, 1);
+    json_kv_bool(b, "paired", app->paired, 1);
+    json_kv_str(b, "onlineId", app->online_id, 1);
+    json_kv_str(b, "realtime", app->rt_state, 1);
+    json_kv_int(b, "eventsNext", (long long)app->next_seq, 1);
+    json_kv_bool(b, "writes", 1, 1);
+    json_kv_int(b, "focusMs", AKENO_NATIVE_FOCUS_MS, 1);
+    akeno_buf_append_str(b, "}");
+    pthread_mutex_unlock(&app->lock);
+}
+
+/* Requests that carry X-Akeno-Native-Key: a smaller allow-list than the page's. Never pairing,
+ * unpairing, the server or console name, diagnostics actions, opening the browser or stopping. */
+static void route_native(akeno_app *app, const ui_request *req, const char *body, size_t body_len, ui_response *r) {
+    long long now = akeno_now_ms();
+    /* AKENO Native never sends an Origin; a request with one comes from a page. */
+    if (req->origin[0] || !ui_http_secret_equal(req->native_key, app->native_key)) {
+        app->native_denied++;
+        if (now - app->native_denied_logged_at > 10000) {
+            app->native_denied_logged_at = now;
+            app_log(app, AKENO_LOG_WARN, "native.denied", "Refused a request with a wrong native key (%lu so far).", app->native_denied);
+        }
+        respond_error(r, 403, "NATIVE_KEY_INVALID", "This native key is not valid. AKENO Native reads the new one after a daemon restart.");
+        return;
+    }
+    if (strcmp(req->method, "GET") != 0 && body_len > 0 && strncmp(req->content_type, "application/json", 16) != 0) {
+        respond_error(r, 415, "JSON_REQUIRED", "Send JSON.");
+        return;
+    }
+    if (!app->native_seen_at || now - app->native_seen_at > 60000)
+        app_log(app, AKENO_LOG_INFO, "native.connected", "AKENO Native is using the native interface.");
+    app->native_seen_at = now;
+    app->native_requests++;
+
+    akeno_json_doc *doc = NULL;
+    if (is(req, "GET", "/api/native/hello")) {
+        route_native_hello(app, r);
+    } else if (strncmp(req->path, "/api/v1/", 8) == 0 && strcmp(req->method, "GET") == 0) {
+        route_proxy(app, req, body, body_len, r);
+    } else if (strncmp(req->path, "/api/v1/", 8) == 0) {
+        const char *entry = native_write_allowed(req->method, req->path + 7, req->query);
+        if (entry) {
+            app->native_writes++;
+            app_log(app, AKENO_LOG_INFO, "native.write", "%s", entry); /* the route only: no IDs, no text */
+            route_proxy(app, req, body, body_len, r);
+        } else {
+            respond_error(r, 403, "NOT_ALLOWED_FOR_NATIVE", "AKENO Native may not make this change; use the AKENO website.");
+        }
+    } else if (is(req, "POST", "/api/native/focus")) {
+        doc = akeno_json_parse(body ? body : "", body_len, NULL, 0);
+        route_native_focus(app, akeno_json_root(doc), r);
+    } else if (is(req, "GET", "/api/state")) {
+        route_state(app, r);
+    } else if (is(req, "GET", "/api/events")) {
+        route_events(app, req, r);
+    } else if (is(req, "GET", "/api/inbox")) {
+        route_inbox(app, r);
+    } else if (is(req, "POST", "/api/inbox/seen")) {
+        doc = akeno_json_parse(body ? body : "", body_len, NULL, 0);
+        route_inbox_seen(app, akeno_json_root(doc), r);
+    } else if (is(req, "GET", "/api/media")) {
+        route_media(app, req, r);
+    } else if (is(req, "GET", "/api/local-art")) {
+        route_local_art(app, req, r);
+    } else if (is(req, "POST", "/api/settings")) {
+        doc = akeno_json_parse(body ? body : "", body_len, NULL, 0);
+        if (native_settings_allowed(akeno_json_root(doc))) route_settings(app, akeno_json_root(doc), r);
+        else respond_error(r, 403, "NOT_ALLOWED_FOR_NATIVE", "AKENO Native may only change notification and activity settings.");
+    } else if (is(req, "POST", "/api/realtime/reconnect")) {
+        pthread_mutex_lock(&app->lock);
+        app->rt_wanted = 1;
+        pthread_mutex_unlock(&app->lock);
+        app_tick(app);
+        respond_ok(r);
+    } else {
+        respond_error(r, 403, "NOT_ALLOWED_FOR_NATIVE", "AKENO Native does not use this function; use the AKENO page.");
+    }
+    akeno_json_free(doc);
+}
+#endif
+
 void app_route(akeno_app *app, const ui_request *req, const char *body, size_t body_len, ui_response *r) {
     app_tick(app);
     /* Static page: no secret needed, contains no data. */
@@ -697,13 +1032,31 @@ void app_route(akeno_app *app, const ui_request *req, const char *body, size_t b
         r->static_len = (size_t)(akeno_ui_shareplay_js_end - akeno_ui_shareplay_js) - 1;
         return;
     }
+    if (is(req, "GET", "/audiolab.js")) {
+        r->status = 200;
+        r->content_type = "text/javascript; charset=utf-8";
+#ifdef AKENO_EXPERIMENTAL_AUDIO
+        r->static_body = akeno_ui_audiolab_js;
+        r->static_len = (size_t)(akeno_ui_audiolab_js_end - akeno_ui_audiolab_js) - 1;
+#else
+        static const char none[] = "/* AKENO NETWORK: the audio lab is not part of this build. */\n";
+        r->static_body = none;
+        r->static_len = sizeof(none) - 1;
+#endif
+        return;
+    }
     if (is(req, "GET", "/favicon.ico")) {
         r->status = 204;
         return;
     }
     if (is(req, "GET", "/api/instance")) {
         respond_json(r, 200);
+#ifdef AKENO_NATIVE_IPC
+        akeno_buf_printf(&r->body, "{\"app\":\"akeno-network-console\",\"version\":\"" AKENO_APP_VERSION "\",\"nativeIpc\":%d}",
+                         AKENO_NATIVE_IPC_VERSION);
+#else
         akeno_buf_append_str(&r->body, "{\"app\":\"akeno-network-console\",\"version\":\"" AKENO_APP_VERSION "\"}");
+#endif
         return;
     }
     if (is(req, "POST", "/api/instance/show")) {
@@ -726,6 +1079,12 @@ void app_route(akeno_app *app, const ui_request *req, const char *body, size_t b
         respond_error(r, 404, "NOT_FOUND", "Not found.");
         return;
     }
+#ifdef AKENO_NATIVE_IPC
+    if (req->native_key[0]) {
+        route_native(app, req, body, body_len, r);
+        return;
+    }
+#endif
     if (!ui_http_secret_equal(req->token, app->session_token)) {
         respond_error(r, 403, "SESSION_REQUIRED", "This page has expired. Start AKENO NETWORK again to open a new one.");
         return;
@@ -776,6 +1135,24 @@ void app_route(akeno_app *app, const ui_request *req, const char *body, size_t b
         pthread_mutex_unlock(&app->lock);
         app_tick(app);
         respond_ok(r);
+    } else if (is(req, "GET", "/api/quick-access")) {
+        respond_json(r, 200);
+        akeno_buf_append_str(&r->body, "{\"ok\":true,\"quickAccess\":");
+        pthread_mutex_lock(&app->lock);
+        app_quick_access_json(app, &r->body);
+        pthread_mutex_unlock(&app->lock);
+        akeno_buf_append_str(&r->body, "}");
+    } else if (is(req, "POST", "/api/quick-access/test")) {
+        doc = akeno_json_parse(body ? body : "", body_len, NULL, 0);
+        int64_t seconds = 30;
+        if (doc) akeno_json_int64(akeno_json_get(akeno_json_root(doc), "seconds"), &seconds);
+        app_quick_access_test(app, (int)(seconds > 0 && seconds <= 60 ? seconds : 30));
+        respond_json(r, 200);
+        akeno_buf_append_str(&r->body, "{\"ok\":true,\"quickAccess\":");
+        pthread_mutex_lock(&app->lock);
+        app_quick_access_json(app, &r->body);
+        pthread_mutex_unlock(&app->lock);
+        akeno_buf_append_str(&r->body, "}");
     } else if (is(req, "GET", "/api/diagnostics")) {
         route_diagnostics(app, r);
     } else if (is(req, "POST", "/api/diagnostics/connection")) {
@@ -796,6 +1173,22 @@ void app_route(akeno_app *app, const ui_request *req, const char *body, size_t b
     } else if (is(req, "POST", "/api/diagnostics/audio/tone")) {
         doc = akeno_json_parse(body ? body : "", body_len, NULL, 0);
         route_audio_tone(app, akeno_json_root(doc), r);
+    } else if (is(req, "POST", "/api/diagnostics/audio/cancel")) {
+        if (audio_lab_cancel() == 0) app_log(app, AKENO_LOG_INFO, "audio.cancel", "Experimental test cancelled by the user.");
+        respond_audio_status(r);
+    } else if (is(req, "POST", "/api/diagnostics/audio/feedback")) {
+        doc = akeno_json_parse(body ? body : "", body_len, NULL, 0);
+        route_audio_feedback(app, akeno_json_root(doc), r);
+    } else if (is(req, "POST", "/api/diagnostics/audio/media")) {
+        doc = akeno_json_parse(body ? body : "", body_len, NULL, 0);
+        route_audio_media(app, akeno_json_root(doc), r);
+    } else if (is(req, "POST", "/api/diagnostics/audio/browser")) {
+        doc = akeno_json_parse(body ? body : "", body_len, NULL, 0);
+        route_audio_browser(app, akeno_json_root(doc), r);
+    } else if (is(req, "GET", "/api/diagnostics/audio/report")) {
+        r->status = 200;
+        r->content_type = "text/plain; charset=utf-8";
+        audio_lab_report_text(&r->body);
 #endif
     } else if (is(req, "POST", "/api/exit")) {
         app_log(app, AKENO_LOG_INFO, "app.exit_requested", "Exit requested from the console page.");

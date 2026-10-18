@@ -85,7 +85,8 @@ if(AKENO_HAVE_MBEDTLS)
   if(NOT AKENO_GIT_COMMIT)
     set(AKENO_GIT_COMMIT "dev")
   endif()
-  set(AKENO_APP_SOURCES app/app.c app/app_routes.c app/activity.c app/game_detect.c app/ui_server.c app/ui_http.c app/ui_assets.c app/shareplay_rx.c app/account_bridge.c app/app_account.c)
+  set(AKENO_APP_SOURCES app/app.c app/app_routes.c app/activity.c app/game_detect.c app/quick_access.c app/shortcut.c app/ui_server.c
+    app/ui_http.c app/ui_assets.c app/shareplay_rx.c app/account_bridge.c app/app_account.c)
   add_executable(akeno-app app/main.c app/platform_host.c app/platform_host_account.c ${AKENO_APP_SOURCES})
   target_include_directories(akeno-app PRIVATE src app)
   target_compile_options(akeno-app PRIVATE ${AKENO_WARNINGS} ${AKENO_HARDENING})
@@ -93,27 +94,40 @@ if(AKENO_HAVE_MBEDTLS)
     "AKENO_UI_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/app/web\""
     "AKENO_BUILD_ID=\"${AKENO_GIT_COMMIT}-linux\"")
   set_source_files_properties(app/ui_assets.c PROPERTIES OBJECT_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/app/web/index.html;${CMAKE_CURRENT_SOURCE_DIR}/app/web/app.js;${CMAKE_CURRENT_SOURCE_DIR}/app/web/app.css;${CMAKE_CURRENT_SOURCE_DIR}/app/web/shareplay.js")
+    "${CMAKE_CURRENT_SOURCE_DIR}/app/web/index.html;${CMAKE_CURRENT_SOURCE_DIR}/app/web/app.js;${CMAKE_CURRENT_SOURCE_DIR}/app/web/app.css;${CMAKE_CURRENT_SOURCE_DIR}/app/web/shareplay.js;${CMAKE_CURRENT_SOURCE_DIR}/app/web/audiolab.js")
   target_link_libraries(akeno-app PRIVATE akeno_client_mbedtls)
 
   # Audio lab: the same app with the experimental PS5 audio research (simulated on Linux).
-  add_executable(akeno-app-audiolab app/main.c app/platform_host.c app/platform_host_account.c app/audio_lab.c ${AKENO_APP_SOURCES})
+  add_executable(akeno-app-audiolab app/main.c app/platform_host.c app/platform_host_account.c app/audio_lab.c app/audio_lab_pcm.c app/audio_lab_state.c ${AKENO_APP_SOURCES})
   target_include_directories(akeno-app-audiolab PRIVATE src app)
   target_compile_options(akeno-app-audiolab PRIVATE ${AKENO_WARNINGS} ${AKENO_HARDENING})
   target_compile_definitions(akeno-app-audiolab PRIVATE AKENO_EXPERIMENTAL_AUDIO
     "AKENO_UI_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/app/web\""
     "AKENO_BUILD_ID=\"${AKENO_GIT_COMMIT}-linux-audiolab\"")
   target_link_libraries(akeno-app-audiolab PRIVATE akeno_client_mbedtls)
+
+  # Native IPC: the same app with the local interface for AKENO Native (docs/PS5_NATIVE_PHASE2.md).
+  add_executable(akeno-app-native-ipc app/main.c app/platform_host.c ${AKENO_APP_SOURCES})
+  target_include_directories(akeno-app-native-ipc PRIVATE src app)
+  target_compile_options(akeno-app-native-ipc PRIVATE ${AKENO_WARNINGS} ${AKENO_HARDENING})
+  target_compile_definitions(akeno-app-native-ipc PRIVATE AKENO_NATIVE_IPC
+    "AKENO_UI_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/app/web\""
+    "AKENO_BUILD_ID=\"${AKENO_GIT_COMMIT}-linux-native-ipc\"")
+  target_link_libraries(akeno-app-native-ipc PRIVATE akeno_client_mbedtls)
 endif()
 
 enable_testing()
-add_executable(akeno_unit_tests tests/unit/test_main.c tests/unit/test_core.c tests/unit/test_app.c tests/unit/test_game.c tests/unit/test_shareplay.c tests/unit/test_account_bridge.c app/ui_http.c app/game_detect.c app/shareplay_rx.c app/account_bridge.c)
+add_executable(akeno_unit_tests tests/unit/test_main.c tests/unit/test_core.c tests/unit/test_app.c tests/unit/test_game.c
+  tests/unit/test_shareplay.c tests/unit/test_account_bridge.c tests/unit/test_shortcut.c tests/unit/test_audio_pcm.c tests/unit/test_audio_state.c
+  app/ui_http.c app/game_detect.c app/shareplay_rx.c app/account_bridge.c app/shortcut.c app/audio_lab_pcm.c app/audio_lab_state.c)
 target_include_directories(akeno_unit_tests PRIVATE src app)
 target_compile_options(akeno_unit_tests PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(akeno_unit_tests PRIVATE akeno_client)
 add_test(NAME unit COMMAND akeno_unit_tests)
 if(AKENO_HAVE_MBEDTLS)
-  add_executable(akeno_unit_tests_mbedtls tests/unit/test_main.c tests/unit/test_core.c tests/unit/test_app.c tests/unit/test_game.c tests/unit/test_shareplay.c tests/unit/test_account_bridge.c app/ui_http.c app/game_detect.c app/shareplay_rx.c app/account_bridge.c)
+  add_executable(akeno_unit_tests_mbedtls tests/unit/test_main.c tests/unit/test_core.c tests/unit/test_app.c tests/unit/test_game.c
+    tests/unit/test_shareplay.c tests/unit/test_account_bridge.c tests/unit/test_shortcut.c tests/unit/test_audio_pcm.c tests/unit/test_audio_state.c
+    app/ui_http.c app/game_detect.c app/shareplay_rx.c app/account_bridge.c app/shortcut.c app/audio_lab_pcm.c app/audio_lab_state.c)
   target_include_directories(akeno_unit_tests_mbedtls PRIVATE src app)
   target_compile_options(akeno_unit_tests_mbedtls PRIVATE -Wall -Wextra -Werror)
   target_link_libraries(akeno_unit_tests_mbedtls PRIVATE akeno_client_mbedtls)
