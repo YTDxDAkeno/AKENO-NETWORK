@@ -67,3 +67,13 @@ Both are repeated in the [0.2 hardware test plan](HARDWARE_TEST_PLAN_PS5_NATIVE_
 No server, VPS, production or Account Bridge change was made. The daemon release ELF is still the
 hardware-tested Alpha 0.5 RC file (CI compares it on every commit). The browser page stays the
 working client.
+
+## Native 0.2 preview — owner report (recorded 2026-10-18)
+
+The owner ran Native 0.2 on the same PS5 with firmware 12.20 and earlier provided screenshots of
+**real friend profiles and game activity** on the console. The build ID was not recorded with the
+report (the 0.2 preview CI build is `4b4602c7d0b7`, run 39065377144). This confirms that the 0.2
+social screens displayed real data through the daemon on hardware; it does **not** establish
+complete coverage of the 0.2 test plan (P1–P8 were not reported item by item) and says nothing
+about 1.0.0-beta.1, which is tested with
+[HARDWARE_TEST_PLAN_PS5_NATIVE_1.0.0-beta.1.md](HARDWARE_TEST_PLAN_PS5_NATIVE_1.0.0-beta.1.md).

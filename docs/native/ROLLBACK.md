@@ -8,7 +8,7 @@ the HEN environment, so going back means only replacing files you copied.
 | Go back to | Do this | Status |
 | --- | --- | --- |
 | **Native 0.1** (recommended) | replace `/data/homebrew/AKENONative/` with `fallback/native-0.1-d094e62bcaf1/AKENONative/` | **hardware-tested** on FW 12.20 (`docs/PS5_NATIVE_HARDWARE_RESULTS_FW12.20.md`) |
-| Native 0.2 preview | replace it with `fallback/native-0.2-preview-4b4602c7d0b7/AKENONative/` and use that folder's IPC-1 daemon | **not** run on a PS5 |
+| Native 0.2 preview | replace it with `fallback/native-0.2-preview-4b4602c7d0b7/AKENONative/` and use that folder's IPC-1 daemon | partly hardware-verified (owner report: profiles and activity on FW 12.20); not fully tested |
 | nothing | delete `/data/homebrew/AKENONative/` (and optionally `/data/akeno-native/`) | — |
 
 ## The daemon

@@ -173,6 +173,39 @@ Use a low-risk single-player game. Record each line (photo or log):
 Also report: OnionHEN's log line about kstuff, `/data/OnionHEN/OnionHEN.log` around the plugin
 start (`[akeno-ingame] connected to OnionHEN`), firmware, and the daemon's `akeno.log`.
 
+## Next milestone (owner priority, after the standalone beta is verified)
+
+Decided by the owner on 2026-10-18: OnionHEN is **not** installed now; the standalone beta is
+tested first. The in-game menu is the next high-priority milestone. Two different things must not
+be confused:
+
+| | Toolbox page with the game suspended | Overlay over running gameplay |
+| --- | --- | --- |
+| What the player sees | the PS5 Settings app (OnionHEN Toolbox, or its shortcut) in front; the game is in the background, not closed | AKENO drawn on top of the game while it keeps rendering and taking input |
+| Who draws it | OnionHEN inside ShellUI's Settings | would need drawing into ShellUI's or the game's composition |
+| Interface for third parties | **yes**: the plugin SDK's `onion.ui` pages (what `AKEN00001.elf` uses) | **none**: the SDK `72527c3` has no overlay, HUD or OSD interface (its headers and docs were searched); OnionHEN's own monitor bar is internal |
+| AKENO's rules | allowed after the owner's decision about OnionHEN | excluded unless a reviewed, supported host interface appears (no injection into games or ShellUI by AKENO) |
+| Status | built, PC-tested, not run on a PS5 | not possible with any reviewed host today |
+
+So "in-game access" from AKENO can honestly mean only the first column until a host offers a
+real overlay API. Whether the game is merely backgrounded or paused while Settings is open, and
+whether it resumes cleanly, is part of the hardware proof above (rows 3, 6, 7).
+
+**Coexistence with the owner's kstuff — research questions before any install:**
+
+1. Order: owner's kstuff first, then OnionHEN; OnionHEN's `kstuff_already_running()` probe must
+   report a running kstuff and skip its own (log line in `/data/OnionHEN/OnionHEN.log`). Setting
+   `kstuff.autoload=false` beforehand removes the question entirely and is the recommended
+   default.
+2. Its ELF loader on port 9020 next to the owner's loader on 9021: no conflict expected (different
+   ports); to be confirmed.
+3. Its update-file deletion and `/update` unmount: acceptable to the owner?
+4. Rest mode and a second start of OnionHEN in the same boot.
+5. Whether a newer OnionHEN release changes any of the above (re-read its source at the commit
+   that would be installed).
+
+Nothing of this is executed without the owner's explicit approval.
+
 ## Later, if the proof passes
 
 - More actions through the same write list (accept/decline friend requests, decline invitations).

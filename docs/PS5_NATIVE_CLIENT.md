@@ -6,8 +6,8 @@ with firmware 12.20 that this app runs in the foreground next to the AKENO daemo
 DualSense working and **audible sound** ([results](PS5_NATIVE_HARDWARE_RESULTS_FW12.20.md)). 0.2 added Friends, Profiles and Activity
 through the daemon's local interface. **1.0.0-beta.1 adds messages with a controller keyboard,
 parties, friend requests, invitations, notifications and settings**, written through a fixed list
-of changes the daemon allows (IPC protocol 2, [interface](PS5_NATIVE_PHASE2.md)). **Neither 0.2
-nor 1.0.0-beta.1 has run on a PS5**; the release package and its guides are described in
+of changes the daemon allows (IPC protocol 2, [interface](PS5_NATIVE_PHASE2.md)). **1.0.0-beta.1 has not run on a PS5**; 0.2 ran on the owner's PS5
+(real friend profiles and activity, owner report); the release package and its guides are described in
 [native/INSTALL.md](native/INSTALL.md) and the console test in
 [HARDWARE_TEST_PLAN_PS5_NATIVE_1.0.0-beta.1.md](HARDWARE_TEST_PLAN_PS5_NATIVE_1.0.0-beta.1.md).
 

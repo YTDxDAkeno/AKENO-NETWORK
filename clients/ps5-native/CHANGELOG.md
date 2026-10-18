@@ -54,7 +54,7 @@ Requires the native-IPC daemon of the same package (protocol 2).
   with friends, unread messages, party, invitations and status. Needs OnionHEN (owner decision);
   never run on a PS5. See `docs/IN_GAME_ACCESS.md`.
 
-## 0.2.0-preview — build 4b4602c7d0b7 (not run on a PS5)
+## 0.2.0-preview — build 4b4602c7d0b7 (partly hardware-verified: owner report, FW 12.20, real friend profiles and game activity)
 - Friends, profiles and activity through the daemon's native interface (protocol 1, GET only).
 - Live presence and friend-request updates from the daemon's event ring.
 

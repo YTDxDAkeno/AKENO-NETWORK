@@ -1,9 +1,9 @@
 # Hardware test plan — AKENO NETWORK Native 1.0.0-beta.1
 
 For **your PS5 with firmware 12.20 (kstuff)**, the setup that ran Native 0.1 (`d094e62bcaf1-ps5`)
-and the Alpha 0.5 RC daemon. **Nothing in 1.0.0-beta.1 has run on a PS5.** Native 0.2 was never
-hardware-tested either, so this plan also covers what 0.2 introduced (friends, profiles,
-activity through the daemon). Until you complete it, every statement about the console is a
+and the Alpha 0.5 RC daemon. **Nothing in 1.0.0-beta.1 has run on a PS5.** Native 0.2 ran on your PS5
+(real friend profiles and game activity, owner report) but was not tested systematically, so this
+plan also covers what 0.2 introduced (friends, profiles, activity through the daemon). Until you complete it, every statement about the console is a
 PC-test result only.
 
 Record ✅ / ❌ / what you saw for every step (template at the end); photograph the screens marked
@@ -12,8 +12,9 @@ the website) who can message you, invite you to a party and send a friend reques
 
 ## Before you start
 
-1. **Approve this build.** Download **akeno-network-native-1.0.0-beta.1** from the "PS5 native
-   client" workflow run of the commit you approved (or the draft GitHub release). Check
+1. **The approved build** (owner, 2026-10-18): **akeno-network-native-1.0.0-beta.1** from run
+   [39085172366](https://github.com/YTDxDAkeno/AKENO-NETWORK/actions/runs/39085172366) of commit `238aec4`
+   (`AKENONative/eboot.elf` `f3b59cde069fa44eebd8426be095126aed09f6d191d0becfc7bcf5de2627b36f`). Check
    `sha256sum -c SHA256SUMS` (Windows: `Get-FileHash <file> -Algorithm SHA256`).
 2. Read `docs/INSTALL.md` (what is in the package, what changes) and keep `fallback/` on the PC.
 3. Back up `/data/akeno/` to the PC.
@@ -48,7 +49,7 @@ the website) who can message you, invite you to a party and send a friend reques
 | B2.3 | Start it (home screen, no game) | Home in full screen; pill **BETA · 1.0**; "Welcome back, <name>"; AKENO SOCIAL: **Live from the AKENO daemon on this console**; seven tiles; bottom right "Native 1.0.0-beta.1 · build <id>-ps5 · 12.20" 📷 |
 | B2.4 | Background protection: send `akeno-native.elf` with the ELF loader while the launcher copy is **not** running | One notification, no screen; `native.log` says background (as N1 in the 0.1 plan) |
 
-## B3 — Friends, profiles, activity (0.2 functions, never hardware-tested)
+## B3 — Friends, profiles, activity (0.2 functions, partly seen on hardware)
 
 | # | Step | Expected |
 | --- | --- | --- |

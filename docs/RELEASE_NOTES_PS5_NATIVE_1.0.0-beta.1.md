@@ -41,7 +41,7 @@ which keeps the only server connection, the system notifications and the game de
 
 ## Known limits
 
-- Not run on a PS5 (none of 1.0.0-beta.1 or 0.2).
+- 1.0.0-beta.1 has not run on a PS5. Native 0.2 ran on the owner's PS5 (profiles and activity shown, owner report), which does not cover the new beta.
 - Starting from the launcher closes a running game. In-game access exists only as a separate
   experimental OnionHEN plugin that needs the owner's decision.
 - No voice on the PS5 (research, `docs/VOICE.md`).

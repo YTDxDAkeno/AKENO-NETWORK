@@ -10,8 +10,9 @@ _Written 2026-10-18 for the next person or session. Facts only; anything not run
 | PR #7 | [YTDxDAkeno/AKENO-NETWORK#7](https://github.com/YTDxDAkeno/AKENO-NETWORK/pull/7), draft, branch `claude/intelligent-goodall-f0fn0g` @ `943c28b`, base `claude/laughing-ptolemy-op1d4e`. **Not changed** by this work; the 1.0 work lives only on the branch above |
 | `main`, production | untouched. GitHub `main` is not production. VPS, database, deployed Account Bridge, DNS: not touched, not reachable from this environment |
 | Version | AKENO Native `1.0.0-beta.1` (`clients/ps5-native/src/app/app.h`); daemon still reports `0.5.0-alpha` to the server |
+| Approved test candidate | commit `238aec4`, run [39085172366](https://github.com/YTDxDAkeno/AKENO-NETWORK/actions/runs/39085172366), artifact `akeno-network-native-1.0.0-beta.1` (`eboot.elf` `f3b59cde…`, daemon `fc37e9d5…`); approved by the owner for hardware testing on 2026-10-18. Later commits change documentation only and produce different build IDs: test **this** artifact |
 | Release package | CI artifact **akeno-network-native-1.0.0-beta.1** of the "PS5 native client" workflow (layout: [native/INSTALL.md](native/INSTALL.md)) |
-| Hardware status | Native 0.1 `d094e62bcaf1` and the Alpha 0.5 RC daemon ran on a PS5 with firmware 12.20. **Native 0.2, 1.0.0-beta.1, the protocol-2 daemon and the In-Game Companion have never run on a PS5** |
+| Hardware status | Native 0.1 `d094e62bcaf1` and the Alpha 0.5 RC daemon ran on a PS5 with firmware 12.20. Native 0.2 ran on the owner's PS5 (12.20): screenshots of real friend profiles and game activity (owner report 2026-10-18; build ID not recorded) — partial coverage only. **1.0.0-beta.1, the protocol-2 daemon and the In-Game Companion have never run on a PS5** |
 
 ## Commits of this work (after `943c28b`)
 
