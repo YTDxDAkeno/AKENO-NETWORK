@@ -107,7 +107,7 @@ if(AKENO_HAVE_MBEDTLS)
   target_link_libraries(akeno-app-audiolab PRIVATE akeno_client_mbedtls)
 
   # Native IPC: the same app with the local interface for AKENO Native (docs/PS5_NATIVE_PHASE2.md).
-  add_executable(akeno-app-native-ipc app/main.c app/platform_host.c ${AKENO_APP_SOURCES})
+  add_executable(akeno-app-native-ipc app/main.c app/platform_host.c app/platform_host_account.c ${AKENO_APP_SOURCES})
   target_include_directories(akeno-app-native-ipc PRIVATE src app)
   target_compile_options(akeno-app-native-ipc PRIVATE ${AKENO_WARNINGS} ${AKENO_HARDENING})
   target_compile_definitions(akeno-app-native-ipc PRIVATE AKENO_NATIVE_IPC
