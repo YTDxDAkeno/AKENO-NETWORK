@@ -28,6 +28,7 @@
 #define VOICE_CONNECT_TIMEOUT_MS 8000
 #define VOICE_READY_TIMEOUT_MS 8000
 #define VOICE_FRAME_MAX 65536       /* largest gateway frame accepted */
+#define VOICE_THREAD_STACK (1024 * 1024)
 
 typedef struct {
     uint8_t data[AKN_VOICE_MAX_PACKET + 3];
@@ -687,9 +688,11 @@ static akn_voice_rt *start(akn_app *app, int test, const char *party_id) {
     akn_jitter_init(&rt->jitter);
     akn_pcm_fifo_init(&rt->monitor);
     rt->net_done = test;
-    rt->play = SDL_CreateThread(play_thread, "akn-voice-out", rt);
-    rt->cap = SDL_CreateThread(cap_thread, "akn-voice-mic", rt);
-    if (!test) rt->net = SDL_CreateThread(net_thread, "akn-voice-net", rt);
+    /* libopus keeps its work buffers on the stack (VAR_ARRAYS) and TLS needs room too: explicit
+     * stacks, so the console's default thread stack size does not matter */
+    rt->play = SDL_CreateThreadWithStackSize(play_thread, "akn-voice-out", VOICE_THREAD_STACK, rt);
+    rt->cap = SDL_CreateThreadWithStackSize(cap_thread, "akn-voice-mic", VOICE_THREAD_STACK, rt);
+    if (!test) rt->net = SDL_CreateThreadWithStackSize(net_thread, "akn-voice-net", VOICE_THREAD_STACK, rt);
     if (!rt->play) rt->play_done = 1;
     if (!rt->cap) rt->cap_done = 1;
     if (!test && !rt->net) rt->net_done = 1;
