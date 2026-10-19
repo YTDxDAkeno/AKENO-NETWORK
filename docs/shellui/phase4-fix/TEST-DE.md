@@ -2,9 +2,13 @@
 
 > **Stand 19.10.2026 (FW 12.20, Host `560a2202…`):** H1–H5 **bestanden**, einschließlich H5b im
 > Spiel (*Atelier Yumia*, Rückkehr ins Spiel). Direkt-Modus: **öffnet AKENO direkt im Spiel, auch
-> bei mehrmaligem Öffnen und Schließen; Spiel und Controller laufen weiter** (deine Meldungen, noch
-> ohne Logs). Der Phase-4-Fehler trat dabei nicht auf. Offen sind die Logs und ein längeres
-> Weiterspielen: Schritte 3 und 4 des **Stabilitätsdurchgangs S** unten.
+> bei mehrmaligem Öffnen und Schließen; Spiel und Controller laufen weiter.** Das Log dieses Starts
+> zeigt **10 Direkt-Einstiege**, jeder mit `root page served`, `root activated` und
+> `session ended (root left, Settings closing)`; die ShellUI las danach weiter den Controller, und es
+> gab **keine** Abbruch-Zeile (kein `ShellUI disconnected`, keine zweite Injektion, kein
+> `recovery exhausted`, kein `root mode off`). Der Phase-4-Fehler trat nicht auf. Damit ist der
+> Direkt-Modus **auf deiner Konsole (FW 12.20) bestätigt**, aber noch nicht „stabil“: ein längerer
+> Alltagstest steht aus.
 
 **Den fehlgeschlagenen Phase-4-Host nicht erneut testen.** Dieser Plan gilt nur für
 `host/OnionHEN-AKENO-direct-fixed.elf`. Die Schritte bauen aufeinander auf: **erst wenn ein Schritt

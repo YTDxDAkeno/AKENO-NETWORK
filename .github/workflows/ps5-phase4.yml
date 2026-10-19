@@ -203,9 +203,9 @@ jobs:
             tested=560a2202ae97a832cf5635d07fce41062999e972ac7683e9adad475eb9828858 # host the owner ran H1-H5 with
             if [[ "$(sha "$out/host/OnionHEN-AKENO-direct-fixed.elf")" == "$tested" ]]; then
               echo "Hardware status: THIS host ran on the owner's PS5 (FW 12.20, 2026-10-19): H1-H5 passed (link mode,"
-              echo "                 incl. in a running game and back). Root mode: opens AKENO directly in a running game,"
-              echo "                 repeated open/close cycles OK (owner reports, no logs yet); logs and sustained play pending."
-              echo "                 NOT stable; other firmware unknown."
+              echo "                 incl. in a running game and back). Root mode: 10 direct entries in a running game, each"
+              echo "                 served, activated and ended cleanly in the log; no ShellUI disconnect or re-injection."
+              echo "                 Confirmed on that console only; NOT stable (no prolonged test); other firmware unknown."
             else
               echo "Hardware status: this host is NOT the binary tested on the owner's PS5 (sha256 ${tested:0:8}...);"
               echo "                 treat it as untested."
