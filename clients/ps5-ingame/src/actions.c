@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include "akeno/json.h"
+#include "voice_link.h"
 
 void akn_companion_random16(unsigned char out[16]) {
     int fd = open("/dev/urandom", O_RDONLY);
@@ -46,6 +47,11 @@ static const struct {
     { "reply.", "reply", 1 },    { "dm.", "dm", 1 },            { "read.", "read", 1 },      { "pinv.", "pinv", 1 },
     { "fpinv.", "pinv", 1 },     { "pjoin.", "pjoin", 1 },      { "fpjoin.", "pjoin", 1 },   { "pleave.", "pleave", 1 },
     { "iacc.", "iacc", 1 },      { "idec.", "idec", 1 },        { "racc.", "racc", 1 },      { "rdec.", "rdec", 1 },
+    /* voice: the AKENO voice service (voice_link.h) */
+    { "vjoin.", "vjoin", 1 },    { "vroute.", "vroute", 1 },    { "vleave", "vleave", 0 },   { "vmicon", "vmicon", 0 },
+    { "vmicoff", "vmicoff", 0 }, { "vmute", "vmute", 0 },       { "vunmute", "vunmute", 0 }, { "vdeafen", "vdeafen", 0 },
+    { "vundeafen", "vundeafen", 0 }, { "vvolup", "vvolup", 0 }, { "vvoldn", "vvoldn", 0 },   { "vgainup", "vgainup", 0 },
+    { "vgaindn", "vgaindn", 0 }, { "vtest", "vtest", 0 },       { "vexit", "vexit", 0 },
 };
 
 const char *akn_companion_action_verb(const char *node_id, const char **item_id) {
@@ -128,6 +134,72 @@ static void post_simple(akn_daemon_link *link, akn_action_result *out, const cha
     else failed(out, what_failed, err);
 }
 
+/* ---- voice: commands to the AKENO voice service ------------------------------------------------ */
+
+static void voice_cmd(akn_daemon_link *link, akn_action_result *out, const char *verb, const char *body, const char *ok_message,
+                      const char *what_failed) {
+    char err[200] = "";
+    if (akn_voice_send(link, verb, body, NULL, err, sizeof(err)) == 0) done(out, 1, AKN_LOAD_VOICE, "%s", ok_message);
+    else failed(out, what_failed, err);
+    out->reload |= AKN_LOAD_VOICE;
+}
+
+static int clamp(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+/* 1 when node_id was a voice control (out is filled). */
+static int voice_action(akn_daemon_link *link, const akn_companion *m, const char *node_id, akn_action_result *out) {
+    const akn_ui_voice *v = &m->voice;
+    const char *id;
+    char body[96], msg[160];
+    if ((id = after_prefix(node_id, "vjoin."))) {
+        if (!m->in_party || strcmp(m->party_id, id) != 0) {
+            done(out, 0, AKN_LOAD_PARTY | AKN_LOAD_VOICE, "You are not in that party any more.");
+            return 1;
+        }
+        snprintf(body, sizeof(body), "{\"partyId\":\"%s\"}", id);
+        snprintf(msg, sizeof(msg), "Joining the voice chat of %s. Your microphone is off.", m->party_name);
+        voice_cmd(link, out, "join", body, msg, "Voice not joined");
+        return 1;
+    }
+    if ((id = after_prefix(node_id, "vroute."))) {
+        int route = (id[0] >= '1' && id[0] <= '4' && id[1] == '\0') ? id[0] - '0' : 0;
+        if (!route) {
+            done(out, 0, 0, "Unknown speaker route.");
+            return 1;
+        }
+        snprintf(body, sizeof(body), "{\"route\":%d}", route);
+        snprintf(msg, sizeof(msg), "Speaker route %d. Play the test sound: you should hear %d beep%s.", route, route, route == 1 ? "" : "s");
+        voice_cmd(link, out, "route", body, msg, "Route not changed");
+        return 1;
+    }
+    if (strcmp(node_id, "vleave") == 0) voice_cmd(link, out, "leave", "{}", "You left the voice chat.", "Voice not left");
+    else if (strcmp(node_id, "vmicon") == 0) voice_cmd(link, out, "mic", "{\"enabled\":true}", "Microphone on: the party hears you.", "Microphone not turned on");
+    else if (strcmp(node_id, "vmicoff") == 0) voice_cmd(link, out, "mic", "{\"enabled\":false}", "Microphone off.", "Microphone not turned off");
+    else if (strcmp(node_id, "vmute") == 0) voice_cmd(link, out, "mute", "{\"muted\":true}", "Microphone muted.", "Not muted");
+    else if (strcmp(node_id, "vunmute") == 0) voice_cmd(link, out, "mute", "{\"muted\":false}", "Microphone unmuted.", "Not unmuted");
+    else if (strcmp(node_id, "vdeafen") == 0) voice_cmd(link, out, "deafen", "{\"deafened\":true}", "Deafened: you hear nobody and are muted.", "Not deafened");
+    else if (strcmp(node_id, "vundeafen") == 0) voice_cmd(link, out, "deafen", "{\"deafened\":false}", "You hear the party again.", "Not undeafened");
+    else if (strcmp(node_id, "vvolup") == 0 || strcmp(node_id, "vvoldn") == 0) {
+        int next = clamp(v->volume + (strcmp(node_id, "vvolup") == 0 ? 10 : -10), 0, 150);
+        snprintf(body, sizeof(body), "{\"output\":%d}", next);
+        snprintf(msg, sizeof(msg), "Voice volume %d%%.", next);
+        voice_cmd(link, out, "volume", body, msg, "Volume not changed");
+    } else if (strcmp(node_id, "vgainup") == 0 || strcmp(node_id, "vgaindn") == 0) {
+        int next = clamp(v->mic_gain + (strcmp(node_id, "vgainup") == 0 ? 10 : -10), 50, 150);
+        snprintf(body, sizeof(body), "{\"mic\":%d}", next);
+        snprintf(msg, sizeof(msg), "Microphone gain %d%%.", next);
+        voice_cmd(link, out, "volume", body, msg, "Gain not changed");
+    } else if (strcmp(node_id, "vtest") == 0) {
+        snprintf(msg, sizeof(msg), "Test sound on route %d: listen for %d beep%s.", v->route, v->route, v->route == 1 ? "" : "s");
+        voice_cmd(link, out, "test-sound", "{}", msg, "No test sound");
+    } else if (strcmp(node_id, "vexit") == 0) {
+        voice_cmd(link, out, "exit", "{}", "The voice service is stopping.", "Not stopped");
+    } else {
+        return 0;
+    }
+    return 1;
+}
+
 void akn_companion_action(akn_daemon_link *link, const akn_companion *m, const char *node_id, const char *value, akn_action_result *out) {
     memset(out, 0, sizeof(*out));
     char err[200] = "", text[AKN_UI_REPLY_MAX + 8];
@@ -144,6 +216,7 @@ void akn_companion_action(akn_daemon_link *link, const akn_companion *m, const c
         done(out, 1, AKN_LOAD_ALL, "Refreshed.");
         return;
     }
+    if (node_id[0] == 'v' && voice_action(link, m, node_id, out)) return; /* the voice service's, not the daemon's */
     if (!m->writes) {
         /* the pages offer no changes then; a stale page can still send one */
         done(out, 0, AKN_LOAD_ALL, "This AKENO daemon is read-only (native interface 1).");

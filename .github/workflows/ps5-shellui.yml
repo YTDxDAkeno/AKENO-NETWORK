@@ -133,7 +133,7 @@ jobs:
             echo "PS5 SDK:         ps5-payload-dev/sdk $PS5_SDK_COMMIT"
             echo "Plugin SDK:      OnionBuddies/onionHEN-plugin-sdk $(git -C clients/ps5-ingame/third_party/onion-sdk rev-parse HEAD) (GPLv3 runtime)"
             echo
-            echo "plugin/AKEN00001.elf   onionHEN plugin AKEN00001 1.10 (capabilities NOTIFY|IPC|UI, flags LONG_RUNNING|STOP_SUPPORTED)"
+            echo "plugin/AKEN00001.elf   onionHEN plugin AKEN00001 $(sed -n 's/^#define AKN_COMPANION_VERSION "\(.*\)"$/\1/p' clients/ps5-ingame/src/ui_doc.h) (capabilities NOTIFY|IPC|UI, flags LONG_RUNNING|STOP_SUPPORTED)"
             echo "                       sha256 $plugin_sha"
             echo "daemon/akeno-network-ps5-native-ipc.elf   native interface 3, build $(git rev-parse --short=12 HEAD)-ps5-native-ipc"
             echo "                       sha256 $daemon_sha"

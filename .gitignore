@@ -43,3 +43,4 @@ clients/ps5/ps5-smoke/*.elf
 data/
 clients/ps5-ingame/build*/
 clients/ps5-ingame/third_party/
+clients/ps5-partyvoice/build*/

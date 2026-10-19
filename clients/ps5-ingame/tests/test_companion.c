@@ -24,6 +24,7 @@
 #include "companion.h"
 #include "fetch.h"
 #include "ui_doc.h"
+#include "voice_link.h"
 #include <onion/ui_protocol.h>
 
 static int g_checks, g_failures;
@@ -334,6 +335,8 @@ typedef struct {
     akn_profile me;
     akn_party_list *joinable;
     akn_thread_cache threads[2];
+    akn_ui_voice voice;
+    int with_voice;
     akn_companion *m;
 } world;
 
@@ -380,6 +383,7 @@ static void world_build(world *w, akn_companion_state state, int with_party) {
     x.joinable = w->joinable;
     x.threads = w->threads;
     x.thread_count = 2;
+    x.voice = w->with_voice ? &w->voice : NULL;
     akn_companion_build_ex(w->m, state, &w->d, w->f, w->c, with_party ? &w->p : NULL, w->in, "away", 1000, &x);
 }
 
@@ -620,6 +624,25 @@ static void test_largest_document(void) {
     x.joinable = j;
     x.threads = t;
     x.thread_count = AKN_UI_CONVS;
+    /* the voice page as full as it gets: everyone listed with the longest names, a long error */
+    akn_ui_voice *voice = calloc(1, sizeof(*voice));
+    voice->service = AKN_VOICE_SVC_READY;
+    fill(voice->version, sizeof(voice->version), "9");
+    fill(voice->summary, sizeof(voice->summary), "\xC2\xB7");
+    voice->in_voice = 1;
+    snprintf(voice->party_id, sizeof(voice->party_id), "party-1");
+    snprintf(voice->net, sizeof(voice->net), "reconnecting");
+    fill(voice->net_error, sizeof(voice->net_error), "\xE2\x82\xAC");
+    snprintf(voice->mic, sizeof(voice->mic), "failed");
+    snprintf(voice->out, sizeof(voice->out), "active");
+    snprintf(voice->paced, sizeof(voice->paced), "unknown");
+    voice->volume = 150;
+    voice->mic_gain = 150;
+    voice->route = 4;
+    voice->people_count = AKN_UI_VOICE_PEOPLE;
+    voice->people_total = 16;
+    for (int i = 0; i < AKN_UI_VOICE_PEOPLE; i++) fill(voice->people[i].name, sizeof(voice->people[i].name), "\xF0\x9F\x8E\xA4");
+    x.voice = voice;
     char tombs[AKN_UI_TOMBSTONES][AKN_UI_PAGE_ID_MAX];
     for (int i = 0; i < AKN_UI_TOMBSTONES; i++) snprintf(tombs[i], sizeof(tombs[i]), "c.gone-%034d", i);
     akn_doc_options o;
@@ -660,6 +683,7 @@ static void test_largest_document(void) {
     free(j);
     free(t);
     free(m);
+    free(voice);
 }
 
 /* A control names its item: a reordered list cannot send a reply into another conversation. */
@@ -695,7 +719,7 @@ static void test_stable_ids(void) {
 
 /* ---- the actions against a fake daemon -------------------------------------------------- */
 
-#define FAKE_MAX 32
+#define FAKE_MAX 128
 typedef struct {
     int fd, port;
     pthread_mutex_t lock;
@@ -707,6 +731,13 @@ typedef struct {
 static void reply_json(int fd, const char *json) {
     char head[256];
     int n = snprintf(head, sizeof(head), "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n",
+                     strlen(json));
+    if (write(fd, head, (size_t)n) < 0 || write(fd, json, strlen(json)) < 0) return;
+}
+
+static void reply_status(int fd, int status, const char *json) {
+    char head[256];
+    int n = snprintf(head, sizeof(head), "HTTP/1.1 %d Error\r\nContent-Type: application/json\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n", status,
                      strlen(json));
     if (write(fd, head, (size_t)n) < 0 || write(fd, json, strlen(json)) < 0) return;
 }
@@ -741,6 +772,18 @@ static void *fake_main(void *arg) {
                           "\"onlineId\":\"akeno_tester\",\"realtime\":\"connected\",\"eventsNext\":5}");
         } else if (strcmp(path, "/api/state") == 0) {
             reply_json(c, "{}");
+        } else if (strncmp(path, "/api/voice/", 11) == 0) {
+            pthread_mutex_lock(&f->lock);
+            if (f->count < FAKE_MAX) {
+                snprintf(f->method[f->count], sizeof(f->method[0]), "%s", method);
+                snprintf(f->path[f->count], sizeof(f->path[0]), "%s", path);
+                snprintf(f->body[f->count], sizeof(f->body[0]), "%s", body ? body : "");
+                f->count++;
+            }
+            int refuse = f->refuse_writes;
+            pthread_mutex_unlock(&f->lock);
+            if (refuse) reply_status(c, 409, "{\"ok\":false,\"error\":{\"code\":\"MIC_OFF\",\"message\":\"Turn the microphone on first.\"}}");
+            else reply_json(c, "{\"ok\":true,\"status\":{\"app\":\"akeno-party-voice\",\"protocol\":1,\"version\":\"t\",\"summary\":\"Connected\"}}");
         } else {
             pthread_mutex_lock(&f->lock);
             if (f->count < FAKE_MAX) {
@@ -793,6 +836,8 @@ static int fake_count(fake_daemon *f) {
     pthread_mutex_unlock(&f->lock);
     return n;
 }
+
+static void voice_ready(akn_ui_voice *v, int in_voice);
 
 static void test_actions(void) {
     fake_daemon *fd = calloc(1, sizeof(*fd));
@@ -887,6 +932,73 @@ static void test_actions(void) {
     akn_companion_action(&gone, w.m, "reply.conv-bob", "hi", &r);
     CHECK(r.handled && !r.ok && contains(r.message, "not ready"));
 
+    /* voice: every control goes to the voice service with exactly its body */
+    link.voice_port = fd->port;
+    w.with_voice = 1;
+    voice_ready(&w.voice, 1);
+    w.voice.volume = 100;
+    w.voice.mic_gain = 150;
+    world_build(&w, AKN_COMP_READY, 1);
+#define ACT(node, value) (mark = fake_count(fd), akn_companion_action(&link, w.m, node, value, &r))
+    ACT("vjoin.party-1", "");
+    CHECK(r.handled && r.ok && (r.reload & AKN_LOAD_VOICE) && fake_saw(fd, mark, "POST", "/api/voice/join", "{\"partyId\":\"party-1\"}"));
+    CHECK(contains(r.message, "microphone is off"));
+    ACT("vjoin.party-eve", "");
+    CHECK(r.handled && !r.ok && fake_count(fd) == mark); /* not your party */
+    ACT("vmicon", "");
+    CHECK(r.ok && fake_saw(fd, mark, "POST", "/api/voice/mic", "{\"enabled\":true}"));
+    ACT("vmicoff", "");
+    CHECK(r.ok && fake_saw(fd, mark, "POST", "/api/voice/mic", "{\"enabled\":false}"));
+    ACT("vmute", "");
+    CHECK(r.ok && fake_saw(fd, mark, "POST", "/api/voice/mute", "{\"muted\":true}"));
+    ACT("vunmute", "");
+    CHECK(r.ok && fake_saw(fd, mark, "POST", "/api/voice/mute", "{\"muted\":false}"));
+    ACT("vdeafen", "");
+    CHECK(r.ok && fake_saw(fd, mark, "POST", "/api/voice/deafen", "{\"deafened\":true}"));
+    ACT("vundeafen", "");
+    CHECK(r.ok && fake_saw(fd, mark, "POST", "/api/voice/deafen", "{\"deafened\":false}"));
+    ACT("vvolup", "");
+    CHECK(r.ok && fake_saw(fd, mark, "POST", "/api/voice/volume", "{\"output\":110}") && contains(r.message, "110%"));
+    ACT("vgainup", "");
+    CHECK(r.ok && fake_saw(fd, mark, "POST", "/api/voice/volume", "{\"mic\":150}")); /* the limit */
+    ACT("vgaindn", "");
+    CHECK(r.ok && fake_saw(fd, mark, "POST", "/api/voice/volume", "{\"mic\":140}"));
+    w.voice.volume = 0;
+    world_build(&w, AKN_COMP_READY, 1);
+    ACT("vvoldn", "");
+    CHECK(r.ok && fake_saw(fd, mark, "POST", "/api/voice/volume", "{\"output\":0}"));
+    ACT("vroute.3", "");
+    CHECK(r.ok && fake_saw(fd, mark, "POST", "/api/voice/route", "{\"route\":3}") && contains(r.message, "3 beeps"));
+    ACT("vroute.9", "");
+    CHECK(r.handled && !r.ok && fake_count(fd) == mark);
+    ACT("vtest", "");
+    CHECK(r.ok && fake_saw(fd, mark, "POST", "/api/voice/test-sound", "{}"));
+    ACT("vleave", "");
+    CHECK(r.ok && fake_saw(fd, mark, "POST", "/api/voice/leave", "{}"));
+    ACT("vexit", "");
+    CHECK(r.ok && fake_saw(fd, mark, "POST", "/api/voice/exit", "{}"));
+    /* the service refuses: its reason reaches the page */
+    fd->refuse_writes = 1;
+    ACT("vunmute", "");
+    CHECK(r.handled && !r.ok && contains(r.message, "Turn the microphone on first"));
+    fd->refuse_writes = 0;
+    /* the voice service is not running: a sentence, and the other pages are untouched */
+    akn_daemon_link novoice = link;
+    novoice.voice_port = 1;
+    akn_companion_action(&novoice, w.m, "vmicon", "", &r);
+    CHECK(r.handled && !r.ok && contains(r.message, "not running"));
+    akn_ui_voice absent;
+    akn_voice_load(&novoice, &absent);
+    CHECK(absent.service == AKN_VOICE_SVC_ABSENT);
+    /* voice controls work with a read-only daemon (they are the voice service's) */
+    w.d.ipc = 1;
+    world_build(&w, AKN_COMP_READY, 1);
+    ACT("vmute", "");
+    CHECK(r.ok && fake_saw(fd, mark, "POST", "/api/voice/mute", "{\"muted\":true}"));
+    w.d.ipc = 3;
+    w.with_voice = 0;
+#undef ACT
+
     /* clientMessageIds differ */
     unsigned char a16[16], b16[16];
     akn_companion_random16(a16);
@@ -902,12 +1014,180 @@ static void test_actions(void) {
     free(fd);
 }
 
+/* ---- voice --------------------------------------------------------------------------------- */
+
+static void voice_ready(akn_ui_voice *v, int in_voice) {
+    memset(v, 0, sizeof(*v));
+    v->service = AKN_VOICE_SVC_READY;
+    snprintf(v->version, sizeof(v->version), "0.1.0-alpha");
+    snprintf(v->net, sizeof(v->net), "%s", in_voice ? "connected" : "off");
+    snprintf(v->summary, sizeof(v->summary), "%s", in_voice ? "Connected \xC2\xB7 Listening \xC2\xB7 Microphone off" : "Not in voice");
+    snprintf(v->mic, sizeof(v->mic), "off");
+    snprintf(v->out, sizeof(v->out), "%s", in_voice ? "active" : "off");
+    snprintf(v->paced, sizeof(v->paced), "yes");
+    v->volume = 100;
+    v->mic_gain = 100;
+    v->route = 1;
+    v->in_voice = in_voice;
+    if (in_voice) {
+        snprintf(v->party_id, sizeof(v->party_id), "party-1");
+        v->people_total = 9;
+        v->people_count = AKN_UI_VOICE_PEOPLE;
+        static const char *const names[] = { "Tester", "Bob", "Carol", "Dan", "Eve", "Frank" };
+        for (int i = 0; i < AKN_UI_VOICE_PEOPLE; i++) {
+            snprintf(v->people[i].name, sizeof(v->people[i].name), "%s", names[i]);
+            v->people[i].self = i == 0;
+            v->people[i].speaking = i == 1;
+            v->people[i].muted = i == 2;
+        }
+        v->ev_network = 1;
+    }
+}
+
+static const char *voice_doc(world *w, int with_party, wdoc *d) {
+    w->with_voice = 1;
+    world_build(w, AKN_COMP_READY, with_party);
+    char ids[AKN_UI_PAGES_MAX][AKN_UI_PAGE_ID_MAX];
+    int n = akn_companion_page_ids(w->m, ids, AKN_UI_PAGES_MAX);
+    const char *why = check_doc(w->m, NULL, d);
+    if (!why) {
+        int pages = 0;
+        for (int i = 0; i < d->count; i++) pages += d->nodes[i].kind == ONION_UI_NODE_PAGE;
+        if (pages != n) why = "the page list does not match the document";
+        for (int i = 0; i < n && !why; i++)
+            if (!find(d, ids[i])) why = "a listed page is missing";
+    }
+    if (why) fprintf(stderr, "  voice document: %s\n", why);
+    return why;
+}
+
+static void test_voice_pages(void) {
+    world w;
+    world_init(&w);
+    wdoc *d = calloc(1, sizeof(*d));
+    /* no voice service: the voice page says how to start it; the main page has no entry */
+    memset(&w.voice, 0, sizeof(w.voice));
+    CHECK(voice_doc(&w, 1, d) == NULL);
+    CHECK(find(d, "voice") && title_on(d, "voice", "voice service is not running") && title_on(d, "voice", "port 9021"));
+    CHECK(title_on(d, "party", "Voice chat \xC2\xB7 voice service not running") && !title_on(d, "main", "Voice chat"));
+    CHECK(!find(d, "vroute") && !find(d, "vjoin.party-1") && !find(d, "vexit"));
+    CHECK(title_on(d, "diag", "Voice service: not running"));
+    w.voice.service = AKN_VOICE_SVC_REFUSED;
+    CHECK(voice_doc(&w, 1, d) == NULL && title_on(d, "voice", "refused the daemon's key"));
+    w.voice.service = AKN_VOICE_SVC_INCOMPATIBLE;
+    CHECK(voice_doc(&w, 1, d) == NULL && title_on(d, "voice", "does not fit plugin"));
+
+    /* ready, in a party, not in voice: join asks first and says the microphone stays off */
+    voice_ready(&w.voice, 0);
+    snprintf(w.voice.net_error, sizeof(w.voice.net_error), "The AKENO server has no console voice yet (voice pass: HTTP 404).");
+    CHECK(voice_doc(&w, 1, d) == NULL);
+    const wnode *n = find(d, "vjoin.party-1");
+    CHECK(n && strcmp(n->key, "vjoin") == 0 && (n->flags & ONION_UI_NODE_FLAG_CONFIRM) && contains(n->description, "microphone stays off"));
+    CHECK(title_on(d, "voice", "Last: The AKENO server has no console voice yet"));
+    CHECK(title_on(d, "main", "Voice chat \xC2\xB7 join") && title_on(d, "party", "Voice chat \xC2\xB7 join"));
+    CHECK(!find(d, "vmicon") && !find(d, "vleave") && find(d, "vroute") && find(d, "vroute.4") && find(d, "vtest"));
+    CHECK(find(d, "vexit") && (find(d, "vexit")->flags & ONION_UI_NODE_FLAG_CONFIRM));
+    /* not in a party: nothing to join, the page is still reachable */
+    CHECK(voice_doc(&w, 0, d) == NULL);
+    CHECK(!find(d, "vjoin.party-1") && title_on(d, "voice", "Join or create a party first"));
+
+    /* in voice, microphone off: turning it on asks first */
+    voice_ready(&w.voice, 1);
+    CHECK(voice_doc(&w, 1, d) == NULL);
+    n = find(d, "vmicon");
+    CHECK(n && (n->flags & ONION_UI_NODE_FLAG_CONFIRM) && contains(n->description, "Nothing is recorded"));
+    CHECK(!find(d, "vmute") && !find(d, "vunmute") && !find(d, "vjoin.party-1"));
+    CHECK(title_on(d, "voice", "Tester (you)") && title_on(d, "voice", "Bob \xC2\xB7 speaking") && title_on(d, "voice", "Carol \xC2\xB7 muted"));
+    CHECK(title_on(d, "voice", "+3 more in voice"));
+    CHECK(title_on(d, "main", "Voice chat \xC2\xB7 Connected \xC2\xB7 8 others \xC2\xB7 mic off"));
+    CHECK(find(d, "vdeafen") && find(d, "vvolup") && find(d, "vvoldn") && find(d, "vgainup") && find(d, "vgaindn"));
+    CHECK(title_on(d, "voice", "Voice volume 100% \xC2\xB7 louder") && title_on(d, "voice", "Microphone gain 100% \xC2\xB7 lower"));
+    n = find(d, "vleave");
+    CHECK(n && (n->flags & ONION_UI_NODE_FLAG_CONFIRM));
+    CHECK(title_on(d, "voice", "Measured: network yes \xC2\xB7 mic sent no \xC2\xB7 speaker output no"));
+    CHECK(title_on(d, "vroute", "Route 1: system user, main port (current)") && title_on(d, "vroute", "Play the test sound (1 beep)"));
+    /* microphone on: mute and off, no consent question any more */
+    w.voice.mic_enabled = 1;
+    snprintf(w.voice.mic, sizeof(w.voice.mic), "active");
+    CHECK(voice_doc(&w, 1, d) == NULL && find(d, "vmute") && find(d, "vmicoff") && !find(d, "vmicon"));
+    w.voice.muted = 1;
+    CHECK(voice_doc(&w, 1, d) == NULL && find(d, "vunmute") && !find(d, "vmute"));
+    w.voice.deafened = 1;
+    CHECK(voice_doc(&w, 1, d) == NULL && find(d, "vundeafen") && !find(d, "vdeafen"));
+    /* the microphone failed: the code, and another try */
+    w.voice.mic_enabled = 0;
+    w.voice.muted = 0;
+    snprintf(w.voice.mic, sizeof(w.voice.mic), "failed");
+    w.voice.mic_rc = (long long)(int32_t)0x80260105;
+    CHECK(voice_doc(&w, 1, d) == NULL && title_on(d, "voice", "Microphone: failed (0x80260105)") && title_on(d, "voice", "Try the microphone again"));
+    /* reconnecting; another party's voice */
+    snprintf(w.voice.net, sizeof(w.voice.net), "reconnecting");
+    snprintf(w.voice.net_error, sizeof(w.voice.net_error), "The voice connection was lost.");
+    CHECK(voice_doc(&w, 1, d) == NULL && title_on(d, "main", "Voice chat \xC2\xB7 Reconnecting") && title_on(d, "voice", "Last: The voice connection was lost."));
+    snprintf(w.voice.party_id, sizeof(w.voice.party_id), "party-old");
+    CHECK(voice_doc(&w, 1, d) == NULL && title_on(d, "voice", "another party") && find(d, "vleave"));
+    CHECK(voice_doc(&w, 0, d) == NULL && title_on(d, "voice", "You left the party") && title_on(d, "main", "Voice chat"));
+    /* the read-only daemon: no join (the voice pass needs interface 3) */
+    voice_ready(&w.voice, 0);
+    w.d.ipc = 1;
+    CHECK(voice_doc(&w, 1, d) == NULL && !find(d, "vjoin.party-1"));
+    w.d.ipc = 3;
+    /* the text output the end-to-end test reads */
+    voice_ready(&w.voice, 1);
+    w.with_voice = 1;
+    world_build(&w, AKN_COMP_READY, 1);
+    char text[16384];
+    akn_companion_text(w.m, text, sizeof(text));
+    CHECK(contains(text, "Voice service: ready 0.1.0-alpha") && contains(text, "Voice person: Bob (speaking)") && contains(text, "Voice output: active, hearing, volume 100%, route 1"));
+    w.with_voice = 0;
+    free(d);
+    world_free(&w);
+}
+
+static void test_voice_status_parse(void) {
+    akn_ui_voice v;
+    const char *ok = "{\"ok\":true,\"app\":\"akeno-party-voice\",\"version\":\"0.1.0-alpha\",\"protocol\":1,\"summary\":\"Connected \xC2\xB7 Listening\","
+                     "\"inVoice\":true,\"partyId\":\"party-1\",\"network\":{\"state\":\"connected\",\"error\":\"\"},"
+                     "\"mic\":{\"enabled\":true,\"state\":\"active\",\"muted\":false,\"rc\":0,\"level\":42,\"gain\":110},"
+                     "\"output\":{\"state\":\"active\",\"deafened\":false,\"volume\":90,\"route\":2,\"routeLabel\":\"foreground user, main port\",\"rc\":0,\"paced\":\"yes\"},"
+                     "\"evidence\":{\"networkConnected\":true,\"micTransmitting\":true,\"speakerOutput\":false},"
+                     "\"participants\":[{\"id\":\"a\",\"name\":\"Bob\",\"muted\":false,\"speaking\":true,\"self\":false},{\"id\":\"b\",\"name\":\"\",\"self\":true},"
+                     "{\"id\":\"c\",\"name\":\"C\"},{\"id\":\"d\",\"name\":\"D\"},{\"id\":\"e\",\"name\":\"E\"},{\"id\":\"f\",\"name\":\"F\"},{\"id\":\"g\",\"name\":\"G\"},7],"
+                     "\"stats\":{\"sent\":123,\"received\":456}}";
+    CHECK(akn_voice_parse_status(ok, strlen(ok), &v) == 0 && v.service == AKN_VOICE_SVC_READY);
+    CHECK(v.in_voice && strcmp(v.party_id, "party-1") == 0 && strcmp(v.net, "connected") == 0 && v.mic_enabled && !v.muted && v.mic_gain == 110);
+    CHECK(v.volume == 90 && v.route == 2 && strcmp(v.paced, "yes") == 0 && v.ev_network && v.ev_mic && !v.ev_speaker);
+    CHECK(v.people_count == AKN_UI_VOICE_PEOPLE && v.people_total == 7 && v.people[0].speaking && strcmp(v.people[1].name, "Someone") == 0 && v.people[1].self);
+    CHECK(v.sent == 123 && v.received == 456);
+    /* the answer of a command wraps the status */
+    char wrapped[4096];
+    snprintf(wrapped, sizeof(wrapped), "{\"ok\":true,\"status\":%s}", ok);
+    CHECK(akn_voice_parse_status(wrapped, strlen(wrapped), &v) == 0 && v.volume == 90);
+    CHECK(akn_voice_parse_status("{\"app\":\"other\",\"protocol\":1}", 30, &v) != 0 && v.service == AKN_VOICE_SVC_INCOMPATIBLE);
+    const char *p2 = "{\"app\":\"akeno-party-voice\",\"protocol\":2}";
+    CHECK(akn_voice_parse_status(p2, strlen(p2), &v) != 0 && v.service == AKN_VOICE_SVC_INCOMPATIBLE);
+    CHECK(akn_voice_parse_status("not json", 8, &v) != 0);
+    /* a party ID that is not a server ID is dropped */
+    const char *bad = "{\"app\":\"akeno-party-voice\",\"protocol\":1,\"partyId\":\"../x\"}";
+    CHECK(akn_voice_parse_status(bad, strlen(bad), &v) == 0 && v.party_id[0] == '\0');
+    /* who speaks changes only the speaking fingerprint */
+    akn_ui_voice a, b;
+    akn_voice_parse_status(ok, strlen(ok), &a);
+    b = a;
+    b.people[0].speaking = 0;
+    CHECK(akn_voice_signature(&a, 0) == akn_voice_signature(&b, 0) && akn_voice_signature(&a, 1) != akn_voice_signature(&b, 1));
+    b.muted = 1;
+    CHECK(akn_voice_signature(&a, 0) != akn_voice_signature(&b, 0));
+}
+
 int main(void) {
     test_summary();
     test_pages();
     test_largest_document();
     test_stable_ids();
     test_actions();
+    test_voice_pages();
+    test_voice_status_parse();
     printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;
 }

@@ -25,6 +25,7 @@
 #include "actions.h"
 #include "fetch.h"
 #include "ui_doc.h"
+#include "voice_link.h"
 
 /* onionHEN v0.9.0's host rejects AUTO_START (it uses its own marker file); NOTIFY shows the result
  * of a press as a system notification, since a page shows new data only when it is opened again. */
@@ -38,6 +39,7 @@ ONION_PLUGIN_DEFINE(AKN_COMPANION_PLUGIN_ID, AKN_COMPANION_VERSION, "AKENO NETWO
 #define RECONNECT_MS 5000     /* onionHEN's plugin socket */
 #define NOTE_MS 120000        /* how long the last action's result stays on the main page */
 #define TOMBSTONE_MS 300000
+#define SPEAKING_MS 4000      /* who is speaking changes all the time: published at most this often */
 
 static volatile sig_atomic_t g_running = 1;
 static void stop(int sig) {
@@ -151,6 +153,7 @@ int main(void) {
     akn_daemon_link link;
     memset(&link, 0, sizeof(link));
     link.port = 8642;
+    link.voice_port = AKN_VOICE_PORT;
     snprintf(link.akeno_dir, sizeof(link.akeno_dir), "/data/akeno");
     akn_store *store = akn_store_new();
     akn_companion *model = calloc(1, sizeof(*model));
@@ -170,7 +173,8 @@ int main(void) {
     long long note_until = 0;
     host_link host;
     memset(&host, 0, sizeof(host));
-    long long next_poll = 0, next_full = 0, next_connect = 0;
+    long long next_poll = 0, next_full = 0, next_connect = 0, speaking_at = 0;
+    int voice_seen = -1;
     unsigned want = AKN_LOAD_ALL;
     int dirty = 1;
     uint64_t published = 0;
@@ -194,10 +198,25 @@ int main(void) {
             want |= akn_store_poll(&link, store, &changed);
             dirty |= changed;
             next_poll = now + (store->state == AKN_COMP_READY ? POLL_MS : RETRY_MS);
+            /* the voice service, a separate process: its state at once, who speaks every few seconds */
+            int voice = akn_store_voice(&link, store);
+            if (voice == 2 || (voice == 1 && now - speaking_at >= SPEAKING_MS)) {
+                dirty = 1;
+                speaking_at = now;
+            }
+            if ((int)store->voice.service != voice_seen) {
+                voice_seen = (int)store->voice.service;
+                say(voice_seen == (int)AKN_VOICE_SVC_READY ? "voice service ready" : "voice service not available; the voice page says why");
+            }
         }
         if (now >= next_full) {
             want = AKN_LOAD_ALL;
             next_full = now + FULL_MS;
+        }
+        if (want == AKN_LOAD_VOICE) { /* after a voice press: no daemon request needed */
+            akn_store_voice(&link, store);
+            want = 0;
+            dirty = 1;
         }
         if (want) {
             unsigned failed = akn_store_load(&link, store, want, (long long)time(NULL));

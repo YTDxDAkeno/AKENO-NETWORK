@@ -5,7 +5,7 @@
  * for a list or a text field, its value) through the same code as the plugin. A PC run says nothing
  * about onionHEN or a PS5.
  *
- *   akeno-ingame-check --port <daemon port> --akeno-dir <dir> [--presence away] [--accept-invite]
+ *   akeno-ingame-check --port <daemon port> --akeno-dir <dir> [--voice-port <n>] [--presence away] [--accept-invite]
  *                      [--event <node id> [<value>]]... [--pages]
  */
 #include <stdio.h>
@@ -29,6 +29,7 @@ int main(int argc, char **argv) {
     int events = 0, accept = 0, pages = 0;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) link.port = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--voice-port") == 0 && i + 1 < argc) link.voice_port = atoi(argv[++i]);
         else if (strcmp(argv[i], "--akeno-dir") == 0 && i + 1 < argc) snprintf(link.akeno_dir, sizeof(link.akeno_dir), "%s", argv[++i]);
         else if (strcmp(argv[i], "--presence") == 0 && i + 1 < argc) presence = argv[++i];
         else if (strcmp(argv[i], "--accept-invite") == 0) accept = 1;
@@ -38,7 +39,8 @@ int main(int argc, char **argv) {
             event_values[events] = i + 1 < argc && strncmp(argv[i + 1], "--", 2) != 0 ? argv[++i] : "";
             events++;
         } else {
-            fprintf(stderr, "usage: %s --port N --akeno-dir DIR [--presence STATUS] [--accept-invite] [--event NODE [VALUE]]... [--pages]\n", argv[0]);
+            fprintf(stderr, "usage: %s --port N --akeno-dir DIR [--voice-port N] [--presence STATUS] [--accept-invite] [--event NODE [VALUE]]... [--pages]\n",
+                    argv[0]);
             return 2;
         }
     }

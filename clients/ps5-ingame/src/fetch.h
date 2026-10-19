@@ -14,6 +14,7 @@ struct akeno_json_doc;
 
 typedef struct {
     int port;               /* the daemon's local port (8642 on the console) */
+    int voice_port;         /* the AKENO voice service's port (0: 8646, voice_link.h) */
     char akeno_dir[256];    /* /data/akeno */
     unsigned long requests, failures;
 } akn_daemon_link;
@@ -25,7 +26,8 @@ enum {
     AKN_LOAD_MESSAGES = 1 << 2, /* conversations, and the latest messages of those whose newest changed */
     AKN_LOAD_PARTY = 1 << 3,    /* your party and your friends' parties */
     AKN_LOAD_INBOX = 1 << 4,    /* friend requests, invitations, notifications */
-    AKN_LOAD_ALL = (1 << 5) - 1
+    AKN_LOAD_VOICE = 1 << 5,    /* the voice service's status (voice_link.h; no daemon request) */
+    AKN_LOAD_ALL = (1 << 6) - 1
 };
 
 /* Everything loaded so far; kept between refreshes. */
@@ -51,6 +53,8 @@ typedef struct {
     int events_ready;
     akn_ui_diag diag;
     unsigned long thread_loads; /* conversations whose messages were (re)loaded */
+    akn_ui_voice voice;
+    int have_voice;
 } akn_store;
 
 akn_store *akn_store_new(void);
@@ -63,6 +67,10 @@ unsigned akn_store_load(akn_daemon_link *link, akn_store *store, unsigned sectio
 /* Reads the daemon's event ring since the last call. Presence changes are applied at once (*changed
  * is set); returns the sections to reload (AKN_LOAD_ALL after a gap or when the ring cannot be read). */
 unsigned akn_store_poll(akn_daemon_link *link, akn_store *store, int *changed);
+
+/* Reads the voice service's status into the store. Returns 0 when nothing the voice page shows
+ * changed, 1 when only who is speaking changed, 2 for anything else. */
+int akn_store_voice(akn_daemon_link *link, akn_store *store);
 
 /* The pages' model from the store. */
 void akn_store_model(const akn_store *store, akn_companion *out, long long now);
