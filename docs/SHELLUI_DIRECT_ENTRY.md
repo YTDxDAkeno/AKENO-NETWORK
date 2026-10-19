@@ -1,5 +1,16 @@
 # Direct AKENO entry from a running game (Phase 4, EXPERIMENTAL)
 
+> **HARDWARE RESULT 2026-10-19 — this build FAILED on the owner's PS5 (FW 12.20). Do not retry the
+> patched host's direct entry until it is revised.** With `toolbox_target=AKEN00001` the direct root
+> rendered (`direct entry: AKEN00001 root page as the Settings root`), then ~13 s later the ShellUI
+> plugin bridge disconnected and the console stopped responding to controller input while the game
+> kept rendering. Leading suspect: making a **dynamic plugin page the Settings root** and the
+> back/focus handoff from it — the one behaviour with no proven onionHEN precedent (onionHEN's own
+> Cheats shortcut replaces the root with a *generated Toolbox* page, not a dynamic plugin page). Not
+> conclusively a crash; needs on-hardware isolation. **Safe path meanwhile: the original onionHEN
+> v0.9.0 + the unchanged plugin, with `toolbox=l2_r3` only** (Toolbox → Plugins → AKENO NETWORK),
+> which needs no patched binary. See [shellui/phase4/ROLLBACK-DE.md](shellui/phase4/ROLLBACK-DE.md).
+
 Status (2026-10-18): **built and PC-tested, not run on a PS5.** German guides for the owner:
 [shellui/phase4/INSTALL-DE.md](shellui/phase4/INSTALL-DE.md),
 [shellui/phase4/CONTROL-CENTER-TEST-DE.md](shellui/phase4/CONTROL-CENTER-TEST-DE.md),

@@ -1,5 +1,13 @@
 # AKENO NETWORK Phase 4 – direkter Zugang aus dem laufenden Spiel (Installation)
 
+> **HARDWARE-ERGEBNIS 19.10.2026 – dieser Build ist auf deiner PS5 (12.20) FEHLGESCHLAGEN.**
+> Mit `toolbox_target=AKEN00001` erschien AKENO zwar kurz, danach reagierte die Konsole nicht mehr
+> auf den Controller (das Spiel lief weiter). **Bitte diesen Host nicht erneut mit direktem Ziel
+> testen.** Sicherer Weg bis zu einem überarbeiteten Build: **Original-onionHEN v0.9.0 + unverändertes
+> Plugin, nur `toolbox=l2_r3`** (L2 + R3 halten → Toolbox → Plugins → AKENO NETWORK). Rücknahme:
+> [ROLLBACK-DE.md](ROLLBACK-DE.md). Der Abschnitt „Schnellzugriff ohne neuen Host“ unten beschreibt
+> genau diesen sicheren Weg.
+
 **Experimentell, auf der PS5 noch nicht ausgeführt.** Gebaut und auf dem PC getestet. Nichts wird
 automatisch auf die Konsole übertragen. Deine funktionierende v1.10-Einrichtung bleibt erhalten,
 und du kannst jederzeit zurück: [ROLLBACK-DE.md](ROLLBACK-DE.md).
@@ -92,6 +100,18 @@ Wie gewohnt, nur mit dem neuen Host:
   das Plugin starten (Schritt 5.4).
 - Der bisherige Weg über die Toolbox bleibt: Einstellungen → OnionHEN-Toolbox → Plugins →
   AKENO NETWORK.
+
+## Schnellzugriff ohne neuen Host (sicherer Weg, nach dem Hardware-Fehler empfohlen)
+
+Mit dem **Original**-onionHEN v0.9.0 und dem unveränderten Plugin, ohne den Phase-4-Host:
+
+1. In `/data/OnionHEN/config.ini` nur `toolbox=l2_r3` setzen (kein `toolbox_target`, kein
+   `plugin_entry`).
+2. Im Spiel **L2 + R3 eine Sekunde halten** → die Toolbox öffnet sich, das Spiel bleibt im
+   Hintergrund → **Plugins → AKENO NETWORK → AKENO NETWORK** → mit ○ zurück ins Spiel.
+
+Das ist ein Schritt mehr als der direkte Zugang, aber es nutzt nur bewährte onionHEN-Funktionen und
+kein neues Binary. Genau das hat bei dir schon funktioniert.
 
 ## 7. Prüfen
 
