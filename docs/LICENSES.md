@@ -114,7 +114,7 @@ Inputs of the PS5 build, pinned and checksummed by `clients/ps5-native/scripts/`
 | Inter | 4.1 (Regular, Bold) | SIL Open Font License 1.1 | UI font, embedded in the ELF; the OFL text ships in the artifact (`LICENSE-Inter-OFL.txt`) |
 | Lucide icons (path data of crown, shield-check, braces, badge-check, sprout, flask-conical, gamepad-2, ticket) | lucide-react 1.56.0 | ISC | Badge medallions (`src/core/badges.c`, Native 0.2+), the same eight icons as the console page; the ISC notice is in the source and ships in `LICENSES.md` of every release package |
 | mbedTLS, CA bundle, ps5-payload-sdk | as for the daemon (above) | Apache-2.0, MPL-2.0, GPLv3+ | TLS, trust roots, runtime and libc |
-| libopus (xiph/opus) | 1.5.2 (release tarball, SHA-256 `65c1d2f7…`) | BSD-3-Clause | Party voice codec (Native 1.1+): portable C files, float build, statically linked, unmodified; its `COPYING` ships in every release package (`licenses/libopus-BSD-3-Clause.txt`) |
+| libopus (xiph/opus) | 1.5.2 (release tarball, SHA-256 `65c1d2f7…`) | BSD-3-Clause | Party voice codec (Native 1.1+, and the background voice service `akeno-party-voice.elf`): portable C files, float build, statically linked, unmodified; its `COPYING` ships in every release package (`licenses/libopus-BSD-3-Clause.txt`) |
 
 As with the daemon, the distributed PS5 ELF links the SDK's GPLv3+ runtime, so the ELF is a
 combined work under the GPLv3; zlib, MIT/public-domain, Apache-2.0 and the OFL (for the embedded

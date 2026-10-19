@@ -120,10 +120,12 @@ encoded document:
 - onionHEN draws a page when it is opened: new data appears when a page is opened again, without
   a ShellUI restart. The plugin keeps its document current all the time.
 
-Voice is not part of the companion: an onionHEN plugin is a background process like the daemon and
-gets no audio rights from the host; voice during games stays research
-([SHELLUI_CONTROL_CENTER_RESEARCH.md](SHELLUI_CONTROL_CENTER_RESEARCH.md#party-voice-during-games-milestone-c)).
-The party page shows members' voice state and points to AKENO Native.
+Audio is not part of the companion: an onionHEN plugin is a background process like the daemon and
+gets no audio rights from the host. **Since plugin 1.20 (Phase 4.3, experimental)** the companion has a
+*Voice chat* page that remote-controls the separate background voice service `akeno-party-voice.elf`
+(join, microphone, mute, deafen, volumes, speaker route, test sound, leave) over 127.0.0.1 with the
+daemon's native key; the audio pipeline lives only in that service. Not run on a PS5:
+[PS5_PARTY_VOICE.md](PS5_PARTY_VOICE.md). Plugin 1.10 stays the hardware-tested rollback.
 
 ### What is tested where
 

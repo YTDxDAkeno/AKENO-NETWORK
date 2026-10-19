@@ -3,7 +3,13 @@
 Status (2026-10-18): **not working and not claimed.** AKENO Native 1.1 has working party voice in
 the foreground app. Voice while a game runs needs a process that survives the game and can use
 the microphone and speaker from the background. Nobody has measured that on a PS5 yet. The Voice
-Lab (`clients/ps5-voicelab`) is the measurement. The voice service is built only after its report.
+Lab (`clients/ps5-voicelab`) is the measurement.
+
+> **Update 2026-10-19 (Phase 4.3):** on the owner's decision the voice service was built before the
+> Voice Lab ran: `akeno-party-voice.elf` ([PS5_PARTY_VOICE.md](PS5_PARTY_VOICE.md)), with the Voice
+> Lab's four output variants as selectable speaker routes, a test sound per route and the same
+> measurements in its report. Its hardware test answers the Voice Lab's questions inside a real
+> party. Still **not run on a PS5**; nothing below is changed by it.
 
 ## Why the foreground app cannot do it
 
