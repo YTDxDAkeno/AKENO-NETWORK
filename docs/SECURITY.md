@@ -144,7 +144,10 @@ Details in [VOICE.md](VOICE.md). In short:
 - Membership, blocks, account state and the issuing browser session (or paired console) of the
   connection in the room are checked again when LiveKit reports a join and every 30 s; leaving or removal from the party, closing, blocking,
   suspension, account deletion and signing out the issuing session disconnect the participant
-  at once. Paired devices cannot obtain voice tokens.
+  at once. A paired console obtains a pass only through `POST /parties/:id/voice/device-token`
+  (scope `parties:write`), usable only at the AKENO voice gateway (`wss://<domain>/voice-gateway`,
+  browsers refused); unpairing the console, removing the scope or changing the password ends its
+  voice connection ([SERVER_VOICE_UPGRADE.md](SERVER_VOICE_UPGRADE.md)).
 - Voice traffic is encrypted by WebRTC (DTLS-SRTP) between each browser and the SFU; the SFU
   can technically access the audio it forwards (it is not end-to-end encrypted). Nothing is
   recorded: no egress service is deployed and no audio passes through the API.

@@ -1,18 +1,34 @@
 # Project status
 
-_Last updated: 2026-10-14 (session 5, part 2)._ This file is the source of truth for continuing work
+_Last updated: 2026-10-19 (Phase 4.3 server integration: console voice on the production server).
+Earlier: 2026-10-14 (session 5, part 2)._ This file is the source of truth for continuing work
 across sessions. Do not mark anything complete that has not actually been run.
 
-Branches: **`claude/vibrant-mendel-v55zqf`** (session 5; based on `claude/elegant-wright-4qi8gh`
-@ `9dcc192`, fast-forward, history preserved). `claude/elegant-wright-4qi8gh`, Branch A
-(`claude/adoring-johnson-6re0yl`), Branch B (`claude/epic-bell-s1psav`) and PR #1
-(`chatgpt/ps5-http-backend`) are unchanged. `main` is untouched. Earlier decisions:
+Branches: **`claude/gracious-galileo-c5dxv8`** (Phase 4.3 server integration; Alpha 0.4 `ae94851`
+plus only the server-side console voice changes of the native line and PR #18, see
+[SERVER_VOICE_UPGRADE.md](SERVER_VOICE_UPGRADE.md)). `claude/vibrant-mendel-v55zqf` (session 5) and
+the PS5 lines (PR #7 … PR #18) are unchanged. `main` is untouched. Earlier decisions:
 [BRANCH_RECONCILIATION.md](BRANCH_RECONCILIATION.md).
 
-**Production:** the user reports `af571eb` as deployed. That commit is **not on GitHub** (the VPS
-history was reconciled locally), and this container cannot reach the VPS (the egress proxy
-answers 403 for `85.190.112.10.sslip.io`; no SSH). Nothing was deployed. Before an upgrade the
-VPS-only commits must be pushed or merged (procedure in the session-2 section below).
+**Production:** not verified and **not changed**. The VPS (`85.190.112.10.sslip.io`) is not reachable
+from the development environment (egress policy; no SSH). Reported earlier as `af571eb` (not on
+GitHub); since 2026-10-17 it serves Alpha 0.3 features, so it was upgraded after that report. The
+console voice pass answered **404 NOT_FOUND** on 2026-10-18 because the deployed build does not
+contain the route (reproduced in staging). Read-only diagnostics for the owner:
+[server-voice/VPS-DIAGNOSE-DE.md](server-voice/VPS-DIAGNOSE-DE.md). VPS-only commits must be
+published and merged before any upgrade (session-2 procedure below); nothing is overwritten.
+
+## Phase 4.3 — console voice server integration (2026-10-19)
+
+| Item | Status |
+| --- | --- |
+| Device voice pass `POST /parties/:id/voice/device-token`, voice gateway, compose/Caddy/Docker | integrated on the Alpha 0.4 baseline; byte-identical to the PR #18 head for all server paths |
+| Tests | lint, typecheck; shared 8, server 178, web 34, gateway 6 (real LiveKit); browser E2E 7/7 with LiveKit; PR #18 console E2E 17/17 against this server code; **staging drill 35/35** (production Compose stack, upgrade with the scripts, audio both ways by frequency, revocation, rollback, restore) |
+| Deployment tooling | `infrastructure/scripts/vps-voice-diagnostics.sh` (read-only), `voice-upgrade.sh` (preflight/build/apply/verify/rollback 1-3), `infrastructure/staging/voice-staging.mjs` |
+| Finding | Caddy must be recreated, not reloaded, after a Caddyfile change (single-file bind mount) |
+| Finding | voice connections open during the upgrade are removed once by the first reconciliation (passes without a sealed grant; intended fail-closed behaviour): deploy when nobody is in voice |
+| Production | **not deployed**; waits for the owner's diagnostics and explicit approval |
+| PS5 hardware | first real two-way test after the deployment: [server-voice/PS5-ERSTTEST-DE.md](server-voice/PS5-ERSTTEST-DE.md) |
 
 ## Summary
 

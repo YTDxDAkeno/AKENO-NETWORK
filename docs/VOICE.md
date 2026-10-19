@@ -7,8 +7,9 @@ is **never recorded, stored, transcribed or analysed**.
 
 Status, as of 2026-10-14: implemented and tested against a real LiveKit server (see
 [Testing](#testing)). **Not deployed.** Voice stays off until an operator configures it and
-opens the firewall ports listed below. Native PS5 voice is not part of this feature (see
-[PS5_AUDIO_RESEARCH.md](PS5_AUDIO_RESEARCH.md)).
+opens the firewall ports listed below. Paired PS5 consoles join the same rooms through the AKENO
+voice gateway ([SERVER_VOICE_UPGRADE.md](SERVER_VOICE_UPGRADE.md), section "Console voice" below);
+console audio has not yet run on a PS5.
 
 ## Choosing the media server
 
@@ -217,6 +218,25 @@ party chat) keeps working.
 Hardening of the LiveKit container in `compose.yaml`: non-root user, read-only filesystem,
 all capabilities dropped, `no-new-privileges`, 512 MB memory limit, pinned image, its own key
 pair, rooms only created by the API.
+
+### Console voice (voice gateway)
+
+Consoles cannot run WebRTC, so a paired console asks for a pass at
+`POST /api/v1/parties/:id/voice/device-token` (scope `parties:write`) and sends Opus over a TLS
+WebSocket to `wss://<AKENO_DOMAIN>/voice-gateway`; the gateway (`apps/voice-gateway`, compose
+service `voice-gateway` in this `voice` profile) joins the party's LiveKit room as that user. To
+enable it, with browser voice already working:
+
+```sh
+# .env
+VOICE_GATEWAY_URL=wss://<AKENO_DOMAIN>/voice-gateway
+docker compose --profile https --profile voice up -d voice-gateway app
+docker compose --profile https up -d --no-deps --force-recreate caddy   # new Caddyfile route
+```
+
+No extra port is opened: consoles use 443. Caddy has to be recreated (not reloaded) after a
+Caddyfile change, because the file is bind-mounted on its own. On an existing server use
+`infrastructure/scripts/voice-upgrade.sh` ([SERVER_VOICE_UPGRADE.md](SERVER_VOICE_UPGRADE.md)).
 
 ### NAT, TURN and Docker networking
 
