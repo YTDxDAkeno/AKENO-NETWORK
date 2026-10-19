@@ -270,6 +270,12 @@ void pv_engine_free(pv_engine *e) {
 
 /* ---- Controls --------------------------------------------------------------------------------- */
 
+/* The session the controls act on. One whose network thread ended by itself (removed, refused, gave up)
+ * is already gone, even before the next tick retires it. */
+static pv_session *live_session_locked(pv_engine *e) {
+    return e->session && e->st.net != PV_NET_ENDED ? e->session : NULL;
+}
+
 static int fail(pv_error *err, const char *code, const char *message) {
     if (err) {
         snprintf(err->code, sizeof(err->code), "%s", code);
@@ -302,7 +308,7 @@ static void reset_session_stats_locked(pv_engine *e) {
 int pv_engine_join(pv_engine *e, const char *party_id, pv_error *err) {
     if (!pv_party_id_ok(party_id)) return fail(err, "INVALID_PARTY", "That is not a party ID.");
     pthread_mutex_lock(&e->lock);
-    if (e->session && strcmp(e->session->party_id, party_id) == 0) {
+    if (live_session_locked(e) && strcmp(e->session->party_id, party_id) == 0) {
         pthread_mutex_unlock(&e->lock);
         return 0; /* already in this party's voice */
     }
@@ -312,7 +318,7 @@ int pv_engine_join(pv_engine *e, const char *party_id, pv_error *err) {
             return fail(err, "BUSY", "Voice is still closing. Try again in a moment.");
         }
     }
-    if (e->session) retire_locked(e); /* switching parties: leave the other one */
+    if (e->session) retire_locked(e); /* switching parties, or one that ended: leave it */
     pv_session *s = calloc(1, sizeof(*s));
     if (!s) {
         pthread_mutex_unlock(&e->lock);
@@ -365,7 +371,7 @@ void pv_engine_leave(pv_engine *e, const char *why) {
 
 int pv_engine_set_mic(pv_engine *e, int enabled, pv_error *err) {
     pthread_mutex_lock(&e->lock);
-    pv_session *s = e->session;
+    pv_session *s = live_session_locked(e);
     if (!s) {
         pthread_mutex_unlock(&e->lock);
         return fail(err, "NOT_IN_VOICE", "Join the voice chat first.");
@@ -416,7 +422,7 @@ int pv_engine_set_mic(pv_engine *e, int enabled, pv_error *err) {
 
 int pv_engine_set_mute(pv_engine *e, int muted, pv_error *err) {
     pthread_mutex_lock(&e->lock);
-    if (!e->session) {
+    if (!live_session_locked(e)) {
         pthread_mutex_unlock(&e->lock);
         return fail(err, "NOT_IN_VOICE", "Join the voice chat first.");
     }

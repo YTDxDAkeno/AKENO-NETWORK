@@ -31,8 +31,14 @@
 #define FRAME_MAX 65536         /* largest gateway frame accepted */
 #define CLIENT_NAME PV_APP "/" PV_VERSION
 
-static void set_net(pv_engine *e, pv_net_state state, const char *error) {
+static void set_net(pv_session *s, pv_net_state state, const char *error) {
+    pv_engine *e = s->e;
     pthread_mutex_lock(&e->lock);
+    if (e->session != s) {
+        /* a session the user left or replaced: its thread no longer speaks for the voice chat */
+        pthread_mutex_unlock(&e->lock);
+        return;
+    }
     pv_net_state before = e->st.net;
     e->st.net = state;
     if (error) snprintf(e->st.net_error, sizeof(e->st.net_error), "%s", error);
@@ -41,6 +47,11 @@ static void set_net(pv_engine *e, pv_net_state state, const char *error) {
         if (e->st.connected_since_ms) e->st.connected_total_ms += pv_now_ms(e) - e->st.connected_since_ms;
         e->st.connected_since_ms = 0;
         e->st.people_count = 0;
+    }
+    if (state == PV_NET_ENDED) {
+        /* in the same update, so a status read never shows an ended voice chat the console is still in */
+        e->st.in_voice = 0;
+        e->st.mic_enabled = 0;
     }
     e->report_dirty = 1;
     pthread_mutex_unlock(&e->lock);
@@ -393,7 +404,7 @@ static int run_connection(pv_session *s, const akn_voice_credential *cred, char 
                 s->connected = 1;
                 akn_jitter_init(&s->jitter);
                 pthread_mutex_unlock(&s->lock);
-                set_net(e, PV_NET_CONNECTED, NULL);
+                set_net(s, PV_NET_CONNECTED, NULL);
                 pv_log(e, "voice.connected", "in voice (gateway on the AKENO server's host)");
             }
         } else if (f.opcode == 2 && ready) {
@@ -444,7 +455,7 @@ void *pv_net_thread(void *arg) {
     akn_voice_credential *cred = malloc(sizeof(*cred));
     snprintf(settings, sizeof(settings), "%s/settings.json", e->cfg.akeno_dir);
     while (cred && s->run) {
-        set_net(e, PV_NET_REQUESTING, NULL);
+        set_net(s, PV_NET_REQUESTING, NULL);
         int retry = 0, code = 0;
         err[0] = '\0';
         if (request_credential(s, cred, err, sizeof(err), &retry) != 0) {
@@ -453,7 +464,7 @@ void *pv_net_thread(void *arg) {
             snprintf(err, sizeof(err), "The voice gateway is not on this console's AKENO server; the voice service does not connect to it.");
             code = 1000;
         } else {
-            set_net(e, PV_NET_CONNECTING, NULL);
+            set_net(s, PV_NET_CONNECTING, NULL);
             code = run_connection(s, cred, err, sizeof(err));
         }
         memset(cred, 0, sizeof(*cred));
@@ -469,7 +480,7 @@ void *pv_net_thread(void *arg) {
             pv_note_locked(e, "AKENO Voice: %s", err[0] ? err : "voice ended");
             pv_set_failure_locked(e, "%s", err[0] ? err : "voice ended");
             pthread_mutex_unlock(&e->lock);
-            set_net(e, PV_NET_ENDED, err[0] ? err : "Voice ended.");
+            set_net(s, PV_NET_ENDED, err[0] ? err : "Voice ended.");
             s->run = 0;
             break;
         }
@@ -478,7 +489,7 @@ void *pv_net_thread(void *arg) {
         if (attempts == 1) pv_note_locked(e, "AKENO Voice: connection lost, reconnecting...");
         pv_set_failure_locked(e, "%s", err[0] ? err : "connection lost");
         pthread_mutex_unlock(&e->lock);
-        set_net(e, PV_NET_RECONNECTING, err);
+        set_net(s, PV_NET_RECONNECTING, err);
         pv_sleep_while(&s->run, pause);
     }
     free(cred);

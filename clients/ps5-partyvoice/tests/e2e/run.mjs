@@ -245,7 +245,7 @@ function local(port, method, path, headers = {}, body) {
     socket.on('end', () => {
       const status = Number(/^HTTP\/1\.1 (\d+)/.exec(data)?.[1] ?? 0);
       const text = data.slice(data.indexOf('\r\n\r\n') + 4);
-      let json = null;
+      let json;
       try {
         json = JSON.parse(text);
       } catch {
@@ -441,11 +441,12 @@ await step('2.+3. Bob joins from a browser; his voice reaches the console decode
   }, 'Bob in the participant list', 15_000);
   const s = await waitFor(async () => {
     const v = await status();
-    return v.stats.rxToneHz >= 590 && v.stats.rxToneHz <= 610 && v.stats.decodedWithSound > 50 && v.evidence.speakerOutput ? v : null;
-  }, 'the console to decode Bob (600 Hz)', 20_000);
+    const tone = v.stats.rxToneHz >= 590 && v.stats.rxToneHz <= 610;
+    const played = v.stats.decodedWithSound > 50 && v.stats.outBlocksWithSound > 20 && v.evidence.speakerOutput;
+    return tone && played ? v : null;
+  }, 'the console to decode Bob (600 Hz) and play it (more than 20 output blocks with sound)', 20_000);
   assert.equal(s.output.state, 'active');
   assert.equal(s.output.paced, 'yes', 'the simulated port consumed the blocks at playback speed');
-  assert.ok(s.stats.outBlocksWithSound > 20, `output blocks with sound: ${s.stats.outBlocksWithSound}`);
   assert.match(s.summary, /^Connected · Listening · Microphone off$/);
 });
 
@@ -465,11 +466,11 @@ await step('4. the user turns the microphone on: Bob hears the console (300 Hz),
   await waitFor(() => hearsConsole(mark), 'Bob to hear the console (300 Hz)', 20_000);
   const s = await waitFor(async () => {
     const v = await status();
-    return v.evidence.micTransmitting && v.evidence.gatewayHeardLevel > 0 ? v : null;
-  }, 'the evidence of transmission', 10_000);
+    const enough = v.stats.micFramesWithSound > 20 && v.stats.sentWithSound > 20;
+    return v.evidence.micTransmitting && v.evidence.gatewayHeardLevel > 0 && enough ? v : null;
+  }, 'the evidence of transmission (more than 20 frames with sound captured and sent)', 10_000);
   assert.equal(s.mic.state, 'active');
   assert.equal(s.mic.rate, 16000);
-  assert.ok(s.stats.micFramesWithSound > 20 && s.stats.sentWithSound > 20, JSON.stringify(s.stats));
   assert.ok(s.stats.txToneHz >= 290 && s.stats.txToneHz <= 310, `tx tone ${s.stats.txToneHz}`);
   await waitFor(async () => (await status()).participants.find((p) => p.self)?.speaking, 'the console to show as speaking', 10_000);
 });
@@ -519,7 +520,7 @@ await step('volume and gain within limits; the speaker route; the test sound is 
   s = await status();
   assert.equal(s.output.route, 2);
   await pressOk('vtest');
-  s = await waitFor(async () => {
+  await waitFor(async () => {
     const v = await status();
     return v.stats.testSounds === 1 ? v : null;
   }, 'the test sound', 5000);
@@ -609,7 +610,7 @@ await step('12. the voice service crashes and restarts: the plugin says so, noth
   let page = await pages();
   assert.equal(page.code, 0, page.out);
   assert.match(page.out, /Voice service: not running/);
-  assert.match(page.out, /Party           Atelier night/, 'the other pages still work');
+  assert.match(page.out, /Party {11}Atelier night/, 'the other pages still work');
   const r = await press('vmicon');
   assert.match(r.out, /not running/);
   await waitFor(async () => (await gatewaySessions()) === 0, 'the gateway to drop the dead session', 40_000);
@@ -672,11 +673,11 @@ await step('the report separates the three outcomes and carries no name, ID, tok
   const report = readFileSync(join(voiceDir, 'report.txt'), 'utf8');
   const previous = readFileSync(join(voiceDir, 'report-previous.txt'), 'utf8');
   const logText = readFileSync(join(voiceDir, 'voice.log'), 'utf8');
-  assert.match(report, /NETWORK CONNECTED:        yes/);
-  assert.match(report, /MICROPHONE TRANSMITTING:  no/);
-  assert.match(report, /SPEAKER OUTPUT ACTIVE:    no/);
-  assert.match(previous, /MICROPHONE TRANSMITTING:  yes/);
-  assert.match(previous, /SPEAKER OUTPUT ACTIVE:    yes/);
+  assert.match(report, /NETWORK CONNECTED: {8}yes/);
+  assert.match(report, /MICROPHONE TRANSMITTING: {2}no/);
+  assert.match(report, /SPEAKER OUTPUT ACTIVE: {4}no/);
+  assert.match(previous, /MICROPHONE TRANSMITTING: {2}yes/);
+  assert.match(previous, /SPEAKER OUTPUT ACTIVE: {4}yes/);
   assert.match(report, /\[Your answers - fill in and send back\]/);
   for (const text of [report, previous, logText]) {
     assert.doesNotMatch(text, /eyJ[A-Za-z0-9_-]{10,}/, 'no voice pass');

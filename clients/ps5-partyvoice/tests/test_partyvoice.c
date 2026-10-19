@@ -193,6 +193,16 @@ static int wait_for(pv_engine *e, status_pred pred, int ms) {
     return 0;
 }
 
+/* like wait_for, without ticking: what the plugin reads between two ticks */
+static int wait_net_untick(pv_engine *e, pv_net_state state, pv_status *s, int ms) {
+    for (int t = 0; t < ms; t += 5) {
+        pv_engine_status(e, s);
+        if (s->net == state) return 1;
+        sleep_ms(5);
+    }
+    return 0;
+}
+
 static int is_ended(const pv_status *s) { return s->net == PV_NET_ENDED && !s->in_voice; }
 static int is_reconnecting(const pv_status *s) { return s->net == PV_NET_RECONNECTING; }
 static int mic_active(const pv_status *s) { return s->mic == PV_MIC_ACTIVE && s->mic_frames > 10; }
@@ -462,6 +472,17 @@ static void test_settings_persist(void) {
     world_close(&w);
 }
 
+/* a join right after another one ended: "Voice is still closing. Try again in a moment." */
+static int join_retry(pv_engine *e, const char *party, pv_error *err) {
+    for (int t = 0; t < 8000; t += 20) {
+        if (pv_engine_join(e, party, err) == 0) return 0;
+        if (strcmp(err->code, "BUSY") != 0) return -1;
+        pv_engine_tick(e);
+        sleep_ms(20);
+    }
+    return -1;
+}
+
 static void test_voice_pass_refusals(void) {
     fake_daemon *f = calloc(1, sizeof(*f));
     pthread_t thread;
@@ -474,7 +495,12 @@ static void test_voice_pass_refusals(void) {
 
     /* the production server of 2026-10-18: no device voice route */
     fake_set(f, NULL, "{\"ok\":false,\"status\":404,\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"The requested endpoint was not found.\"}}");
-    CHECK(pv_engine_join(w.e, party, &err) == 0);
+    CHECK(join_retry(w.e, party, &err) == 0);
+    /* ended and out of voice in the same update, also before the next tick */
+    CHECK(wait_net_untick(w.e, PV_NET_ENDED, &s, 5000));
+    CHECK(!s.in_voice && !s.mic_enabled);
+    CHECK(pv_engine_set_mic(w.e, 1, &err) != 0 && strcmp(err.code, "NOT_IN_VOICE") == 0);
+    CHECK(pv_engine_set_mute(w.e, 0, &err) != 0 && strcmp(err.code, "NOT_IN_VOICE") == 0);
     CHECK(wait_for(w.e, is_ended, 5000));
     pv_engine_status(w.e, &s);
     CHECK(contains(s.net_error, "no console voice yet (voice pass: HTTP 404)"));
@@ -488,7 +514,7 @@ static void test_voice_pass_refusals(void) {
 
     /* a daemon without the voice pass */
     fake_set(f, "{\"app\":\"akeno-network-console\",\"version\":\"0.5.0-alpha\",\"nativeIpc\":2}", NULL);
-    CHECK(pv_engine_join(w.e, party, &err) == 0);
+    CHECK(join_retry(w.e, party, &err) == 0);
     CHECK(wait_for(w.e, is_ended, 5000));
     pv_engine_status(w.e, &s);
     CHECK(contains(s.net_error, "native interface 2") && fake_requests(f) == 0);
@@ -496,19 +522,19 @@ static void test_voice_pass_refusals(void) {
 
     /* console voice off on the server, not a member: final */
     fake_set(f, NULL, "{\"ok\":false,\"status\":503,\"error\":{\"code\":\"VOICE_GATEWAY_UNAVAILABLE\",\"message\":\"x\"}}");
-    CHECK(pv_engine_join(w.e, party, &err) == 0);
+    CHECK(join_retry(w.e, party, &err) == 0);
     CHECK(wait_for(w.e, is_ended, 5000));
     pv_engine_status(w.e, &s);
     CHECK(contains(s.net_error, "Console voice is not set up") && fake_requests(f) == 1);
     fake_set(f, NULL, "{\"ok\":false,\"status\":403,\"error\":{\"code\":\"NOT_MEMBER\",\"message\":\"x\"}}");
-    CHECK(pv_engine_join(w.e, party, &err) == 0);
+    CHECK(join_retry(w.e, party, &err) == 0);
     CHECK(wait_for(w.e, is_ended, 5000));
     pv_engine_status(w.e, &s);
     CHECK(contains(s.net_error, "Only members"));
 
     /* a server error is retried */
     fake_set(f, NULL, "{\"ok\":false,\"status\":502,\"error\":{\"code\":\"UPSTREAM\",\"message\":\"x\"}}");
-    CHECK(pv_engine_join(w.e, party, &err) == 0);
+    CHECK(join_retry(w.e, party, &err) == 0);
     CHECK(wait_for(w.e, is_reconnecting, 5000));
     WAIT_UNTIL(w.e, fake_requests(f) >= 2, 8000);
     CHECK(fake_requests(f) >= 2);
@@ -518,7 +544,7 @@ static void test_voice_pass_refusals(void) {
 
     /* a gateway on another host: never contacted */
     fake_set(f, NULL, "{\"ok\":true,\"status\":200,\"data\":{\"url\":\"wss://evil.example/voice-gateway\",\"token\":\"eyJhbGciOiJIUzI1NiJ9.e30.secret\",\"room\":\"r\",\"identity\":\"i\"}}");
-    CHECK(pv_engine_join(w.e, party, &err) == 0);
+    CHECK(join_retry(w.e, party, &err) == 0);
     CHECK(wait_for(w.e, is_ended, 5000));
     pv_engine_status(w.e, &s);
     CHECK(contains(s.net_error, "not on this console's AKENO server"));

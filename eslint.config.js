@@ -14,6 +14,7 @@ export default defineConfig(
       'clients/ps5-native/third_party/**',
       'clients/ps5-ingame/build*/**',
       'clients/ps5-ingame/third_party/**',
+      'clients/ps5-partyvoice/build*/**',
       '**/node_modules/**',
       '**/coverage/**',
       '**/playwright-report/**',
@@ -60,9 +61,13 @@ export default defineConfig(
     },
   },
   {
-    // Launcher manifests of AKENO Native and the Voice Lab, evaluated by websrv's launcher page
-    // (which calls main() and provides ApiClient, its file and launch API).
-    files: ['clients/ps5-native/package/**/*.js', 'clients/ps5-voicelab/package/**/*.js'],
+    // Launcher manifests of AKENO Native, the Voice Lab and the party voice service, evaluated by
+    // websrv's launcher page (which calls main() and provides ApiClient, its file and launch API).
+    files: [
+      'clients/ps5-native/package/**/*.js',
+      'clients/ps5-voicelab/package/**/*.js',
+      'clients/ps5-partyvoice/package/**/*.js',
+    ],
     languageOptions: { sourceType: 'script', globals: { ...globals.browser, ApiClient: 'readonly' } },
     rules: { '@typescript-eslint/no-unused-vars': ['error', { varsIgnorePattern: '^main$', caughtErrors: 'none' }] },
   },
