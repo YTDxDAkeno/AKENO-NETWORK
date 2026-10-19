@@ -10,16 +10,19 @@ akeno-party-voice  --voice pass (IPC 3)--> AKENO daemon --> AKENO server
 akeno-party-voice  --wss://<server>/voice-gateway, Opus--> voice gateway --> LiveKit <-- PC / phone
 ```
 
-**Not verified on a PS5.** Whether a background payload may capture the microphone and be heard
-while a game runs is exactly what the owner's hardware test decides. Design, evidence and the test:
+**0.2.0 has not run on a PS5.** 0.1.0 did (FW 12.20): network voice worked, the output was accepted
+but not heard, the microphone was refused (`0x809B0081`). 0.2.0 measures the port clock correctly,
+runs the test sound through the speech pipeline and checks it in the submitted buffer, does not
+repeat refused calls, and records whether it runs as a background process. Analysis and the
+controlled hardware test: [docs/PS5_VOICE_AUDIO_0.2.md](../../docs/PS5_VOICE_AUDIO_0.2.md); design:
 [docs/PS5_PARTY_VOICE.md](../../docs/PS5_PARTY_VOICE.md); German owner guides in
-[docs/shellui/voice-alpha/](../../docs/shellui/voice-alpha/).
+[docs/shellui/voice-alpha-0.2/](../../docs/shellui/voice-alpha-0.2/).
 
 | File | What |
 | --- | --- |
 | `src/pv_engine.c` | sessions, controls, main-loop tick (heartbeat, game activity, notifications, report) |
 | `src/pv_net.c` | voice pass through the daemon, TLS WebSocket to the gateway, reconnects (AKENO Native's steps) |
-| `src/pv_audio.c` | playback (jitter -> Opus -> output, pacing measured), capture (only after consent), test sound |
+| `src/pv_audio.c` | playback (jitter -> Opus -> output; port clock probe, paced by the port), capture (only after consent; refusals classified, not repeated), test sound through the speech pipeline |
 | `src/pv_control.c` | the local control interface (protocol 1) |
 | `src/pv_status.c` | status document and the privacy-safe report |
 | `src/pv_backend_ps5.c` | the only file with console functions; `src/pv_backend_host.c` simulates a console |

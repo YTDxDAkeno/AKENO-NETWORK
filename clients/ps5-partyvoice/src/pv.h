@@ -15,7 +15,7 @@
 #define PV_H
 
 #define PV_APP "akeno-party-voice"
-#define PV_VERSION "0.1.0-alpha"
+#define PV_VERSION "0.2.0-alpha"
 #define PV_API_PROTOCOL 1   /* the local control interface (pv_control.c) */
 #define PV_PORT 8646        /* 127.0.0.1 only; the daemon is 8642, the Voice Lab 8644 */
 
@@ -29,7 +29,12 @@
 #define PV_GAIN_MIN 50
 #define PV_GAIN_MAX 150
 #define PV_STEP 10
-#define PV_ROUTES 4
+#define PV_ROUTES 4          /* 3 and 4 are retired (pv_backend.h) but still answer, for plugin 1.20 */
+
+/* Audio limits. */
+#define PV_PROBE_BLOCKS 12    /* silent blocks back to back after a port opens: 256 ms, inaudible either way */
+#define PV_MIC_OPEN_LIMIT 8   /* sceAudioInOpen calls per run, whatever happens */
+#define PV_TEST_AMPLITUDE 0.10 /* the test sound: -20 dBFS peak, the audio labs' "moderate" level (as 0.1.0) */
 
 /* Reconnects after a lost connection: 1, 2, 4, 8, then every 10 s, for about five minutes. */
 #define PV_RECONNECT_MAX 30

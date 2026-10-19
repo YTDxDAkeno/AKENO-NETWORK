@@ -2,7 +2,7 @@
 # Safety gate for the AKENO Party Voice ELF (docs/PS5_PARTY_VOICE.md). Fails when:
 #   - it imports a system function outside the reviewed list (src/pv_backend_ps5.c's header names
 #     where each one ran on 12.20 before), or links a library outside the reviewed NEEDED list;
-#   - an optional query (the running app, the foreground user) is not a weak import;
+#   - an optional query (the running app, the foreground user, this process's app info) is not a weak import;
 #   - any object references anything that changes the system: launching/killing apps, mounting,
 #     ptrace, raw syscalls, the SDK's kernel memory helpers, pad, registry or install utilities,
 #     linked microphone functions, the voice/chat libraries;
@@ -23,14 +23,14 @@ elf="$build/akeno-party-voice.elf"
 
 reviewed_sce='
 sceAudioOutClose sceAudioOutInit sceAudioOutOpen sceAudioOutOutput
-sceKernelSendNotificationRequest
+sceKernelGetAppInfo sceKernelSendNotificationRequest
 sceNetErrnoLoc sceNetPoolCreate sceNetPoolDestroy sceNetResolverCreate sceNetResolverDestroy sceNetResolverStartAton
 sceNetResolverStartNtoa
 sceSystemServiceGetAppIdOfRunningBigApp
 sceUserServiceGetForegroundUser sceUserServiceInitialize
 kernel_get_fw_version
 '
-weak_required='sceSystemServiceGetAppIdOfRunningBigApp sceUserServiceGetForegroundUser'
+weak_required='sceKernelGetAppInfo sceSystemServiceGetAppIdOfRunningBigApp sceUserServiceGetForegroundUser'
 reviewed_needed='libSceSystemService.sprx libSceUserService.sprx libSceAudioOut.sprx libkernel_web.sprx
 libSceLibcInternal.sprx libSceNet.sprx libkernel.sprx libkernel_sys.sprx'
 
