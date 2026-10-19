@@ -1,9 +1,10 @@
 # AKENO NETWORK Phase 4.1 – Hardware-Testplan (FW 12.20)
 
 > **Stand 19.10.2026 (FW 12.20, Host `560a2202…`):** H1–H5 **bestanden**, einschließlich H5b im
-> Spiel (*Atelier Yumia*, Rückkehr ins Spiel). H6–H10 noch offen. Weiter nur mit H6 auf dem
-> **Startbildschirm**, falls du den Direkt-Modus ausprobieren willst; der Link-Modus allein ist ein
-> vollständiges Ergebnis.
+> Spiel (*Atelier Yumia*, Rückkehr ins Spiel). Direkt-Modus: **öffnet AKENO direkt, auch im Spiel**
+> (deine Meldung, noch ohne Logs). Offen sind wiederholtes Öffnen/Schließen, längeres Weiterspielen,
+> die Controller-Prüfung und die Logs: dafür der kurze **Stabilitätsdurchgang S** unten. Bis dahin
+> ist der Link-Modus der empfohlene Alltagsweg.
 
 **Den fehlgeschlagenen Phase-4-Host nicht erneut testen.** Dieser Plan gilt nur für
 `host/OnionHEN-AKENO-direct-fixed.elf`. Die Schritte bauen aufeinander auf: **erst wenn ein Schritt
@@ -147,6 +148,36 @@ Toolbox → Plugins → AKENO NETWORK → „Läuft“ ausschalten. Dann L2 + R3
 - Link-Modus: die normale Toolbox öffnet sich, ohne AKENO-Eintrag oben.
 
 Kein leerer Bildschirm, keine Sperre. Danach das Plugin wieder einschalten („Läuft“).
+
+## S – Kurzer Stabilitätsdurchgang für den Direkt-Modus (ca. 15 Minuten)
+
+Erst danach gilt der Direkt-Modus als „auf deiner Konsole bestätigt“ (noch nicht „stabil“).
+Voraussetzung: `toolbox_target_mode=root`, Host `560a2202…`, Konsole frisch gestartet, altes Log per
+FTP gesichert und umbenannt (frisches Log). Beim ersten Problem: Abbruch wie oben.
+
+1. **Startbildschirm, 5 Durchgänge:** L2 + R3 → AKENO direkt → Freunde → ○ → ○. Nach dem letzten
+   Durchgang PS-Taste (Kontrollzentrum öffnen/schließen) und Sony-Einstellungen öffnen/schließen.
+2. **Im Spiel, 3 Durchgänge** (vorher speichern): L2 + R3 → AKENO direkt → Nachrichten → ○ → ○ →
+   **dasselbe Spiel**. Jedes Mal sofort prüfen: L2, rechter Stick, R3 (drücken), ✕ ○ △ □,
+   PS-Taste (Kontrollzentrum auf und wieder zu).
+3. **Danach 5 Minuten normal weiterspielen.**
+4. **Logs sichern** (H10) und nachsehen, am PC z. B. mit
+   `grep -E "AKENO_DIRECT|plugin-bridge|Toolbox online|Activating toolbox|rest:" OnionHEN.log`
+   (Windows PowerShell:
+   `Select-String -Path OnionHEN.log -Pattern 'AKENO_DIRECT|plugin-bridge|Toolbox online|Activating toolbox|rest:'`).
+
+**Bestanden, wenn** alles reagiert hat und im Log
+
+- je Durchgang `AKENO_DIRECT: … root page served …` **und** `AKENO_DIRECT: root activated …` steht,
+- danach `AKENO_DIRECT: session ended …` und `AKENO_DIRECT: ShellUI reads the pad: … button changes …`
+  mit Werten über 0, solange du den Controller bewegst,
+- **keine** Abbruch-Zeile steht (kein `[plugin-bridge] ShellUI disconnected`, kein zweites
+  `Toolbox online`/`Activating toolbox`, kein `AKENO_DIRECT: SceShellUI pid=… starts while …`, kein
+  `root mode off`).
+
+`rest: toolbox recovery exhausted` direkt nach einem Spielstart bitte **notieren**, aber es ist kein
+Abbruchgrund, solange alles reagiert: Die Zeile kam schon in deinen Logs vor Phase 4 vor und stammt
+aus unverändertem onionHEN-Code.
 
 ## H10 – Logs sammeln und melden
 

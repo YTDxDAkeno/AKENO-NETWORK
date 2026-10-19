@@ -6,8 +6,10 @@
 > selected (no Settings-root takeover); the direct root is opt-in, corrected and instrumented.
 > **Hardware (owner, FW 12.20, 2026-10-19, host `560a2202…`): H1–H5 passed** – the new host with
 > upstream behaviour, and link mode on the home screen and in a running game (*Atelier Yumia*),
-> returning to the same game with the controller responsive. **Root mode (H6–H8) not run.** Not
-> labelled stable: no prolonged test yet. The original onionHEN v0.9.0 + `toolbox=l2_r3` path (F0,
+> returning to the same game with the controller responsive. **Root mode: reported to open AKENO
+> directly, including in a running game** (owner, no logs yet); repeated cycles, sustained play,
+> controller checks and logs are pending (stability pass S in TEST-DE.md). Not labelled stable: no
+> prolonged test yet. The original onionHEN v0.9.0 + `toolbox=l2_r3` path (F0,
 > passed 2026-10-19) stays the fallback. German guides:
 > [shellui/phase4-fix/INSTALL-DE.md](shellui/phase4-fix/INSTALL-DE.md),
 > [TEST-DE.md](shellui/phase4-fix/TEST-DE.md), [ROLLBACK-DE.md](shellui/phase4-fix/ROLLBACK-DE.md).
@@ -69,7 +71,10 @@ The relevant boot:
 root page as `id_debug_settings`; a root without that list leaves the DebugSettingsOld screen with no
 usable root page/focus (the 13 s fit a UI-thread hang ended by a watchdog better than an immediate
 crash), SceShellUI is replaced while a game is in the foreground, and input focus does not return to
-the game. Sony's Legacy.dll is not available here to confirm it.
+the game. Sony's Legacy.dll is not available here to confirm it. *Update 2026-10-19:* the 4.1 root
+mode opens AKENO directly on the owner's console, including in a running game (no logs yet). That is
+consistent with this hypothesis but does not isolate the root list id: 4.1's root mode also changed
+the root page's ownership and added the session guards.
 
 **Not causal / open:**
 
