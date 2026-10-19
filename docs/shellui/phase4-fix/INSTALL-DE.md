@@ -1,7 +1,10 @@
 # AKENO NETWORK Phase 4.1 – korrigierter Schnellzugang aus dem Spiel (Installation)
 
-> **EXPERIMENTELL – auf keiner PS5 getestet, nicht stabil.** Gebaut und auf dem PC getestet, mehr
-> nicht. Nichts wird automatisch auf die Konsole übertragen. Teste nur in der Reihenfolge von
+> **EXPERIMENTELL, nicht stabil.** Hardware-Stand 19.10.2026 (deine PS5, FW 12.20, Host
+> `560a2202…` aus dem CI-Paket): **H1–H5 bestanden** – der neue Host mit Original-Verhalten und der
+> **Link-Modus** (L2 + R3 → Toolbox mit AKENO oben → ✕), auch im laufenden Spiel (*Atelier Yumia*)
+> mit Rückkehr ins Spiel. Der **Direkt-Modus (H6–H8) ist nicht getestet.** Ein längerer
+> Alltagstest steht aus. Nichts wird automatisch auf die Konsole übertragen. Teste nur in der Reihenfolge von
 > [TEST-DE.md](TEST-DE.md) und brich beim ersten Problem ab. Dein funktionierender Weg (Original-
 > onionHEN v0.9.0 + `toolbox=l2_r3` → Toolbox → Plugins → AKENO NETWORK) bleibt jederzeit der
 > Rückweg: [ROLLBACK-DE.md](ROLLBACK-DE.md).

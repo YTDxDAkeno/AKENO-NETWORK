@@ -1,5 +1,10 @@
 # AKENO NETWORK Phase 4.1 – Hardware-Testplan (FW 12.20)
 
+> **Stand 19.10.2026 (FW 12.20, Host `560a2202…`):** H1–H5 **bestanden**, einschließlich H5b im
+> Spiel (*Atelier Yumia*, Rückkehr ins Spiel). H6–H10 noch offen. Weiter nur mit H6 auf dem
+> **Startbildschirm**, falls du den Direkt-Modus ausprobieren willst; der Link-Modus allein ist ein
+> vollständiges Ergebnis.
+
 **Den fehlgeschlagenen Phase-4-Host nicht erneut testen.** Dieser Plan gilt nur für
 `host/OnionHEN-AKENO-direct-fixed.elf`. Die Schritte bauen aufeinander auf: **erst wenn ein Schritt
 bestanden ist, kommt der nächste.**

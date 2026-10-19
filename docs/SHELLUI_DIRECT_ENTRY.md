@@ -3,9 +3,12 @@
 > **Phase 4 (below) FAILED on the owner's PS5 (FW 12.20, 2026-10-19); do not use
 > `OnionHEN-AKENO-direct.elf` again.** Phase 4.1 ([next section](#phase-41)) replaces it with
 > `OnionHEN-AKENO-direct-fixed.elf`: by default the shortcut opens the Toolbox with AKENO first and
-> selected (no Settings-root takeover); the direct root is opt-in, corrected and instrumented. **Not
-> run on a PS5.** Confirmed stable path meanwhile: original onionHEN v0.9.0 + unchanged plugin with
-> `toolbox=l2_r3` → Toolbox → Plugins → AKENO NETWORK (F0, passed 2026-10-19). German guides:
+> selected (no Settings-root takeover); the direct root is opt-in, corrected and instrumented.
+> **Hardware (owner, FW 12.20, 2026-10-19, host `560a2202…`): H1–H5 passed** – the new host with
+> upstream behaviour, and link mode on the home screen and in a running game (*Atelier Yumia*),
+> returning to the same game with the controller responsive. **Root mode (H6–H8) not run.** Not
+> labelled stable: no prolonged test yet. The original onionHEN v0.9.0 + `toolbox=l2_r3` path (F0,
+> passed 2026-10-19) stays the fallback. German guides:
 > [shellui/phase4-fix/INSTALL-DE.md](shellui/phase4-fix/INSTALL-DE.md),
 > [TEST-DE.md](shellui/phase4-fix/TEST-DE.md), [ROLLBACK-DE.md](shellui/phase4-fix/ROLLBACK-DE.md).
 

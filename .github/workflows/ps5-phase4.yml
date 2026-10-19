@@ -200,7 +200,15 @@ jobs:
             echo "                                      sha256 $(sha "$out/plugin/AKEN00001.elf")"
             echo "daemon                                unchanged, not included: keep the native-IPC daemon you run"
             echo
-            echo "Hardware status: not run on a PS5. Follow docs/TEST-DE.md (H1-H10) in order; stop at the first problem."
+            tested=560a2202ae97a832cf5635d07fce41062999e972ac7683e9adad475eb9828858 # host the owner ran H1-H5 with
+            if [[ "$(sha "$out/host/OnionHEN-AKENO-direct-fixed.elf")" == "$tested" ]]; then
+              echo "Hardware status: THIS host ran on the owner's PS5 (FW 12.20, 2026-10-19): H1-H5 passed (link mode,"
+              echo "                 incl. in a running game and back). Root mode (H6-H8) not run. NOT stable: no prolonged test."
+            else
+              echo "Hardware status: this host is NOT the binary tested on the owner's PS5 (sha256 ${tested:0:8}...);"
+              echo "                 treat it as untested."
+            fi
+            echo "                 Follow docs/TEST-DE.md in order; stop at the first problem."
           } > "$out/BUILDINFO.txt"
           (cd "$out" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
           (cd "$out" && sha256sum -c SHA256SUMS > /dev/null)
