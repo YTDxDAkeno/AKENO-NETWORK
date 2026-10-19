@@ -156,11 +156,23 @@ function primaryIpv4() {
   throw new Error('no non-loopback IPv4 address found; pass --node-ip');
 }
 
-function portFree(port, host = '0.0.0.0') {
+/**
+ * Whether something already accepts connections on a local TCP port. A connection attempt, not a
+ * bind: an unprivileged user (CI runners) may not bind ports below 1024 even when they are free.
+ */
+function portInUse(port) {
   return new Promise((done) => {
-    const server = net.createServer();
-    server.once('error', () => done(false));
-    server.listen(port, host, () => server.close(() => done(true)));
+    const socket = net.connect({ port, host: '127.0.0.1' });
+    socket.setTimeout(2000);
+    socket.once('connect', () => {
+      socket.destroy();
+      done(true);
+    });
+    socket.once('timeout', () => {
+      socket.destroy();
+      done(false);
+    });
+    socket.once('error', () => done(false));
   });
 }
 
@@ -172,7 +184,7 @@ if (resolved?.address !== '127.0.0.1') {
   process.exit(2);
 }
 for (const port of [80, 443, 7881]) {
-  if (!(await portFree(port))) {
+  if (await portInUse(port)) {
     console.error(`Port ${port} is in use. Run the staging drill on a machine without another AKENO stack (never on the production VPS).`);
     process.exit(2);
   }
