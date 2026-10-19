@@ -633,7 +633,7 @@ await step('voice-upgrade.sh apply: gateway, VOICE_GATEWAY_URL, app and Caddy re
   return run.stdout.trim().split('\n').filter((l) => /^ {2}/.test(l)).slice(-8);
 }, { critical: true });
 
-await step('diagnostics after the upgrade: the route exists (401 without a token), the gateway answers, still no secrets', async () => {
+await step('diagnostics after the upgrade: the route exists (401 for an invalid device token), the gateway answers, still no secrets', async () => {
   const out = diagnostics();
   assert.match(out, /console voice pass route: in the source/);
   assert.match(out, /"code":"UNAUTHENTICATED"/);
