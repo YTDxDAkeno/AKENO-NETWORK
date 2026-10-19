@@ -1,9 +1,11 @@
 name: PS5 party voice alpha (experimental)
 
-# AKENO Party Voice (docs/PS5_PARTY_VOICE.md): the background voice service akeno-party-voice.elf, the
-# AKEN00001 plugin 1.20 with its voice page, and the package AKENO-NETWORK-PS5-VOICE-ALPHA with German
-# guides. The Phase 4.1 host and the daemon are not built or changed here. Nothing is sent to a console,
-# and a PC run is never evidence that a PS5 can capture or play audio from the background.
+# AKENO Voice Alpha 0.2.0 (docs/PS5_VOICE_AUDIO_0.2.md): the background voice service akeno-party-voice.elf
+# 0.2.0, plugin AKEN00001 1.20 (unchanged, checked byte for byte), the rollback files (voice service 0.1.0 and
+# plugin 1.10, both byte-identical to the files tested on the owner's PS5) and the package
+# AKENO-NETWORK-PS5-VOICE-ALPHA-0.2.0 with German guides. The Phase 4.1 host and the daemon are not built or
+# changed here. Nothing is sent to a console, and a PC run is never evidence that a PS5 can capture or play
+# audio from the background.
 
 on:
   push:
@@ -25,7 +27,12 @@ env:
   PLUGIN_110_COMMIT: f8013704a7812902a46ed481b1e5db59d76f57b8
   PLUGIN_110_SHA256: 201d2c883e02747e2ec096ba1742bc3bf47eec3a098e2b8a498f6d67fdea4aa9
   PHASE41_HOST_SHA256: 560a2202ae97a832cf5635d07fce41062999e972ac7683e9adad475eb9828858
-  PACKAGE: AKENO-NETWORK-PS5-VOICE-ALPHA
+  # Voice Alpha 0.1.0 as tested on the owner's PS5 (FW 12.20, 2026-10-19, build ce06ba04c048-ps5) and the plugin 1.20
+  # it ran with: rebuilt from PR #18's head; 0.1.0 is the rollback, 1.20 must not change.
+  VOICE_010_COMMIT: ce06ba04c048a02cb4d2efeb707d6bc4ba2618fd
+  VOICE_010_SHA256: 4c19e42840d7fdb879b49b9ccf231a5209ec49c6b386abf4d0d259380b2fac8c
+  PLUGIN_120_SHA256: f3fdf5103f57c9f01d8011a3b0808d220bc42665d709eaf643018dcf0e5815ec
+  PACKAGE: AKENO-NETWORK-PS5-VOICE-ALPHA-0.2.0
 
 jobs:
   host:
@@ -160,7 +167,7 @@ jobs:
           if-no-files-found: ignore
 
   ps5:
-    name: Build the PS5 voice alpha package (voice service, plugin 1.20, plugin 1.10 rollback)
+    name: Build the PS5 Voice Alpha 0.2.0 package (voice service 0.2.0; plugin 1.20 unchanged; 0.1.0 and 1.10 rollback)
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
@@ -197,7 +204,7 @@ jobs:
           cmp "$RUNNER_TEMP/pv-repro/akeno-party-voice.elf" clients/ps5-partyvoice/build-ps5/akeno-party-voice.elf
           clients/ps5-partyvoice/console/check-partyvoice.sh clients/ps5-partyvoice/build-ps5 | tee "$RUNNER_TEMP/gate-voice.txt"
 
-      - name: Plugin AKEN00001 1.20 (voice alpha), built twice (byte-identical), descriptor and import gates
+      - name: Plugin AKEN00001 1.20, built twice (byte-identical), gates, and unchanged from the file on the owner's PS5
         shell: bash
         run: |
           export PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk"
@@ -205,6 +212,19 @@ jobs:
           make -C clients/ps5-ingame/console -j"$(nproc)"
           cmp "$RUNNER_TEMP/plugin-repro/AKEN00001.elf" clients/ps5-ingame/build-ps5/AKEN00001.elf
           clients/ps5-ingame/console/check-plugin.sh clients/ps5-ingame/build-ps5 | tee "$RUNNER_TEMP/gate-plugin.txt"
+          echo "$PLUGIN_120_SHA256  clients/ps5-ingame/build-ps5/AKEN00001.elf" | sha256sum -c -
+
+      - name: Voice service 0.1.0 rebuilt from its commit (rollback; must equal the hardware-tested file)
+        shell: bash
+        run: |
+          export PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk"
+          tree="$RUNNER_TEMP/voice-0.1.0"
+          git worktree add --detach "$tree" "$VOICE_010_COMMIT"
+          mkdir -p "$tree/clients/ps5-native/third_party" "$tree/clients/ps5/third_party"
+          cp -r clients/ps5-native/third_party/. "$tree/clients/ps5-native/third_party/"
+          cp -r clients/ps5/third_party/. "$tree/clients/ps5/third_party/"
+          make -C "$tree/clients/ps5-partyvoice/console" -j"$(nproc)" GIT_COMMIT="${VOICE_010_COMMIT:0:12}"
+          echo "$VOICE_010_SHA256  $tree/clients/ps5-partyvoice/build-ps5/akeno-party-voice.elf" | sha256sum -c -
 
       - name: Plugin AKEN00001 1.10 rebuilt from its commit (rollback; must equal the hardware-tested file)
         shell: bash
@@ -223,23 +243,29 @@ jobs:
         run: |
           set -euo pipefail
           out="$RUNNER_TEMP/$PACKAGE"
-          mkdir -p "$out/host" "$out/voice/launcher" "$out/plugin/rollback" "$out/daemon" "$out/docs/gates" "$out/licenses" "$RUNNER_TEMP/debug"
+          mkdir -p "$out/host" "$out/voice/launcher" "$out/plugin" "$out/rollback" "$out/daemon" "$out/docs/gates" "$out/licenses" "$RUNNER_TEMP/debug"
           cp clients/ps5-partyvoice/build-ps5/akeno-party-voice.elf "$out/voice/"
           cp clients/ps5-partyvoice/package/homebrew.js "$out/voice/launcher/homebrew.js"
           cp clients/ps5-partyvoice/build-ps5/akeno-party-voice.debug.elf "$RUNNER_TEMP/debug/"
-          cp clients/ps5-ingame/build-ps5/AKEN00001.elf "$out/plugin/AKEN00001-voice-alpha.elf"
-          cp clients/ps5-ingame/build-ps5/AKEN00001.debug.elf "$RUNNER_TEMP/debug/AKEN00001-voice-alpha.debug.elf"
-          cp "$RUNNER_TEMP/plugin-1.10/clients/ps5-ingame/build-ps5/AKEN00001.elf" "$out/plugin/rollback/AKEN00001-1.10.elf"
-          cp docs/shellui/voice-alpha/README-USE-EXISTING-PHASE4.1-HOST.txt "$out/host/"
-          cp docs/shellui/voice-alpha/README-KEEP-YOUR-DAEMON.txt "$out/daemon/"
-          cp docs/shellui/voice-alpha/INSTALL-DE.md docs/shellui/voice-alpha/VOICE-TEST-DE.md docs/shellui/voice-alpha/DIAGNOSTICS-DE.md \
-             docs/shellui/voice-alpha/SERVER-PREREQUISITES-DE.md docs/shellui/voice-alpha/ROLLBACK-DE.md "$out/docs/"
-          cp docs/PS5_PARTY_VOICE.md "$out/docs/"
+          cp clients/ps5-ingame/build-ps5/AKEN00001.elf "$out/plugin/AKEN00001-1.20.elf"
+          cp clients/ps5-ingame/build-ps5/AKEN00001.debug.elf "$RUNNER_TEMP/debug/AKEN00001-1.20.debug.elf"
+          cp "$RUNNER_TEMP/voice-0.1.0/clients/ps5-partyvoice/build-ps5/akeno-party-voice.elf" "$out/rollback/akeno-party-voice-0.1.0.elf"
+          cp "$RUNNER_TEMP/plugin-1.10/clients/ps5-ingame/build-ps5/AKEN00001.elf" "$out/rollback/AKEN00001-1.10.elf"
+          cp docs/shellui/voice-alpha-0.2/README-USE-EXISTING-PHASE4.1-HOST.txt "$out/host/"
+          cp docs/shellui/voice-alpha-0.2/README-KEEP-YOUR-DAEMON.txt "$out/daemon/"
+          cp docs/shellui/voice-alpha-0.2/README-PLUGIN-UNCHANGED.txt "$out/plugin/"
+          cp docs/shellui/voice-alpha-0.2/INSTALL-DE.md docs/shellui/voice-alpha-0.2/HARDWARE-TEST-DE.md docs/shellui/voice-alpha-0.2/LOGS-DE.md \
+             docs/shellui/voice-alpha-0.2/ROLLBACK-DE.md "$out/docs/"
+          cp docs/PS5_VOICE_AUDIO_0.2.md docs/PS5_PARTY_VOICE.md docs/PS5_PARTY_VOICE_0.1_HARDWARE_RESULTS_FW12.20.md "$out/docs/"
           cp "$RUNNER_TEMP/gate-voice.txt" "$out/docs/gates/GATE-voice-service.txt"
           cp "$RUNNER_TEMP/gate-plugin.txt" "$out/docs/gates/GATE-plugin.txt"
-          # flat docs folder: links into the repository become plain file names or repository URLs
-          sed -i -e 's#](\.\./\.\./\(PS5_PARTY_VOICE\.md\)#](\1#g' -e 's#](\.\./\.\./\([A-Za-z_./-]*\))#]('"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$GITHUB_SHA"'/docs/\1)#g' "$out"/docs/*.md
-          sed -i -e 's#](shellui/voice-alpha/#](#g' -e 's#](\([A-Z_0-9.]*\.md\))#](\1)#g' "$out"/docs/PS5_PARTY_VOICE.md
+          # flat docs folder: links between the copied files stay plain file names, other links become repository URLs
+          copied='PS5_VOICE_AUDIO_0\.2\.md|PS5_PARTY_VOICE\.md|PS5_PARTY_VOICE_0\.1_HARDWARE_RESULTS_FW12\.20\.md|INSTALL-DE\.md|HARDWARE-TEST-DE\.md|LOGS-DE\.md|ROLLBACK-DE\.md'
+          sed -i -E -e 's#\]\(shellui/voice-alpha-0\.2/#](#g' "$out"/docs/*.md
+          sed -i -E -e "s#\]\((\.\./)*($copied)\)#](\2)#g" "$out"/docs/*.md
+          sed -i -E -e 's#\]\(((\.\./)*)([A-Za-z_0-9./-]+\.md)\)#](LINK:\3)#g' "$out"/docs/*.md
+          sed -i -E -e "s#\]\(LINK:($copied)\)#](\1)#g" -e 's#\]\(LINK:([^)]*)\)#]('"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$GITHUB_SHA"'/docs/\1)#g' "$out"/docs/*.md
+          sed -i -E -e 's#\]\(\.\./([^)]+)\)#]('"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$GITHUB_SHA"'/\1)#g' "$out"/docs/*.md
           # licences
           cp LICENSE "$out/licenses/AKENO-MIT.txt"
           cp clients/ps5-ingame/third_party/onion-sdk/LICENSE "$out/licenses/GPL-3.0.txt"
@@ -249,25 +275,30 @@ jobs:
           {
             echo "Source notices"
             echo "  AKENO NETWORK sources: MIT (AKENO-MIT.txt), $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/tree/$GITHUB_SHA"
-            echo "  plugin/*.elf link the OnionHEN plugin SDK runtime (GPLv3, GPL-3.0.txt):"
+            echo "  plugin/*.elf, rollback/AKEN00001-1.10.elf link the OnionHEN plugin SDK runtime (GPLv3, GPL-3.0.txt):"
             echo "    https://github.com/OnionBuddies/onionHEN-plugin-sdk commit $(git -C clients/ps5-ingame/third_party/onion-sdk rev-parse HEAD)"
             echo "    corresponding source: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/tree/$GITHUB_SHA/clients/ps5-ingame"
-            echo "  voice/akeno-party-voice.elf: libopus 1.5.2 (libopus-BSD-3-Clause.txt), mbedTLS 3.6.7 (mbedTLS-Apache-2.0.txt),"
+            echo "  voice/*.elf, rollback/akeno-party-voice-0.1.0.elf: libopus 1.5.2 (libopus-BSD-3-Clause.txt), mbedTLS 3.6.7 (mbedTLS-Apache-2.0.txt),"
             echo "    stb_image (public domain / MIT, docs/LICENSES.md); corresponding source: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/tree/$GITHUB_SHA/clients/ps5-partyvoice"
             echo "  every ELF links the PS5 payload SDK runtime: https://github.com/ps5-payload-dev/sdk commit $PS5_SDK_COMMIT"
           } > "$out/licenses/SOURCES.txt"
           grep -q 'Version 3, 29 June 2007' "$out/licenses/GPL-3.0.txt"
           grep -q 'Apache License' "$out/licenses/mbedTLS-Apache-2.0.txt"
           grep -q 'Xiph.Org' "$out/licenses/libopus-BSD-3-Clause.txt"
-          for elf in "$out"/voice/*.elf "$out"/plugin/*.elf "$out"/plugin/rollback/*.elf; do
+          for elf in "$out"/voice/*.elf "$out"/plugin/*.elf "$out"/rollback/*.elf; do
             readelf -h "$elf" | grep -q 'ELF64'
             readelf -h "$elf" | grep -q 'Advanced Micro Devices X86-64'
           done
-          echo "$PLUGIN_110_SHA256  $out/plugin/rollback/AKEN00001-1.10.elf" | sha256sum -c -
+          echo "$PLUGIN_110_SHA256  $out/rollback/AKEN00001-1.10.elf" | sha256sum -c -
+          echo "$PLUGIN_120_SHA256  $out/plugin/AKEN00001-1.20.elf" | sha256sum -c -
+          echo "$VOICE_010_SHA256  $out/rollback/akeno-party-voice-0.1.0.elf" | sha256sum -c -
+          ! cmp -s "$out/voice/akeno-party-voice.elf" "$out/rollback/akeno-party-voice-0.1.0.elf"
+          grep -q '0.2.0-alpha' "$out/voice/akeno-party-voice.elf"
+          if grep -rn 'LINK:' "$out"/docs/*.md; then echo "unresolved doc links" >&2; exit 1; fi
           nm="$RUNNER_TEMP/ps5-payload-sdk/bin/prospero-nm"
           sha() { sha256sum "$1" | cut -d' ' -f1; }
           {
-            echo "AKENO NETWORK - PS5 party voice ALPHA (EXPERIMENTAL; NOT run on a PS5; nothing here is evidence of PS5 audio)"
+            echo "AKENO NETWORK - PS5 Voice Alpha 0.2.0 (EXPERIMENTAL; 0.2.0 has NOT run on a PS5; nothing here is evidence of PS5 audio)"
             echo "Built:           $(date -u +%Y-%m-%dT%H:%M:%SZ) by $GITHUB_WORKFLOW run $GITHUB_RUN_ID"
             echo "AKENO commit:    $GITHUB_SHA ($GITHUB_REF_NAME)"
             echo "Source:          $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/tree/$GITHUB_SHA"
@@ -277,25 +308,31 @@ jobs:
             echo "mbedTLS:         3.6.7 ($(sha clients/ps5/third_party/mbedtls-3.6.7.tar.bz2)); CA bundle certifi 2026.07.22 ($(sha clients/ps5/third_party/cacert.pem))"
             echo "OnionHEN SDK:    $(git -C clients/ps5-ingame/third_party/onion-sdk rev-parse HEAD)"
             echo
-            echo "voice/akeno-party-voice.elf          NEW background voice service $(grep -o 'PV_VERSION "[^"]*"' clients/ps5-partyvoice/src/pv.h | cut -d'"' -f2), build $(git rev-parse --short=12 HEAD)-ps5"
-            echo "                                     sha256 $(sha "$out/voice/akeno-party-voice.elf"); built twice, byte-identical"
-            echo "voice/launcher/homebrew.js           optional websrv launcher entry (background, daemon: true)"
-            echo "plugin/AKEN00001-voice-alpha.elf     NEW plugin AKEN00001 1.20 (voice page); install as /data/OnionHEN/plugins/AKEN00001.elf"
-            echo "                                     sha256 $(sha "$out/plugin/AKEN00001-voice-alpha.elf"); built twice, byte-identical"
-            echo "plugin/rollback/AKEN00001-1.10.elf   the hardware-tested plugin 1.10, rebuilt from $PLUGIN_110_COMMIT"
-            echo "                                     sha256 $(sha "$out/plugin/rollback/AKEN00001-1.10.elf") (= the file on the owner's PS5)"
-            echo "host/                                NOT included: keep the Phase 4.1 host OnionHEN-AKENO-direct-fixed.elf"
-            echo "                                     (sha256 $PHASE41_HOST_SHA256), unchanged"
-            echo "daemon/                              NOT included: keep your native-IPC daemon (interface 3, e.g. 196ca13c71d1-ps5-native-ipc)"
+            echo "voice/akeno-party-voice.elf             NEW background voice service $(grep -o 'PV_VERSION "[^"]*"' clients/ps5-partyvoice/src/pv.h | cut -d'"' -f2), build $(git rev-parse --short=12 HEAD)-ps5"
+            echo "                                        sha256 $(sha "$out/voice/akeno-party-voice.elf"); built twice, byte-identical"
+            echo "                                        REPLACES your akeno-party-voice.elf 0.1.0 - the only file to change"
+            echo "voice/launcher/homebrew.js              optional websrv launcher entry (background, daemon: true), unchanged"
+            echo "plugin/AKEN00001-1.20.elf               UNCHANGED plugin 1.20 = the file on your PS5 (sha256 $PLUGIN_120_SHA256); spare only"
+            echo "rollback/akeno-party-voice-0.1.0.elf    the hardware-tested voice service 0.1.0, build ${VOICE_010_COMMIT:0:12}-ps5, rebuilt from"
+            echo "                                        $VOICE_010_COMMIT: sha256 $(sha "$out/rollback/akeno-party-voice-0.1.0.elf") (= your tested file)"
+            echo "rollback/AKEN00001-1.10.elf             the hardware-tested plugin 1.10, rebuilt from $PLUGIN_110_COMMIT"
+            echo "                                        sha256 $(sha "$out/rollback/AKEN00001-1.10.elf")"
+            echo "host/                                   NOT included: keep OnionHEN-AKENO-direct-fixed.elf (sha256 $PHASE41_HOST_SHA256)"
+            echo "daemon/                                 NOT included: keep your native-IPC daemon (interface 3)"
             echo
-            echo "Hardware status: NOTHING in this package has run on a PS5. Whether a background payload may capture the"
-            echo "  microphone and be heard while a game runs is unknown on FW 12.20 and is what docs/VOICE-TEST-DE.md measures."
-            echo "  PC evidence only: unit tests (ASan/UBSan, TSan), the end-to-end run with the real server, LiveKit, the voice"
-            echo "  gateway, the native-IPC daemon and a PC participant (workflow run above)."
-            echo "Server requirement: the AKENO server must offer POST /api/v1/parties/:id/voice/device-token and the voice gateway"
-            echo "  (wss://<domain>/voice-gateway). On 2026-10-18 production answered 404: see docs/SERVER-PREREQUISITES-DE.md."
+            echo "Hardware status:"
+            echo "  0.1.0 ran on FW 12.20 (2026-10-19): network voice worked (gateway, LiveKit, a friend, 34 s in a game); incoming"
+            echo "  audio was decoded and accepted by sceAudioOut, but NOTHING WAS HEARD; the foreground user's ports gave 0x80260011;"
+            echo "  the microphone gave 0x809B0081. 0.2.0 HAS NOT RUN ON A PS5. Analysis: docs/PS5_VOICE_AUDIO_0.2.md (a background"
+            echo "  payload is not given audible output or the microphone on 12.20; AKENO Native, the foreground app, is)."
+            echo "  0.2.0: the port clock is measured correctly (0.1.0's 'NOT paced' was its own sleeping), the test sound runs"
+            echo "  through the speech pipeline and is checked in the submitted buffer, refused calls are not repeated, the"
+            echo "  process context is recorded, routes 3-4 are retired. Nothing in the report ever claims audible sound."
+            echo "  PC evidence only: unit tests (ASan/UBSan, TSan, clang-tidy), the end-to-end run with the real server, LiveKit,"
+            echo "  the voice gateway, the native-IPC daemon and a PC participant (workflow run above)."
+            echo "Hardware test: docs/HARDWARE-TEST-DE.md (A foreground reference, B-E home screen, F in a game, G L2+R3)."
             echo
-            echo "System imports (voice service):"
+            echo "System imports (voice service 0.2.0; vs 0.1.0 only sceKernelGetAppInfo is new: weak, read only, as AKENO Native):"
             "$nm" -D --undefined-only "$out/voice/akeno-party-voice.elf" | awk '{print $2}' | grep -E '^(sce|kernel_)' | sort | sed 's/^/  /'
             echo "Shared libraries (voice service):"
             readelf -d "$out/voice/akeno-party-voice.elf" | grep NEEDED | sed 's/^.*\[/  /; s/\]$//'
