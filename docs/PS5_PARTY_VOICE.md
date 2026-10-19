@@ -1,5 +1,14 @@
 # AKENO Party Voice: party voice on the PS5 while a game runs (Phase 4.3, EXPERIMENTAL)
 
+> **Update 2026-10-19 (Voice Alpha 0.1.0 on FW 12.20, then 0.2.0):** 0.1.0 ran on the owner's PS5:
+> network voice worked (gateway, LiveKit, a friend, 34 s in a game), incoming audio was decoded, the
+> output port took it, but **nothing was heard**, and the microphone was refused with `0x809B0081`
+> ([results](PS5_PARTY_VOICE_0.1_HARDWARE_RESULTS_FW12.20.md)). 0.2.0 fixes the timing measurement,
+> runs the test sound through the speech pipeline, stops repeating refused calls and records the
+> process context; the evidence says a background payload is not given audible output or the
+> microphone on 12.20 ([PS5_VOICE_AUDIO_0.2.md](PS5_VOICE_AUDIO_0.2.md)). Routes 3 and 4 are retired.
+> The sections below describe 0.1.0's design, which 0.2.0 keeps.
+
 Status (2026-10-19): **built and tested on PCs end to end; not run on a PS5.** The voice service,
 the plugin's voice page and the package exist. Whether the PS5 lets a background payload capture
 the microphone and be heard while a game runs is unknown and is exactly what the owner's hardware
