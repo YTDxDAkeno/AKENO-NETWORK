@@ -13,10 +13,14 @@
  * aligned user address that differs per boot, so the outcome is reported as a distribution over
  * bases. Nothing here runs on, or talks to, a console.
  *
- *   double_detour_check [--expect] <label>=<hex offset> ...
+ *   double_detour_check [--expect | --expect-chain] <label>=<hex offset> ...
  *
  * With --expect, exits non-zero unless the recorded facts still hold: the pristine prologue
  * relocates, the original v0.9.0 offset never fails, the PR #14 offset fails at +6 for some bases.
+ *
+ * With --expect-chain (built against the relocator of tools/onionhen/akeno-direct-entry.patch),
+ * exits non-zero unless every offset is accepted for every base AND the trampoline starts with the
+ * old patch unchanged, i.e. a repeated injection chains to the old hook whatever the layout.
  */
 #include <onion/x64_relocator.h>
 
@@ -43,20 +47,23 @@ struct Outcome {
     bool ok;
     size_t offset;
     std::string text;
+    bool chains = false; /* the trampoline begins with the old 14-byte patch, unchanged */
 };
 
 Outcome relocate(const uint8_t *window) {
     uint8_t out[ONION_X64_TRAMPOLINE_CAPACITY];
     onion_x64_relocate_result r{};
     const bool ok = onion_x64_relocate(window, kTarget, out, kTarget - 0x100000, kHookLength, sizeof(out), &r);
-    if (ok) return {true, 0, "accepted (silently chains to the old hook)"};
+    if (ok && memcmp(out, window, kHookLength) == 0 && window[0] == 0xff)
+        return {true, 0, "accepted; trampoline jumps to the old hook", true};
+    if (ok) return {true, 0, "accepted, but the trampoline does not contain the old hook address"};
     char text[128];
     snprintf(text, sizeof(text), "relocation failed at +%zu: %s", r.error_offset, onion_x64_relocate_error_string(r.error));
     return {false, r.error_offset, text};
 }
 
 struct Distribution {
-    int total = 0, failed = 0, failed_at_6 = 0;
+    int total = 0, failed = 0, failed_at_6 = 0, chained = 0;
 };
 
 Distribution scan(const char *label, uint64_t hook_offset) {
@@ -75,6 +82,7 @@ Distribution scan(const char *label, uint64_t hook_offset) {
         d.total++;
         if (!o.ok) d.failed++;
         if (!o.ok && o.offset == 6) d.failed_at_6++;
+        if (o.chains) d.chained++;
     }
     printf("second injection over %s (sceRegMgrGetInt_hook at +%#llx), %d load bases:\n", label,
            (unsigned long long)hook_offset, d.total);
@@ -85,10 +93,13 @@ Distribution scan(const char *label, uint64_t hook_offset) {
 } // namespace
 
 int main(int argc, char **argv) {
-    bool expect = false;
+    bool expect = false, expect_chain = false;
     int first = 1;
     if (argc > 1 && strcmp(argv[1], "--expect") == 0) {
         expect = true;
+        first = 2;
+    } else if (argc > 1 && strcmp(argv[1], "--expect-chain") == 0) {
+        expect_chain = true;
         first = 2;
     }
     uint8_t window[64];
@@ -100,13 +111,21 @@ int main(int argc, char **argv) {
     for (int i = first; i < argc; i++) {
         const char *eq = strchr(argv[i], '=');
         if (!eq) {
-            fprintf(stderr, "usage: %s [--expect] <label>=<hex offset> ...\n", argv[0]);
+            fprintf(stderr, "usage: %s [--expect | --expect-chain] <label>=<hex offset> ...\n", argv[0]);
             return 2;
         }
         const std::string label(argv[i], (size_t)(eq - argv[i]));
         const Distribution d = scan(label.c_str(), strtoull(eq + 1, nullptr, 16));
+        if (expect_chain) {
+            facts = facts && d.failed == 0 && d.chained == d.total;
+            continue;
+        }
         if (label == "original-v0.9.0") facts = facts && d.failed == 0;
         if (label == "pr14-custom-host") facts = facts && d.failed_at_6 > 0;
+    }
+    if (expect_chain && !facts) {
+        fprintf(stderr, "double_detour_check: a repeated injection does not chain for every layout\n");
+        return 1;
     }
     if (expect && !facts) {
         fprintf(stderr, "double_detour_check: the recorded diagnosis no longer holds; revisit docs/SHELLUI_HOST_DIAGNOSIS.md\n");
