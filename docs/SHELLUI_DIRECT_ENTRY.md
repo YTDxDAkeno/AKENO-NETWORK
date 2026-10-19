@@ -7,9 +7,12 @@
 > kept rendering. Leading suspect: making a **dynamic plugin page the Settings root** and the
 > back/focus handoff from it — the one behaviour with no proven onionHEN precedent (onionHEN's own
 > Cheats shortcut replaces the root with a *generated Toolbox* page, not a dynamic plugin page). Not
-> conclusively a crash; needs on-hardware isolation. **Safe path meanwhile: the original onionHEN
-> v0.9.0 + the unchanged plugin, with `toolbox=l2_r3` only** (Toolbox → Plugins → AKENO NETWORK),
-> which needs no patched binary. See [shellui/phase4/ROLLBACK-DE.md](shellui/phase4/ROLLBACK-DE.md).
+> conclusively a crash; needs on-hardware isolation. **Safe path, now CONFIRMED on the owner's PS5
+> (12.20, 2026-10-19): the original onionHEN v0.9.0 + the unchanged plugin, with `toolbox=l2_r3`
+> only** — holding L2+R3 in a game opens the normal Toolbox, then Toolbox → Plugins → AKENO NETWORK
+> reaches the working social UI, controller input intact. No patched binary. This is the F0 fallback
+> and the control case for debugging the patched host. See
+> [shellui/phase4/ROLLBACK-DE.md](shellui/phase4/ROLLBACK-DE.md).
 
 Status (2026-10-18): **built and PC-tested, not run on a PS5.** German guides for the owner:
 [shellui/phase4/INSTALL-DE.md](shellui/phase4/INSTALL-DE.md),

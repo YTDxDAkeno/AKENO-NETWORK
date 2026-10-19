@@ -111,7 +111,9 @@ Mit dem **Original**-onionHEN v0.9.0 und dem unveränderten Plugin, ohne den Pha
    Hintergrund → **Plugins → AKENO NETWORK → AKENO NETWORK** → mit ○ zurück ins Spiel.
 
 Das ist ein Schritt mehr als der direkte Zugang, aber es nutzt nur bewährte onionHEN-Funktionen und
-kein neues Binary. Genau das hat bei dir schon funktioniert.
+kein neues Binary. **Auf deiner PS5 (12.20) am 19.10.2026 bestätigt:** L2 + R3 öffnet die Toolbox,
+Toolbox → Plugins → AKENO NETWORK führt zur funktionierenden Oberfläche, der Controller bleibt
+bedienbar. Das ist der empfohlene stabile Weg.
 
 ## 7. Prüfen
 
