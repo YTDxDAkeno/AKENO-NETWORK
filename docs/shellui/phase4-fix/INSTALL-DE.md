@@ -3,8 +3,8 @@
 > **EXPERIMENTELL, nicht stabil.** Hardware-Stand 19.10.2026 (deine PS5, FW 12.20, Host
 > `560a2202…` aus dem CI-Paket): **H1–H5 bestanden** – der neue Host mit Original-Verhalten und der
 > **Link-Modus** (L2 + R3 → Toolbox mit AKENO oben → ✕), auch im laufenden Spiel (*Atelier Yumia*)
-> mit Rückkehr ins Spiel. Der **Direkt-Modus** öffnet AKENO laut deiner Meldung direkt, auch im
-> Spiel; wiederholte Durchgänge, längeres Weiterspielen und die Logs stehen noch aus
+> mit Rückkehr ins Spiel. Der **Direkt-Modus** öffnet AKENO laut deinen Meldungen direkt im Spiel,
+> auch bei mehrmaligem Öffnen und Schließen; die Logs und ein längeres Weiterspielen stehen noch aus
 > ([Stabilitätsdurchgang S](TEST-DE.md#s--kurzer-stabilitätsdurchgang-für-den-direkt-modus-ca-15-minuten)).
 > Ein längerer Alltagstest steht aus. Nichts wird automatisch auf die Konsole übertragen. Teste nur in der Reihenfolge von
 > [TEST-DE.md](TEST-DE.md) und brich beim ersten Problem ab. Dein funktionierender Weg (Original-

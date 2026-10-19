@@ -1,10 +1,10 @@
 # AKENO NETWORK Phase 4.1 – Hardware-Testplan (FW 12.20)
 
 > **Stand 19.10.2026 (FW 12.20, Host `560a2202…`):** H1–H5 **bestanden**, einschließlich H5b im
-> Spiel (*Atelier Yumia*, Rückkehr ins Spiel). Direkt-Modus: **öffnet AKENO direkt, auch im Spiel**
-> (deine Meldung, noch ohne Logs). Offen sind wiederholtes Öffnen/Schließen, längeres Weiterspielen,
-> die Controller-Prüfung und die Logs: dafür der kurze **Stabilitätsdurchgang S** unten. Bis dahin
-> ist der Link-Modus der empfohlene Alltagsweg.
+> Spiel (*Atelier Yumia*, Rückkehr ins Spiel). Direkt-Modus: **öffnet AKENO direkt im Spiel, auch
+> bei mehrmaligem Öffnen und Schließen; Spiel und Controller laufen weiter** (deine Meldungen, noch
+> ohne Logs). Der Phase-4-Fehler trat dabei nicht auf. Offen sind die Logs und ein längeres
+> Weiterspielen: Schritte 3 und 4 des **Stabilitätsdurchgangs S** unten.
 
 **Den fehlgeschlagenen Phase-4-Host nicht erneut testen.** Dieser Plan gilt nur für
 `host/OnionHEN-AKENO-direct-fixed.elf`. Die Schritte bauen aufeinander auf: **erst wenn ein Schritt
