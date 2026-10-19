@@ -537,6 +537,18 @@ static void test_settings_persist(void) {
     world_close(&w);
 }
 
+/* "turn on" right after "turn off": the capture thread may still be finishing ("BUSY": try again in a
+ * moment, as the page says); a person cannot press that fast, a test can. */
+static int mic_on_retry(pv_engine *e, pv_error *err) {
+    for (int t = 0; t < 4000; t += 20) {
+        if (pv_engine_set_mic(e, 1, err) == 0) return 0;
+        if (strcmp(err->code, "BUSY") != 0) return -1;
+        pv_engine_tick(e);
+        sleep_ms(20);
+    }
+    return -1;
+}
+
 /* a join right after another one ended: "Voice is still closing. Try again in a moment." */
 static int join_retry(pv_engine *e, const char *party, pv_error *err) {
     for (int t = 0; t < 8000; t += 20) {
@@ -649,7 +661,7 @@ static void test_microphone_consent(void) {
     pv_engine_status(w.e, &s);
     CHECK(s.mic == PV_MIC_OFF && !s.mic_enabled && w.sim.mic_opens == 0); /* never without consent */
     CHECK(pv_engine_set_mute(w.e, 0, &err) != 0 && strcmp(err.code, "MIC_OFF") == 0);
-    CHECK(pv_engine_set_mic(w.e, 1, &err) == 0);
+    CHECK(mic_on_retry(w.e, &err) == 0);
     CHECK(wait_for(w.e, mic_active, 8000));
     CHECK(w.sim.mic_opens == 1);
     pv_engine_status(w.e, &s);
@@ -669,7 +681,7 @@ static void test_microphone_consent(void) {
     WAIT_UNTIL(w.e, w.sim.mic_closes == 1, 8000);
     CHECK(w.sim.mic_closes == 1);
     /* on again in the same session, then leave: closed */
-    CHECK(pv_engine_set_mic(w.e, 1, &err) == 0);
+    CHECK(mic_on_retry(w.e, &err) == 0);
     CHECK(wait_for(w.e, mic_active, 8000));
     pv_engine_leave(w.e, "test");
     WAIT_UNTIL(w.e, w.sim.mic_closes >= 2, 8000);
@@ -678,14 +690,14 @@ static void test_microphone_consent(void) {
     w.sim.mic_mode = 2;
     unsigned long calls = w.sim.mic_open_calls;
     CHECK(pv_engine_join(w.e, "p-2", &err) == 0);
-    CHECK(pv_engine_set_mic(w.e, 1, &err) == 0);
+    CHECK(mic_on_retry(w.e, &err) == 0);
     CHECK(wait_for(w.e, mic_failed, 8000));
     pv_engine_status(w.e, &s);
     CHECK(s.mic == PV_MIC_FAILED && s.mic_rc == (int32_t)0x80260105 && !s.mic_enabled && s.in_voice && s.mic_refusal == PV_REFUSAL_ARGUMENT);
     CHECK(w.sim.mic_open_calls == calls + 1 && w.sim.mic_open_calls_48k == 0);
     CHECK(contains(s.mic_attempts, "16000 Hz -> 0x80260105") && !contains(s.mic_attempts, "48000"));
     /* turned on again in the same situation: answered from the refusal, the call is not repeated */
-    CHECK(pv_engine_set_mic(w.e, 1, &err) != 0 && strcmp(err.code, "MIC_REFUSED") == 0 && contains(err.message, "0x80260105"));
+    CHECK(mic_on_retry(w.e, &err) != 0 && strcmp(err.code, "MIC_REFUSED") == 0 && contains(err.message, "0x80260105"));
     CHECK(w.sim.mic_open_calls == calls + 1);
     pv_engine_status(w.e, &s);
     CHECK(s.mic_avoided == 1 && s.mic == PV_MIC_FAILED && !s.mic_enabled && contains(s.mic_detail, "not tried again"));
@@ -696,12 +708,12 @@ static void test_microphone_consent(void) {
     write_text(bigapp, "0x1234", 0644);
     WAIT_UNTIL(w.e, (pv_engine_status(w.e, &s), s.bigapp == 0x1234), 5000);
     w.sim.mic_mode = 4;
-    CHECK(pv_engine_set_mic(w.e, 1, &err) == 0);
+    CHECK(mic_on_retry(w.e, &err) == 0);
     CHECK(wait_for(w.e, mic_failed, 8000));
     pv_engine_status(w.e, &s);
     CHECK(s.mic_rc == (int32_t)0x809B0081 && s.mic_refusal == PV_REFUSAL_PROCESS && w.sim.mic_open_calls == calls + 2);
     CHECK(w.sim.mic_open_calls_48k == 0); /* a process refusal is not a rate problem */
-    CHECK(pv_engine_set_mic(w.e, 1, &err) != 0 && strcmp(err.code, "MIC_REFUSED") == 0 && contains(err.message, "background service"));
+    CHECK(mic_on_retry(w.e, &err) != 0 && strcmp(err.code, "MIC_REFUSED") == 0 && contains(err.message, "background service"));
     CHECK(w.sim.mic_open_calls == calls + 2);
     static char report[24 * 1024];
     pv_report_text(&s, report, sizeof(report));
@@ -711,7 +723,7 @@ static void test_microphone_consent(void) {
     write_text(bigapp, "0x5678", 0644);
     WAIT_UNTIL(w.e, (pv_engine_status(w.e, &s), s.bigapp == 0x5678), 5000);
     w.sim.mic_mode = 5;
-    CHECK(pv_engine_set_mic(w.e, 1, &err) == 0);
+    CHECK(mic_on_retry(w.e, &err) == 0);
     CHECK(wait_for(w.e, mic_active, 8000));
     pv_engine_status(w.e, &s);
     CHECK(s.mic_rate == 48000 && w.sim.mic_open_calls_48k == 1 && contains(s.mic_attempts, "16000 Hz -> 0x80260103; 48000 Hz -> handle"));
@@ -719,7 +731,7 @@ static void test_microphone_consent(void) {
     CHECK(wait_for(w.e, mic_off, 8000));
     /* no microphone library */
     w.sim.mic_mode = 3;
-    CHECK(pv_engine_set_mic(w.e, 1, &err) == 0);
+    CHECK(mic_on_retry(w.e, &err) == 0);
     for (int i = 0; i < 400; i++) {
         pv_engine_tick(w.e);
         pv_engine_status(w.e, &s);
@@ -733,7 +745,7 @@ static void test_microphone_consent(void) {
     w.sim.mic_mode = 0;
     w.sim.mic_reads = 0;
     w.sim.mic_fail_after = 30;
-    CHECK(pv_engine_set_mic(w.e, 1, &err) == 0);
+    CHECK(mic_on_retry(w.e, &err) == 0);
     for (int i = 0; i < 600; i++) {
         pv_engine_tick(w.e);
         pv_engine_status(w.e, &s);
@@ -743,7 +755,7 @@ static void test_microphone_consent(void) {
     CHECK(s.mic == PV_MIC_FAILED && s.mic_read_errors >= 50 && s.in_voice);
     /* never more than PV_MIC_OPEN_LIMIT calls in one run, whatever is pressed */
     CHECK(s.mic_open_calls == PV_MIC_OPEN_LIMIT);
-    CHECK(pv_engine_set_mic(w.e, 1, &err) != 0 && strcmp(err.code, "MIC_LIMIT") == 0);
+    CHECK(mic_on_retry(w.e, &err) != 0 && strcmp(err.code, "MIC_LIMIT") == 0);
     w.sim.mic_fail_after = -1;
     pv_engine_leave(w.e, "test");
     world_close(&w);
