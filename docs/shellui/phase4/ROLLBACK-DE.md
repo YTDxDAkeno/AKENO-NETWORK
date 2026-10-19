@@ -1,5 +1,7 @@
 # Phase 4 – zurück zur funktionierenden v1.10-Einrichtung
 
+> **Überholt:** Dieses Dokument gehört zum fehlgeschlagenen Phase-4-Host. Für den korrigierten Host gilt [../phase4-fix/INSTALL-DE.md](../phase4-fix/INSTALL-DE.md) mit dem Testplan [../phase4-fix/TEST-DE.md](../phase4-fix/TEST-DE.md).
+
 Die Phase 4 ändert **nur den Host** (onionHEN-Datei) und **zwei Zeilen** in
 `/data/OnionHEN/config.ini`. Plugin, Daemon, AKENO-Konto und Server bleiben unverändert.
 

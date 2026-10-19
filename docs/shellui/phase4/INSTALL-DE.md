@@ -1,5 +1,7 @@
 # AKENO NETWORK Phase 4 – direkter Zugang aus dem laufenden Spiel (Installation)
 
+> **Überholt:** Dieses Dokument gehört zum fehlgeschlagenen Phase-4-Host. Für den korrigierten Host gilt [../phase4-fix/INSTALL-DE.md](../phase4-fix/INSTALL-DE.md) mit dem Testplan [../phase4-fix/TEST-DE.md](../phase4-fix/TEST-DE.md).
+
 > **HARDWARE-ERGEBNIS 19.10.2026 – dieser Build ist auf deiner PS5 (12.20) FEHLGESCHLAGEN.**
 > Mit `toolbox_target=AKEN00001` erschien AKENO zwar kurz, danach reagierte die Konsole nicht mehr
 > auf den Controller (das Spiel lief weiter). **Bitte diesen Host nicht erneut mit direktem Ziel

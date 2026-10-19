@@ -1,5 +1,7 @@
 # Phase 4 – Hardware-Testplan: direkter Zugang, Spiel-Optionsmenü, Kontrollzentrum
 
+> **Überholt:** Dieses Dokument gehört zum fehlgeschlagenen Phase-4-Host. Für den korrigierten Host gilt [../phase4-fix/INSTALL-DE.md](../phase4-fix/INSTALL-DE.md) mit dem Testplan [../phase4-fix/TEST-DE.md](../phase4-fix/TEST-DE.md).
+
 Voraussetzung: Installation nach [INSTALL-DE.md](INSTALL-DE.md). Reihenfolge einhalten. Bei einem
 Fehler: Ergebnis notieren, `/data/OnionHEN/OnionHEN.log` sichern, aufhören und
 [ROLLBACK-DE.md](ROLLBACK-DE.md). Vor Tests mit Spiel **speichern**.
