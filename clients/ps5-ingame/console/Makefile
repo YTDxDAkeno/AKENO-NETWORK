@@ -23,6 +23,7 @@ NATIVE_TP  ?= $(NATIVE_ROOT)/third_party
 BUILD      ?= $(ROOT)/build-ps5
 OBJ        := $(BUILD)/obj
 PLUGIN_ID  := AKEN00001
+PLUGIN_VERSION := 1.20
 ELF        := $(BUILD)/$(PLUGIN_ID).elf
 DEBUG_ELF  := $(BUILD)/$(PLUGIN_ID).debug.elf
 
@@ -33,7 +34,7 @@ endif
 ONION_SRC  := $(wildcard $(ONION_SDK)/runtime/*.c)
 SHARED_SRC := $(addprefix $(NATIVE_ROOT)/src/core/,social.c chat.c party.c account.c image.c text.c) $(NATIVE_ROOT)/src/app/ipc.c
 CLIENT_SRC := $(addprefix $(PS5_ROOT)/src/,json.c buf.c)
-OWN_SRC    := $(addprefix $(ROOT)/src/,companion.c fetch.c ui_doc.c actions.c plugin_main.c)
+OWN_SRC    := $(addprefix $(ROOT)/src/,companion.c fetch.c ui_doc.c actions.c voice_link.c plugin_main.c)
 
 ONION_OBJ  := $(patsubst $(ONION_SDK)/runtime/%.c,$(OBJ)/onion/%.o,$(ONION_SRC))
 SHARED_OBJ := $(patsubst $(NATIVE_ROOT)/src/%.c,$(OBJ)/native/%.o,$(SHARED_SRC))
@@ -75,7 +76,7 @@ $(DEBUG_ELF): $(OWN_OBJ) $(SHARED_OBJ) $(CLIENT_OBJ) $(ONION_OBJ) $(STBI_OBJ)
 # Keep the OnionHEN descriptor section when stripping, then check it as OnionHEN will.
 $(ELF): $(DEBUG_ELF)
 	$(STRIP) --keep-section=.onion_plugin -o $@ $<
-	python3 -I $(ONION_SDK)/tools/inspect_plugin.py $@ --expect-id $(PLUGIN_ID) --expect-version 1.10
+	python3 -I $(ONION_SDK)/tools/inspect_plugin.py $@ --expect-id $(PLUGIN_ID) --expect-version $(PLUGIN_VERSION)
 
 clean:
 	rm -rf $(BUILD)

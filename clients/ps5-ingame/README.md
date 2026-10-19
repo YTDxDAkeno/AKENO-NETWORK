@@ -1,6 +1,7 @@
 # AKENO In-Game Companion (EXPERIMENTAL)
 
-An onionHEN plugin (`AKEN00001.elf`, version 1.10) that adds **AKENO NETWORK** pages to the
+An onionHEN plugin (`AKEN00001.elf`, version 1.20; 1.10 is the hardware-tested rollback, rebuilt from
+`f801370`) that adds **AKENO NETWORK** pages to the
 onionHEN Toolbox in PS5 Settings, also reachable while a game keeps running: friends with presence
 and current game, a page per friend (message them with the PS5 keyboard, open the conversation,
 invite them or join their party), conversations with their latest messages, replies and Mark as
@@ -30,6 +31,7 @@ Sources are MIT (AKENO); the plugin ELF links the OnionHEN SDK runtime and is th
 | `src/fetch.c` | the store: section loads, the daemon's event ring, the latest messages per conversation, writes |
 | `src/ui_doc.c` | the onion.ui document: every page, within onionHEN v0.9.0's rules |
 | `src/actions.c` | what a press does; node ID → verb and item |
+| `src/voice_link.c` | 1.20: the voice page's link to the background voice service `akeno-party-voice` ([docs/PS5_PARTY_VOICE.md](../../docs/PS5_PARTY_VOICE.md)) |
 | `src/plugin_main.c` | the plugin process: onionHEN link, refresh loop, notifications, tombstone pages |
 | `src/check_main.c` | the PC check tool used by the end-to-end test |
 

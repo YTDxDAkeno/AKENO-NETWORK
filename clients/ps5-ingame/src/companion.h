@@ -41,6 +41,8 @@
 #define AKN_UI_INVITES 4
 #define AKN_UI_NOTIFICATIONS 3
 
+#define AKN_UI_VOICE_PEOPLE 6   /* people listed on the voice page */
+
 /* Quick replies typed with the PS5 keyboard. onionHEN v0.9.0 checks an input's value in bytes
  * against max_length and below 256, while the keyboard counts characters with the same number. */
 #define AKN_UI_REPLY_MAX 250
@@ -131,6 +133,42 @@ typedef struct {
     char name[80];
 } akn_ui_person;
 
+/* The AKENO voice service (akeno-party-voice, a separate background payload) as its status says:
+ * the voice page shows it and its controls send commands to it (voice_link.c). */
+typedef enum {
+    AKN_VOICE_SVC_ABSENT = 0,    /* nothing answers on its port */
+    AKN_VOICE_SVC_READY,
+    AKN_VOICE_SVC_REFUSED,       /* it refused the daemon's key (started before a daemon restart?) */
+    AKN_VOICE_SVC_INCOMPATIBLE   /* another control protocol, or an answer the plugin cannot read */
+} akn_voice_service;
+
+typedef struct {
+    char name[80];
+    int muted, speaking, self;
+} akn_ui_voice_person;
+
+typedef struct {
+    akn_voice_service service;
+    char version[32];
+    char summary[160];        /* "Connected · Listening · Microphone active" */
+    int in_voice;
+    char party_id[40];        /* the party whose voice chat it is in */
+    char net[16];             /* off requesting connecting connected reconnecting disconnected */
+    char net_error[200];
+    int mic_enabled, muted, mic_level, mic_gain;
+    char mic[16];             /* off opening active unavailable failed */
+    long long mic_rc;
+    char out[16];             /* off opening active failed */
+    long long out_rc;
+    int deafened, volume, route;
+    char route_label[100];
+    char paced[8];            /* yes no unknown */
+    int ev_network, ev_mic, ev_speaker;
+    unsigned long sent, received;
+    akn_ui_voice_person people[AKN_UI_VOICE_PEOPLE];
+    int people_count, people_total;
+} akn_ui_voice;
+
 /* Diagnostics shown on the help page and in the logs. */
 typedef struct {
     int daemon_ipc;
@@ -187,6 +225,7 @@ typedef struct {
     char notifications[AKN_UI_NOTIFICATIONS][200];
     int notifications_shown;
     akn_ui_diag diag;
+    akn_ui_voice voice;
 } akn_companion;
 
 /* Everything beyond the summary's inputs; any member may be NULL / 0. */
@@ -196,6 +235,7 @@ typedef struct {
     const akn_thread_cache *threads;    /* latest messages by conversation */
     int thread_count;
     const akn_ui_diag *diag;
+    const akn_ui_voice *voice;          /* the voice service's status (NULL: not read) */
 } akn_companion_extra;
 
 /* Builds the menu from the answers (any may be NULL when it could not be loaded). */

@@ -62,7 +62,7 @@ def check(elf: bytes) -> None:
         fail("host v0.9.0 only permits LONG_RUNNING and STOP_SUPPORTED")
     identifier = descriptor[16:48].split(b"\0", 1)[0]
     version = descriptor[48:64].split(b"\0", 1)[0]
-    if identifier != b"AKEN00001" or version != b"1.10":
+    if identifier != b"AKEN00001" or version != b"1.20":  # 1.10 (the rollback) is rebuilt from its own commit
         fail("unexpected plugin ID or version")
     print("host descriptor: OK (onionHEN v0.9.0, ABI 1, NOTIFY+IPC+UI, flags 0x06)")
 

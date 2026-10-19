@@ -8,6 +8,7 @@
 #include "account.h"
 #include "akeno/json.h"
 #include "ipc.h"
+#include "voice_link.h"
 
 #define TIMEOUT_MS 8000
 #define LOCAL_TIMEOUT_MS 3000
@@ -243,7 +244,19 @@ static int load_messages(session *s, akn_store *st, char *err, size_t err_len) {
     return 0;
 }
 
+int akn_store_voice(akn_daemon_link *link, akn_store *st) {
+    akn_ui_voice next;
+    akn_voice_load(link, &next);
+    int change = !st->have_voice || akn_voice_signature(&next, 0) != akn_voice_signature(&st->voice, 0) ? 2
+                 : akn_voice_signature(&next, 1) != akn_voice_signature(&st->voice, 1)                     ? 1
+                                                                                                           : 0;
+    st->voice = next;
+    st->have_voice = 1;
+    return change;
+}
+
 unsigned akn_store_load(akn_daemon_link *link, akn_store *st, unsigned sections, long long now) {
+    if (sections & AKN_LOAD_VOICE) akn_store_voice(link, st); /* independent of the daemon's state */
     session s;
     memset(&s, 0, sizeof(s));
     s.link = link;
@@ -258,7 +271,7 @@ unsigned akn_store_load(akn_daemon_link *link, akn_store *st, unsigned sections,
         st->daemon = info;
         st->state = state;
         snprintf(st->diag.last_error, sizeof(st->diag.last_error), "%s", state == AKN_COMP_NOT_PAIRED ? "Not paired" : "No daemon session");
-        failed = sections;
+        failed = sections & ~(unsigned)AKN_LOAD_VOICE;
     } else {
         if (st->state != AKN_COMP_READY || strcmp(st->daemon.online_id, info.online_id) != 0) {
             forget(st); /* a different account or a new daemon session: read everything */
@@ -340,6 +353,7 @@ void akn_store_model(const akn_store *st, akn_companion *out, long long now) {
     x.threads = st->threads;
     x.thread_count = st->thread_count;
     x.diag = &st->diag;
+    x.voice = st->have_voice ? &st->voice : NULL;
     akn_companion_build_ex(out, st->state, st->state == AKN_COMP_READY || st->daemon.ipc ? &st->daemon : NULL, st->have_friends ? &st->friends : NULL,
                            st->have_convs ? &st->convs : NULL, st->have_party ? &st->party : NULL, st->have_inbox ? &st->inbox : NULL, st->presence,
                            now, &x);

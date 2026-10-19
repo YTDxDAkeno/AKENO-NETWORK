@@ -12,7 +12,10 @@
  *              "reply.<conversation>"), mark read
  *   party      members, party chat, invite (page pinvite), leave; or create, join friends' parties
  *   inbox      friend requests, invitations (accept / decline), notifications
- *   diag       the daemon, the server connection, the last problem, how updates work
+ *   voice      party voice through the AKENO voice service (akeno-party-voice): join, microphone,
+ *              mute, deafen, volumes, who is in voice, leave (voice_link.h)
+ *   vroute     the speaker route (the Voice Lab's four variants) and the test sound
+ *   diag       the daemon, the server connection, the voice service, the last problem
  *
  * What onionHEN v0.9.0 shows decides the layout (docs/IN_GAME_ACCESS.md, "ShellUI page rules"):
  * titles carry the information (descriptions and value columns are not reliably visible), only
@@ -27,7 +30,7 @@
 #include "companion.h"
 
 #define AKN_COMPANION_PLUGIN_ID "AKEN00001"
-#define AKN_COMPANION_VERSION "1.10"
+#define AKN_COMPANION_VERSION "1.20"
 #define AKN_COMPANION_CONTRIBUTION "akeno"
 
 /* Node IDs the plugin reacts to without an AKENO ID. */
@@ -35,13 +38,27 @@
 #define AKN_EV_REFRESH "refresh"
 #define AKN_EV_CREATE_PARTY "pcreate"
 #define AKN_EV_NOTIFICATIONS_READ "nread"
+/* Voice controls (the voice service's; "vjoin.<party>" and "vroute.<n>" carry an item). */
+#define AKN_EV_VOICE_LEAVE "vleave"
+#define AKN_EV_VOICE_MIC_ON "vmicon"
+#define AKN_EV_VOICE_MIC_OFF "vmicoff"
+#define AKN_EV_VOICE_MUTE "vmute"
+#define AKN_EV_VOICE_UNMUTE "vunmute"
+#define AKN_EV_VOICE_DEAFEN "vdeafen"
+#define AKN_EV_VOICE_UNDEAFEN "vundeafen"
+#define AKN_EV_VOICE_LOUDER "vvolup"
+#define AKN_EV_VOICE_QUIETER "vvoldn"
+#define AKN_EV_VOICE_GAIN_UP "vgainup"
+#define AKN_EV_VOICE_GAIN_DOWN "vgaindn"
+#define AKN_EV_VOICE_TEST "vtest"
+#define AKN_EV_VOICE_EXIT "vexit"
 
 /* Pages that a previous document had and this one lost (a friend dropped off the list, a
  * conversation moved down): kept for a while as a short page that says so, so that a person who has
  * one of them open can go back without onionHEN losing track of its page stack. */
 #define AKN_UI_TOMBSTONES 6
 #define AKN_UI_PAGE_ID_MAX 64
-#define AKN_UI_PAGES_MAX (16 + AKN_UI_FRIEND_PAGES + AKN_UI_CONVS)
+#define AKN_UI_PAGES_MAX (18 + AKN_UI_FRIEND_PAGES + AKN_UI_CONVS)
 
 typedef struct {
     const char *note;                       /* the last action's result for the main page, or NULL */

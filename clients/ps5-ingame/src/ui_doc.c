@@ -105,6 +105,8 @@ static void input(builder *b, const char *parent, const char *id, const char *ke
 
 static void item_id(char *out, size_t len, const char *prefix, const char *id) { snprintf(out, len, "%s%s", prefix, id); }
 
+static void voice_title(const akn_companion *c, char *t, size_t len);
+
 static const char *state_hint(akn_companion_state s) {
     switch (s) {
     case AKN_COMP_NO_DAEMON: return "Load akeno-network-ps5-native-ipc.elf with your ELF loader (port 9021), then choose Refresh.";
@@ -145,6 +147,10 @@ static void main_page(builder *b, const akn_companion *c, const char *note) {
     else if (c->party_invites) snprintf(t, sizeof(t), "Party" SEP "%d invitation%s", c->party_invites, c->party_invites == 1 ? "" : "s");
     else snprintf(t, sizeof(t), "Party" SEP "not in a party");
     menu(b, "main", "party", t, "Members and party chat; create or join a party");
+    if (c->voice.service == AKN_VOICE_SVC_READY && (c->voice.in_voice || c->in_party)) {
+        voice_title(c, t, sizeof(t));
+        menu(b, "main", "voice", t, "Party voice while you play: join, microphone, mute, leave");
+    }
     int waiting = c->friend_requests + c->party_invites + c->other_invites;
     if (waiting) snprintf(t, sizeof(t), "Requests & invitations" SEP "%d waiting", waiting);
     else if (c->notifications_unread) snprintf(t, sizeof(t), "Requests & invitations" SEP "%d new", c->notifications_unread);
@@ -313,6 +319,8 @@ static void party_pages(builder *b, const akn_companion *c) {
             }
         }
         if (!c->joinable_shown && !c->party_invites) label(b, "party", "None of your friends' parties is open right now", NULL);
+        voice_title(c, t, sizeof(t));
+        menu(b, "party", "voice", t, "Party voice: join it once you are in a party");
         return;
     }
     snprintf(t, sizeof(t), "Party" SEP "%s" SEP "%d/%d", c->party_name, c->party_members, c->party_max);
@@ -325,6 +333,8 @@ static void party_pages(builder *b, const akn_companion *c) {
     }
     if (c->party_members > c->members_shown) labelf(b, "party", "+%d more", c->party_members - c->members_shown);
     label(b, "party", c->party_voice, NULL);
+    voice_title(c, t, sizeof(t));
+    menu(b, "party", "voice", t, "Join the party's voice chat; microphone, mute, deafen, volumes, leave");
     if (c->party_conv_id[0] && akn_companion_conv(c, c->party_conv_id)) {
         item_id(id, sizeof(id), "c.", c->party_conv_id);
         menu(b, "party", id, "Party chat", "The latest messages; reply");
@@ -351,6 +361,128 @@ static void party_pages(builder *b, const akn_companion *c) {
             action(b, "pinvite", id, "pinv", t, NULL);
         }
     }
+}
+
+/* ---- voice (the AKENO voice service) ------------------------------------------------------ */
+
+static int voice_is(const akn_companion *c, const char *net) { return strcmp(c->voice.net, net) == 0; }
+
+/* "Voice chat · Connected · 3 in voice" for the menus. */
+static void voice_title(const akn_companion *c, char *t, size_t len) {
+    const akn_ui_voice *v = &c->voice;
+    switch (v->service) {
+    case AKN_VOICE_SVC_ABSENT: snprintf(t, len, "Voice chat" SEP "voice service not running"); return;
+    case AKN_VOICE_SVC_REFUSED: snprintf(t, len, "Voice chat" SEP "voice service needs a restart"); return;
+    case AKN_VOICE_SVC_INCOMPATIBLE: snprintf(t, len, "Voice chat" SEP "voice service version does not fit"); return;
+    case AKN_VOICE_SVC_READY: break;
+    }
+    if (!v->in_voice) {
+        snprintf(t, len, "Voice chat" SEP "%s", voice_is(c, "disconnected") ? "disconnected" : "join");
+        return;
+    }
+    int others = 0;
+    for (int i = 0; i < v->people_count; i++) others += !v->people[i].self;
+    if (v->people_total > v->people_count) others += v->people_total - v->people_count;
+    if (voice_is(c, "connected"))
+        snprintf(t, len, "Voice chat" SEP "Connected" SEP "%d other%s" SEP "mic %s", others, others == 1 ? "" : "s",
+                 !v->mic_enabled ? "off" : v->muted ? "muted" : "on");
+    else snprintf(t, len, "Voice chat" SEP "%s", voice_is(c, "reconnecting") ? "Reconnecting" : "Connecting");
+}
+
+static void voice_service_help(builder *b, const akn_companion *c) {
+    switch (c->voice.service) {
+    case AKN_VOICE_SVC_ABSENT:
+        label(b, "voice", "The AKENO voice service is not running", NULL);
+        label(b, "voice", "Send akeno-party-voice.elf to port 9021 after the daemon, then open this page again", NULL);
+        break;
+    case AKN_VOICE_SVC_REFUSED:
+        label(b, "voice", "The voice service refused the daemon's key", NULL);
+        label(b, "voice", "It was started before the daemon restarted: send akeno-party-voice.elf again", NULL);
+        break;
+    case AKN_VOICE_SVC_INCOMPATIBLE:
+        label(b, "voice", "This voice service does not fit plugin " AKN_COMPANION_VERSION, NULL);
+        label(b, "voice", "Use the akeno-party-voice.elf from the same package", NULL);
+        break;
+    case AKN_VOICE_SVC_READY: break;
+    }
+}
+
+static void voice_page(builder *b, const akn_companion *c) {
+    char t[256], q[256], id[64];
+    const akn_ui_voice *v = &c->voice;
+    if (c->in_party) snprintf(t, sizeof(t), "Voice chat" SEP "%s", c->party_name);
+    else snprintf(t, sizeof(t), "Voice chat");
+    page(b, "voice", t);
+    if (v->service != AKN_VOICE_SVC_READY) {
+        voice_service_help(b, c);
+        return;
+    }
+    labelf(b, "voice", "Status: %s", v->summary[0] ? v->summary : "Not in voice");
+    int here = v->in_voice && c->in_party && strcmp(v->party_id, c->party_id) == 0;
+    if (!v->in_voice) {
+        if (v->net_error[0]) labelf(b, "voice", "Last: %s", v->net_error);
+        if (!c->in_party) {
+            label(b, "voice", "Join or create a party first (Party page)", NULL);
+        } else if (c->writes && akn_companion_id_ok(c->party_id)) {
+            item_id(id, sizeof(id), "vjoin.", c->party_id);
+            snprintf(q, sizeof(q), "Join the voice chat of \"%s\"? Your microphone stays off until you turn it on.", c->party_name);
+            action(b, "voice", id, "vjoin", "Join voice chat", q);
+        }
+    } else {
+        if (!here) label(b, "voice", c->in_party ? "This is the voice chat of another party" : "You left the party; leave its voice chat too", NULL);
+        if (v->net_error[0] && !voice_is(c, "connected")) labelf(b, "voice", "Last: %s", v->net_error);
+        for (int i = 0; i < v->people_count; i++) {
+            const akn_ui_voice_person *p = &v->people[i];
+            labelf(b, "voice", "%s%s%s", p->name, p->self ? " (you)" : "",
+                   p->muted ? SEP "muted" : p->speaking ? SEP "speaking" : "");
+        }
+        if (v->people_total > v->people_count) labelf(b, "voice", "+%d more in voice", v->people_total - v->people_count);
+        /* microphone: off until you turn it on (a confirmation), then mute / unmute */
+        if (!v->mic_enabled) {
+            if (strcmp(v->mic, "unavailable") == 0 || strcmp(v->mic, "failed") == 0)
+                labelf(b, "voice", "Microphone: %s (0x%08llX)", v->mic, (unsigned long long)v->mic_rc & 0xFFFFFFFFull);
+            action(b, "voice", AKN_EV_VOICE_MIC_ON, "vmicon", strcmp(v->mic, "off") == 0 ? "Turn on microphone" : "Try the microphone again",
+                   "Turn on your microphone? The party hears you while you are not muted. Nothing is recorded.");
+        } else {
+            if (v->muted) action(b, "voice", AKN_EV_VOICE_UNMUTE, "vunmute", "Unmute microphone", NULL);
+            else action(b, "voice", AKN_EV_VOICE_MUTE, "vmute", "Mute microphone", NULL);
+            action(b, "voice", AKN_EV_VOICE_MIC_OFF, "vmicoff", "Turn off microphone", NULL);
+        }
+        if (v->deafened) action(b, "voice", AKN_EV_VOICE_UNDEAFEN, "vundeafen", "Undeafen (hear the party again)", NULL);
+        else action(b, "voice", AKN_EV_VOICE_DEAFEN, "vdeafen", "Deafen (hear nobody, also mutes)", NULL);
+        snprintf(t, sizeof(t), "Voice volume %d%%" SEP "louder", v->volume);
+        action(b, "voice", AKN_EV_VOICE_LOUDER, "vvolup", t, NULL);
+        snprintf(t, sizeof(t), "Voice volume %d%%" SEP "quieter", v->volume);
+        action(b, "voice", AKN_EV_VOICE_QUIETER, "vvoldn", t, NULL);
+        snprintf(t, sizeof(t), "Microphone gain %d%%" SEP "higher", v->mic_gain);
+        action(b, "voice", AKN_EV_VOICE_GAIN_UP, "vgainup", t, NULL);
+        snprintf(t, sizeof(t), "Microphone gain %d%%" SEP "lower", v->mic_gain);
+        action(b, "voice", AKN_EV_VOICE_GAIN_DOWN, "vgaindn", t, NULL);
+    }
+    snprintf(t, sizeof(t), "Speaker route %d" SEP "test sound", v->route);
+    menu(b, "voice", "vroute", t, "Which audio output the voice service uses; try them while a friend talks");
+    labelf(b, "voice", "Measured: network %s" SEP "mic sent %s" SEP "speaker output %s", v->ev_network ? "yes" : "no", v->ev_mic ? "yes" : "no",
+           v->ev_speaker ? "yes" : "no");
+    if (v->in_voice) action(b, "voice", AKN_EV_VOICE_LEAVE, "vleave", "Leave voice chat", "Leave the voice chat?");
+    label(b, "voice", "Circle goes back; voice keeps running in the game", NULL);
+}
+
+static void route_page(builder *b, const akn_companion *c) {
+    char t[256], id[32];
+    const akn_ui_voice *v = &c->voice;
+    snprintf(t, sizeof(t), "Speaker route" SEP "now %d", v->route);
+    page(b, "vroute", t);
+    label(b, "vroute", "Route N plays N beeps. Note which routes you hear (TV or headset).", NULL);
+    static const char *const names[] = { "system user, main port", "your user, main port", "your user, voice port (unverified)",
+                                         "your user, personal port (unverified)" };
+    for (int i = 1; i <= 4; i++) {
+        snprintf(id, sizeof(id), "vroute.%d", i);
+        snprintf(t, sizeof(t), "Route %d: %s%s", i, names[i - 1], v->route == i ? " (current)" : "");
+        action(b, "vroute", id, "vroute", t, NULL);
+    }
+    snprintf(t, sizeof(t), "Play the test sound (%d beep%s)", v->route, v->route == 1 ? "" : "s");
+    action(b, "vroute", AKN_EV_VOICE_TEST, "vtest", t, NULL);
+    labelf(b, "vroute", "Output: %s" SEP "paced %s", v->out, v->paced);
 }
 
 static void inbox_page(builder *b, const akn_companion *c) {
@@ -419,7 +551,15 @@ static void diag_page(builder *b, const akn_companion *c) {
     labelf(b, "diag", "Last update: %s" SEP "%lu requests, %lu failed", when, d->requests, d->failures);
     if (d->last_error[0]) labelf(b, "diag", "Last problem: %s", d->last_error);
     label(b, "diag", "Pages show new data when you open them again", "onionHEN v0.9.0 draws a page when it is opened.");
-    label(b, "diag", "Voice: party voice runs in AKENO Native, not during games yet", NULL);
+    if (c->voice.service == AKN_VOICE_SVC_READY) {
+        labelf(b, "diag", "Voice service %s" SEP "%s", c->voice.version, c->voice.summary[0] ? c->voice.summary : "running");
+        labelf(b, "diag", "Voice packets: %lu sent, %lu received" SEP "report: /data/akeno-party-voice/report.txt", c->voice.sent, c->voice.received);
+        action(b, "diag", AKN_EV_VOICE_EXIT, "vexit", "Stop the voice service", "Stop the AKENO voice service? Voice ends until you send it again.");
+    } else {
+        label(b, "diag", c->voice.service == AKN_VOICE_SVC_ABSENT ? "Voice service: not running (akeno-party-voice.elf, port 9021)"
+                                                                   : "Voice service: running, but it does not answer this plugin",
+              NULL);
+    }
     label(b, "diag", "Plugin AKEN00001 " AKN_COMPANION_VERSION SEP "log: /data/OnionHEN/OnionHEN.log", NULL);
 }
 
@@ -445,6 +585,8 @@ int akn_companion_page_ids(const akn_companion *c, char ids[][AKN_UI_PAGE_ID_MAX
         PAGE_ID("messages");
         PAGE_ID("party");
         PAGE_ID("inbox");
+        PAGE_ID("voice");
+        if (c->voice.service == AKN_VOICE_SVC_READY) PAGE_ID("vroute");
         for (int i = 0; i < c->friends_shown && i < AKN_UI_FRIEND_PAGES; i++) PAGE_ID("f.%s", c->friends[i].id);
         for (int i = 0; i < c->conversations_shown; i++) PAGE_ID("c.%s", c->conversations[i].id);
         if (c->in_party && c->writes && c->invite_targets_shown) PAGE_ID("pinvite");
@@ -463,7 +605,7 @@ onion_status akn_companion_document_ex(const akn_companion *c, const akn_doc_opt
     snprintf(desc.plugin_id, sizeof(desc.plugin_id), AKN_COMPANION_PLUGIN_ID);
     snprintf(desc.contribution_id, sizeof(desc.contribution_id), AKN_COMPANION_CONTRIBUTION);
     snprintf(desc.title, sizeof(desc.title), "AKENO NETWORK");
-    snprintf(desc.description, sizeof(desc.description), "Friends, messages, party and invitations while you play");
+    snprintf(desc.description, sizeof(desc.description), "Friends, messages, party, voice and invitations while you play");
     snprintf(desc.root_page_id, sizeof(desc.root_page_id), "main");
     builder b;
     memset(&b, 0, sizeof(b));
@@ -476,6 +618,8 @@ onion_status akn_companion_document_ex(const akn_companion *c, const akn_doc_opt
             message_pages(&b, c);
             party_pages(&b, c);
             inbox_page(&b, c);
+            voice_page(&b, c);
+            if (c->voice.service == AKN_VOICE_SVC_READY) route_page(&b, c);
         }
         diag_page(&b, c);
         tombstone_pages(&b, o);

@@ -140,7 +140,7 @@ static void build_party(akn_companion *c, const akn_party *party) {
     c->party_members = party->member_count;
     c->party_max = party->max_members;
     snprintf(c->party_voice, sizeof(c->party_voice), "%s",
-             party->voice_available ? "Party voice: join it in AKENO Native or on the website; voice during games is not available yet"
+             party->voice_available ? "Party voice: join it below (Voice chat), in AKENO Native or on the website"
                                     : "Party voice is not available for this party");
     for (int i = 0; i < party->members_shown && i < AKN_PARTY_MEMBERS && c->members_shown < AKN_UI_MEMBERS; i++) {
         const akn_party_member *m = &party->members[i];
@@ -208,6 +208,7 @@ void akn_companion_build_ex(akn_companion *c, akn_companion_state state, const a
     copy(c->status_line, sizeof(c->status_line), state_line(state));
     copy(c->presence, sizeof(c->presence), presence);
     if (x && x->diag) c->diag = *x->diag;
+    if (x && x->voice) c->voice = *x->voice;
     if (daemon) {
         copy(c->online_id, sizeof(c->online_id), daemon->online_id);
         c->writes = daemon->ipc >= 2;
@@ -358,6 +359,19 @@ void akn_companion_text(const akn_companion *c, char *out, size_t len) {
     for (int i = 0; i < c->joinable_shown; i++) ADD("Joinable: %s [%s]\n", c->joinable[i].line, c->joinable[i].id);
     for (int i = 0; i < c->requests_shown; i++) ADD("Friend request: %s [%s]\n", c->requests[i].name, c->requests[i].id);
     for (int i = 0; i < c->invites_shown; i++) ADD("Invited: %s [%s]\n", c->invites[i].line, c->invites[i].id);
+    const akn_ui_voice *v = &c->voice;
+    static const char *const services[] = { "not running", "ready", "refused the key", "incompatible" };
+    ADD("Voice service: %s%s%s\n", services[v->service <= AKN_VOICE_SVC_INCOMPATIBLE ? v->service : 0], v->version[0] ? " " : "", v->version);
+    if (v->service == AKN_VOICE_SVC_READY) {
+        ADD("Voice: %s%s%s\n", v->summary, v->net_error[0] ? " - " : "", v->net_error);
+        ADD("Voice mic: %s, %s%s, gain %d%%\n", v->mic, v->mic_enabled ? "on" : "off", v->muted ? ", muted" : "", v->mic_gain);
+        ADD("Voice output: %s, %s, volume %d%%, route %d, paced %s\n", v->out, v->deafened ? "deafened" : "hearing", v->volume, v->route, v->paced);
+        ADD("Voice evidence: network %d, mic %d, speaker %d; packets %lu sent, %lu received\n", v->ev_network, v->ev_mic, v->ev_speaker, v->sent,
+            v->received);
+        for (int i = 0; i < v->people_count; i++)
+            ADD("Voice person: %s%s%s%s\n", v->people[i].name, v->people[i].self ? " (you)" : "", v->people[i].muted ? " (muted)" : "",
+                v->people[i].speaking ? " (speaking)" : "");
+    }
 #undef ADD
     if (len) out[o < len ? o : len - 1] = '\0';
 }
