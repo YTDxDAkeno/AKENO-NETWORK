@@ -22,10 +22,10 @@
 #define SHUTDOWN_WAIT_MS 15000
 
 static const pv_route k_routes[PV_ROUTES] = {
-    { 0, 0, "system user, main port (as AKENO Native and the audio labs)" },
-    { 1, 0, "foreground user, main port" },
-    { 1, 2, "foreground user, voice port (type 2, PS4 numbering, unverified)" },
-    { 1, 3, "foreground user, personal port (type 3, PS4 numbering, unverified)" },
+    { 0, 0, 0, "system user, main port (AKENO Native's call)" },
+    { 1, 0, 0, "foreground user, main port (refused on 12.20: 0x80260011)" },
+    { 1, 2, 1, "retired: PS4 port type 2 (refused on 12.20 like route 2)" },
+    { 1, 3, 1, "retired: PS4 port type 3 (refused on 12.20 like route 2)" },
 };
 
 const pv_route *pv_route_get(int route) { return route >= 1 && route <= PV_ROUTES ? &k_routes[route - 1] : NULL; }
@@ -160,6 +160,48 @@ int pv_transmitting_locked(const pv_engine *e) {
     return e->st.mic_enabled && e->st.mic == PV_MIC_ACTIVE && !e->st.muted && !e->st.deafened;
 }
 
+/* ---- Refusals: the same refused call is not repeated in the same situation -------------------- */
+
+/* The situation is the device, the user and the running app (a game started or ended is a new
+ * one, so each of the owner's tests - home screen, in a game - gets exactly one attempt). */
+const pv_refusal *pv_refusal_find_locked(const pv_engine *e, int what, int32_t user) {
+    for (int i = 0; i < e->refusal_count; i++) {
+        const pv_refusal *r = &e->refusals[i];
+        if (r->what == what && r->user == user && r->bigapp == e->st.bigapp) return r;
+    }
+    return NULL;
+}
+
+void pv_refusal_remember_locked(pv_engine *e, int what, int32_t user, int32_t rc) {
+    pv_refusal *slot = NULL;
+    for (int i = 0; i < e->refusal_count && !slot; i++)
+        if (e->refusals[i].what == what && e->refusals[i].user == user) slot = &e->refusals[i];
+    if (!slot && e->refusal_count < PV_REFUSALS) slot = &e->refusals[e->refusal_count++];
+    if (!slot) { /* full: the oldest goes */
+        memmove(&e->refusals[0], &e->refusals[1], sizeof(e->refusals[0]) * (PV_REFUSALS - 1));
+        slot = &e->refusals[PV_REFUSALS - 1];
+    }
+    slot->what = what;
+    slot->user = user;
+    slot->bigapp = e->st.bigapp;
+    slot->rc = rc;
+}
+
+void pv_refresh_process(pv_engine *e) {
+    akn_context_raw raw;
+    e->be->process(e->be->user, &raw);
+    akn_context_kind kind = akn_context_classify(&raw);
+    char detail[200];
+    akn_context_describe(&raw, kind, detail, sizeof(detail));
+    pthread_mutex_lock(&e->lock);
+    int changed = kind != e->st.process_kind || strcmp(detail, e->st.process_detail) != 0;
+    e->st.process_kind = kind;
+    snprintf(e->st.process_detail, sizeof(e->st.process_detail), "%s", detail);
+    e->report_dirty |= changed;
+    pthread_mutex_unlock(&e->lock);
+    if (changed) pv_log(e, "service.process", "this process: %s", detail);
+}
+
 /* ---- Settings (volume, gain, route; never the microphone permission) ------------------------- */
 
 static int clamp(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
@@ -180,6 +222,7 @@ static void load_settings(pv_engine *e) {
     if (akeno_json_int64(akeno_json_get(root, "micGain"), &v) == 0) e->st.mic_gain = clamp((int)v, PV_GAIN_MIN, PV_GAIN_MAX);
     if (akeno_json_int64(akeno_json_get(root, "route"), &v) == 0 && pv_route_get((int)v)) e->st.route = (int)v;
     akeno_json_free(doc);
+    if (pv_route_get(e->st.route)->retired) e->st.route = 1; /* chosen with 0.1.0; never opened again */
 }
 
 static void save_settings_locked(pv_engine *e) {
@@ -204,10 +247,13 @@ pv_engine *pv_engine_new(const pv_config *config) {
     e->st.mic_gain = 100;
     e->st.route = 1;
     e->st.paced = -1;
+    e->st.probe_verdict = -2;
+    e->st.test_paced = -1;
     snprintf(e->st.backend, sizeof(e->st.backend), "%s", e->be->name);
     e->be->describe(e->be->user, e->st.platform, sizeof(e->st.platform));
     load_settings(e);
     e->report_dirty = 1;
+    pv_refresh_process(e);
     return e;
 }
 
@@ -298,6 +344,8 @@ static void reset_session_stats_locked(pv_engine *e) {
     s->deafened = 0;
     s->mic = PV_MIC_OFF;
     s->mic_rc = 0;
+    s->mic_refusal = PV_REFUSAL_NONE;
+    s->mic_detail[0] = '\0';
     s->mic_level = 0;
     s->out = PV_OUT_OFF;
     s->rx_level = 0;
@@ -307,6 +355,7 @@ static void reset_session_stats_locked(pv_engine *e) {
 
 int pv_engine_join(pv_engine *e, const char *party_id, pv_error *err) {
     if (!pv_party_id_ok(party_id)) return fail(err, "INVALID_PARTY", "That is not a party ID.");
+    pv_refresh_process(e);
     pthread_mutex_lock(&e->lock);
     if (live_session_locked(e) && strcmp(e->session->party_id, party_id) == 0) {
         pthread_mutex_unlock(&e->lock);
@@ -369,7 +418,30 @@ void pv_engine_leave(pv_engine *e, const char *why) {
     if (was) pv_log(e, "voice.leave", "%s", why ? why : "left");
 }
 
+/* The answer when a "turn on" meets a refusal already seen in this situation. */
+static int mic_refused(pv_engine *e, pv_error *err, int32_t rc, pv_refusal_kind kind, const char *how) {
+    e->st.mic = kind == PV_REFUSAL_NO_LIBRARY ? PV_MIC_UNAVAILABLE : PV_MIC_FAILED;
+    e->st.mic_rc = rc;
+    e->st.mic_refusal = kind;
+    e->st.mic_enabled = 0;
+    snprintf(e->st.mic_detail, sizeof(e->st.mic_detail), "%s", how);
+    e->report_dirty = 1;
+    pthread_mutex_unlock(&e->lock);
+    pv_log(e, "voice.mic", "turn on: %s (0x%08X, %s)", how, (unsigned)rc, pv_refusal_name(kind));
+    char message[200];
+    if (kind == PV_REFUSAL_PROCESS)
+        snprintf(message, sizeof(message), "The PS5 refused the microphone to this background service (0x%08X). It is tried again when a game starts or ends.",
+                 (unsigned)rc);
+    else if (kind == PV_REFUSAL_NO_USER)
+        snprintf(message, sizeof(message), "No signed-in user in front (0x%08X): the microphone needs one.", (unsigned)rc);
+    else
+        snprintf(message, sizeof(message), "The microphone was refused (0x%08X, %s). It is tried again when a game starts or ends.", (unsigned)rc,
+                 pv_refusal_name(kind));
+    return fail(err, kind == PV_REFUSAL_NO_USER ? "NO_USER" : "MIC_REFUSED", message);
+}
+
 int pv_engine_set_mic(pv_engine *e, int enabled, pv_error *err) {
+    int32_t user = 0, user_rc = enabled ? e->be->foreground_user(e->be->user, &user) : 0;
     pthread_mutex_lock(&e->lock);
     pv_session *s = live_session_locked(e);
     if (!s) {
@@ -394,10 +466,22 @@ int pv_engine_set_mic(pv_engine *e, int enabled, pv_error *err) {
         pthread_mutex_unlock(&e->lock);
         return fail(err, "BUSY", "The microphone is still closing. Try again in a moment.");
     }
+    if (user_rc != 0) return mic_refused(e, err, user_rc, PV_REFUSAL_NO_USER, "the foreground user is unknown; nothing was opened");
+    const pv_refusal *known = pv_refusal_find_locked(e, 0, user);
+    if (known) {
+        e->st.mic_avoided++;
+        return mic_refused(e, err, known->rc, pv_refusal_of(known->rc, 1),
+                           "not tried again: refused before in this situation (same user, same running app)");
+    }
+    if (e->st.mic_open_calls >= PV_MIC_OPEN_LIMIT) {
+        pthread_mutex_unlock(&e->lock);
+        return fail(err, "MIC_LIMIT", "The microphone was tried 8 times in this run. Restart the voice service to try again.");
+    }
     if (s->have_cap) {
         pthread_join(s->cap, NULL); /* finished: cap_done is set */
         s->have_cap = 0;
     }
+    s->cap_user = user;
     e->st.mic_enabled = 1;
     e->st.muted = 0;
     e->st.deafened = 0;
@@ -465,6 +549,11 @@ int pv_engine_set_gain(pv_engine *e, int percent) {
 
 int pv_engine_set_route(pv_engine *e, int route, pv_error *err) {
     if (!pv_route_get(route)) return fail(err, "INVALID_ROUTE", "Choose a speaker route from 1 to 4.");
+    if (pv_route_get(route)->retired) {
+        char message[200];
+        snprintf(message, sizeof(message), "Route %d is retired: the PS5 refused it on FW 12.20 like route 2 (0x80260011). Use route 1.", route);
+        return fail(err, "ROUTE_RETIRED", message);
+    }
     pthread_mutex_lock(&e->lock);
     e->st.route = route;
     save_settings_locked(e);
@@ -480,20 +569,39 @@ int pv_engine_test_sound(pv_engine *e, pv_error *err) {
         pthread_mutex_unlock(&e->lock);
         return fail(err, "BUSY", "A test sound is playing.");
     }
-    e->st.test_sounds++;
-    if (e->session && e->session->have_play && !e->session->play_done) {
-        e->test_pending = e->st.route; /* the playback thread mixes it in */
+    if (e->st.out_volume == 0) {
         pthread_mutex_unlock(&e->lock);
-        pv_log(e, "voice.test_sound", "test sound on route %d mixed into the voice output", e->st.route);
+        return fail(err, "VOLUME_ZERO", "The voice volume is 0 %: turn it up to hear the test sound.");
+    }
+    int route = e->st.route;
+    if (e->session && e->session->have_play && !e->session->play_done) {
+        if (e->st.out == PV_OUT_FAILED) {
+            char message[200];
+            snprintf(message, sizeof(message), "Speaker route %d is not open (0x%08X): there is no output to play the test sound on.", route,
+                     (unsigned)e->st.out_rc);
+            pthread_mutex_unlock(&e->lock);
+            return fail(err, "OUTPUT_UNAVAILABLE", message);
+        }
+        e->st.test_sounds++;
+        e->test_pending = route; /* the playback thread mixes it into the voice output */
+        e->st.test_state = PV_TEST_PLAYING;
+        pthread_mutex_unlock(&e->lock);
+        pv_log(e, "voice.test_sound", "test sound requested on route %d: %d beep%s through the voice pipeline, mixed into the voice output", route,
+               route, route == 1 ? "" : "s");
         return 0;
     }
+    e->st.test_sounds++;
     if (e->have_test) {
         pthread_join(e->test_thread, NULL);
         e->have_test = 0;
     }
     e->test_done = 0;
-    e->test_pending = e->st.route;
+    e->test_pending = route;
+    e->st.test_state = PV_TEST_PLAYING;
     pthread_mutex_unlock(&e->lock);
+    pv_refresh_process(e);
+    pv_log(e, "voice.test_sound", "test sound requested on route %d outside voice: %d beep%s through the voice pipeline on a port of its own", route,
+           route, route == 1 ? "" : "s");
     if (pv_start_thread(&e->test_thread, pv_test_thread, e) != 0) {
         pthread_mutex_lock(&e->lock);
         e->test_pending = 0;
@@ -564,7 +672,7 @@ void pv_engine_tick(pv_engine *e) {
     int done_n = 0;
     char notes[PV_NOTES][200];
     int notes_n = 0;
-    int join_test = 0;
+    int join_test = 0, refresh = 0;
 
     pthread_mutex_lock(&e->lock);
     int gap = (int)((now - e->last_tick_us) / 1000u);
@@ -599,6 +707,7 @@ void pv_engine_tick(pv_engine *e) {
             if (e->st.heartbeats > 1) e->st.game_changes++;
             e->st.bigapp = app;
             e->report_dirty = 1;
+            refresh = 1;
         }
         e->st.game_running = app > 0;
         if (e->st.game_running && e->st.net == PV_NET_CONNECTED) e->st.game_seconds_in_voice += (unsigned long)(elapsed / 1000000u);
@@ -615,6 +724,7 @@ void pv_engine_tick(pv_engine *e) {
     pthread_mutex_unlock(&e->lock);
 
     for (int i = 0; i < done_n; i++) session_free(done[i]);
+    if (refresh) pv_refresh_process(e);
     if (join_test) {
         pthread_join(e->test_thread, NULL);
         pthread_mutex_lock(&e->lock);

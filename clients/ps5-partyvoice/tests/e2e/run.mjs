@@ -413,8 +413,33 @@ await step('setup: a party (Alice on the console, Bob on a PC); the voice servic
   assert.equal((await local(voice.port, 'POST', '/api/voice/join', { 'X-Akeno-Native-Key': key() }, { partyId: party.id, extra: 1 })).status, 400);
   const page = await pages();
   assert.equal(page.code, 0, page.out);
-  assert.match(page.out, /Voice service: ready 0\.1\.0-alpha/);
+  assert.match(page.out, /Voice service: ready 0\.2\.0-alpha/);
   assert.match(page.out, /Page voice\n/);
+});
+
+await step('test B: the test sound outside voice goes through the voice pipeline and is checked in the submitted buffer', async () => {
+  const r = await press('vtest');
+  assert.equal(r.code, 0, r.out);
+  const s = await waitFor(async () => {
+    const v = await status();
+    return v.test.state !== 'playing' && v.test.state !== 'none' ? v : null;
+  }, 'the test sound to finish', 10_000);
+  assert.equal(s.test.state, 'submitted');
+  assert.equal(s.test.inVoice, false);
+  assert.equal(s.test.route, 1);
+  assert.ok(s.test.verifiedBlocks >= 5 && s.test.hzMin >= 836 && s.test.hzMax <= 924, JSON.stringify(s.test));
+  assert.equal(s.output.probe, 'consumed', 'the simulated port is consumed by its clock');
+  assert.equal(s.evidence.audioSubmitted, true);
+  assert.equal(s.evidence.audioAudible, 'unconfirmed', 'audible is never a measurement');
+  assert.equal(s.process.kind, 'background');
+  assert.equal(s.output.state, 'off', 'the test port is its own and closed again');
+  assert.match(readFileSync(join(voiceDir, 'voice.log'), 'utf8'), /voice\.test_sound: route 1 \(on its own\): \d+ Opus packets encoded/);
+  const report = await waitFor(() => {
+    const text = readFileSync(join(voiceDir, 'report.txt'), 'utf8');
+    return /Result: +SUBMITTED/.test(text) ? text : null;
+  }, 'the report of the test sound', 5000);
+  assert.match(report, /AUDIO SUBMITTED: +yes - accepted output blocks with sound: 0 of party speech, [1-9]\d* of the test sound/);
+  assert.match(report, /Audible: +NOT CONFIRMED - only if you heard 1 beep\n/);
 });
 
 await step('1. join voice from the AKENO page: connected, the server sees the console, the microphone stays off', async () => {
@@ -507,7 +532,7 @@ await step('6. deafen and undeafen: nothing is played and the console is muted; 
   await waitFor(() => hearsConsole(mark), 'Bob to hear the console after undeafen and unmute', 15_000);
 });
 
-await step('volume and gain within limits; the speaker route; the test sound is mixed in', async () => {
+await step('volume and gain within limits; the speaker route; the test sound goes through the voice pipeline, mixed in', async () => {
   for (let i = 0; i < 7; i++) await pressOk('vvolup');
   let s = await status();
   assert.equal(s.output.volume, 150, 'the output volume stops at 150 %');
@@ -520,10 +545,13 @@ await step('volume and gain within limits; the speaker route; the test sound is 
   s = await status();
   assert.equal(s.output.route, 2);
   await pressOk('vtest');
-  await waitFor(async () => {
+  const t = await waitFor(async () => {
     const v = await status();
-    return v.stats.testSounds === 1 ? v : null;
-  }, 'the test sound', 5000);
+    return v.stats.testSounds === 2 && v.test.state === 'submitted' ? v : null;
+  }, 'the test sound, mixed into the voice output', 10_000);
+  assert.equal(t.test.inVoice, true);
+  assert.equal(t.test.route, 2);
+  assert.ok(t.test.toneBlocks >= 5, JSON.stringify(t.test));
   await pressOk('vroute.1');
   assert.equal((await local(voice.port, 'POST', '/api/voice/volume', { 'X-Akeno-Native-Key': key() }, { output: 151 })).status, 400);
   await pressOk('vvoldn', 'vvoldn', 'vvoldn', 'vvoldn');
@@ -531,6 +559,8 @@ await step('volume and gain within limits; the speaker route; the test sound is 
 });
 
 await step('13. the AKENO pages opened and closed 10 times: voice runs on, no reconnect, no second session', async () => {
+  // the route 1 port of the step before is reopened and probed (12 silent blocks, about 0.25 s) first
+  await waitFor(async () => (await status()).output.state === 'active', 'the reopened output port', 5000);
   const before = await status();
   for (let i = 0; i < 10; i++) {
     if (i) await sleep(1500); // a person opens a page every few seconds at most (the server rate-limits a device)
@@ -636,7 +666,18 @@ await step('11. the console refuses the microphone and the speaker: voice stays 
     return v.network.state === 'connected' && v.mic.state === 'failed' && v.output.state === 'failed' && v.stats.decoded > 50 ? v : null;
   }, 'connected with both audio sides failed', 20_000);
   assert.equal(s.mic.rc >>> 0, 0x80260105);
+  assert.equal(s.mic.refusal, 'argument');
   assert.equal(s.output.rc >>> 0, 0x8026000a);
+  // the refused microphone is not opened again in the same situation, and the page says why
+  const calls = s.mic.openCalls;
+  const again = await press('vmicon');
+  assert.notEqual(again.code, 0, again.out);
+  assert.match(again.out, /Action vmicon: failed: .*0x80260105.*tried again when a game starts or ends/);
+  assert.equal((await status()).mic.openCalls, calls, 'no second sceAudioInOpen');
+  // no output port: the test sound is refused, never "mixed in"
+  const test = await press('vtest');
+  assert.notEqual(test.code, 0, test.out);
+  assert.match(test.out, /Action vtest: failed: .*no output to play the test sound on/);
   assert.match(s.summary, /Connected · Audio output unavailable · Microphone unavailable/);
   assert.equal(s.evidence.networkConnected, true);
   assert.equal(s.evidence.speakerOutput, false, 'never claimed without an output port');
@@ -666,18 +707,30 @@ await step('10a. revocation: the console loses "parties:write" on the website; v
   assert.match(page.out, /Voice: Disconnected - You were removed from the voice chat\./);
 });
 
-await step('the report separates the three outcomes and carries no name, ID, token or key', async () => {
+await step('the report separates the eight outcomes and carries no name, ID, token or key', async () => {
   const exit = await local(voice.port, 'POST', '/api/voice/exit', { 'X-Akeno-Native-Key': key() }, {});
   assert.equal(exit.status, 200);
   await voice.exited;
   const report = readFileSync(join(voiceDir, 'report.txt'), 'utf8');
   const previous = readFileSync(join(voiceDir, 'report-previous.txt'), 'utf8');
   const logText = readFileSync(join(voiceDir, 'voice.log'), 'utf8');
-  assert.match(report, /NETWORK CONNECTED: {8}yes/);
-  assert.match(report, /MICROPHONE TRANSMITTING: {2}no/);
-  assert.match(report, /SPEAKER OUTPUT ACTIVE: {4}no/);
-  assert.match(previous, /MICROPHONE TRANSMITTING: {2}yes/);
-  assert.match(previous, /SPEAKER OUTPUT ACTIVE: {4}yes/);
+  assert.match(report, /NETWORK CONNECTED: +yes/);
+  assert.match(report, /REMOTE AUDIO RECEIVED: +yes/);
+  assert.match(report, /AUDIO SUBMITTED: +no - no output block with sound was accepted \(the output port did not open\)/);
+  assert.match(report, /MICROPHONE OPEN: +no - 0x80260105/);
+  assert.match(report, /MICROPHONE TRANSMITTING: +no/);
+  assert.match(previous, /REMOTE AUDIO RECEIVED: +yes/);
+  assert.match(previous, /AUDIO SUBMITTED: +yes - accepted output blocks with sound: [1-9]\d* of party speech/);
+  assert.match(previous, /MICROPHONE OPEN: +yes/);
+  assert.match(previous, /MICROPHONE CAPTURING: +yes/);
+  assert.match(previous, /MICROPHONE TRANSMITTING: +yes/);
+  for (const text of [report, previous]) {
+    // only people confirm sound; the report never does
+    assert.match(text, /AUDIO AUDIBLE: +NOT CONFIRMED/);
+    assert.match(text, /REMOTE USER HEARD MICROPHONE: +NOT CONFIRMED/);
+    assert.doesNotMatch(text, /AUDIO AUDIBLE: +yes|HEARD MICROPHONE: +yes/);
+    assert.match(text, /Process: +background process/);
+  }
   assert.match(report, /\[Your answers - fill in and send back\]/);
   for (const text of [report, previous, logText]) {
     assert.doesNotMatch(text, /eyJ[A-Za-z0-9_-]{10,}/, 'no voice pass');

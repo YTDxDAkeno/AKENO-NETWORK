@@ -37,10 +37,11 @@ endif
 
 OWN_SRC     := $(addprefix $(ROOT)/src/,pv_main.c pv_engine.c pv_net.c pv_audio.c pv_status.c pv_control.c pv_backend_ps5.c)
 NATIVE_SRC  := $(addprefix $(NATIVE_ROOT)/src/core/,voice.c voice_codec.c voice_dsp.c voice_proto.c jitter.c account.c social.c chat.c \
-               image.c text.c) $(NATIVE_ROOT)/src/app/ipc.c
+               image.c text.c context.c) $(NATIVE_ROOT)/src/app/ipc.c
 LAB_SRC     := $(LAB_ROOT)/src/lab_pcm.c
 CLIENT_SRC  := $(addprefix $(PS5_ROOT)/src/,buf.c json.c json_write.c crypto_util.c url.c http.c ws.c net_posix.c transport_mbedtls.c)
 UIHTTP_SRC  := $(PS5_ROOT)/app/ui_http.c
+GAMEDET_SRC := $(PS5_ROOT)/app/game_detect.c
 MBEDTLS_SRC := $(wildcard $(AKENO_TP)/mbedtls/library/*.c)
 OPUS_DIR    := $(NATIVE_TP)/opus
 OPUS_SRC    := $(addprefix $(OPUS_DIR)/,$(shell cat $(NATIVE_ROOT)/cmake/opus_sources.txt))
@@ -50,6 +51,7 @@ NATIVE_OBJ  := $(patsubst $(NATIVE_ROOT)/src/%.c,$(OBJ)/native/%.o,$(NATIVE_SRC)
 LAB_OBJ     := $(OBJ)/lab/lab_pcm.o
 CLIENT_OBJ  := $(patsubst $(PS5_ROOT)/src/%.c,$(OBJ)/client/%.o,$(CLIENT_SRC))
 UIHTTP_OBJ  := $(OBJ)/client/ui_http.o
+GAMEDET_OBJ := $(OBJ)/client/game_detect.o
 MBEDTLS_OBJ := $(patsubst $(AKENO_TP)/mbedtls/library/%.c,$(OBJ)/mbedtls/%.o,$(MBEDTLS_SRC))
 OPUS_OBJ    := $(patsubst $(OPUS_DIR)/%.c,$(OBJ)/opus/%.o,$(OPUS_SRC))
 STBI_OBJ    := $(OBJ)/third_party/stb_image_impl.o
@@ -97,6 +99,11 @@ $(UIHTTP_OBJ): $(UIHTTP_SRC) $(PS5_ROOT)/app/ui_http.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CLIENT_FLAGS) -c $< -o $@
 
+# AKENO Native's process context check (context.c) decodes the app info with the daemon's parser.
+$(GAMEDET_OBJ): $(GAMEDET_SRC) $(PS5_ROOT)/app/game_detect.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CLIENT_FLAGS) -c $< -o $@
+
 $(OBJ)/mbedtls/%.o: $(AKENO_TP)/mbedtls/library/%.c $(PS5_ROOT)/config/akeno_mbedtls_config.h
 	@mkdir -p $(dir $@)
 	$(CC) $(COMMON_FLAGS) -c $< -o $@
@@ -110,7 +117,7 @@ $(STBI_OBJ): $(NATIVE_ROOT)/src/third/stb_image_impl.c $(NATIVE_ROOT)/src/core/s
 	$(CC) -O2 -g -std=c11 -w -ffile-prefix-map=$(REPO_ROOT)=. -ffile-prefix-map=$(PS5_PAYLOAD_SDK)=ps5-payload-sdk \
 	      -I$(NATIVE_TP) -I$(NATIVE_ROOT)/src/core -c $< -o $@
 
-$(DEBUG_ELF): $(OWN_OBJ) $(NATIVE_OBJ) $(LAB_OBJ) $(CLIENT_OBJ) $(UIHTTP_OBJ) $(MBEDTLS_OBJ) $(OPUS_OBJ) $(STBI_OBJ)
+$(DEBUG_ELF): $(OWN_OBJ) $(NATIVE_OBJ) $(LAB_OBJ) $(CLIENT_OBJ) $(UIHTTP_OBJ) $(GAMEDET_OBJ) $(MBEDTLS_OBJ) $(OPUS_OBJ) $(STBI_OBJ)
 	$(CC) -o $@ $^ $(LIBS)
 
 $(ELF): $(DEBUG_ELF)

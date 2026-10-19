@@ -63,7 +63,7 @@ add_library(pv_shared STATIC
   "${NATIVE_DIR}/src/core/voice.c" "${NATIVE_DIR}/src/core/voice_codec.c" "${NATIVE_DIR}/src/core/voice_dsp.c"
   "${NATIVE_DIR}/src/core/voice_proto.c" "${NATIVE_DIR}/src/core/jitter.c" "${NATIVE_DIR}/src/core/account.c"
   "${NATIVE_DIR}/src/core/social.c" "${NATIVE_DIR}/src/core/chat.c" "${NATIVE_DIR}/src/core/image.c" "${NATIVE_DIR}/src/core/text.c"
-  "${NATIVE_DIR}/src/app/ipc.c" "${LAB_DIR}/src/lab_pcm.c")
+  "${NATIVE_DIR}/src/app/ipc.c" "${LAB_DIR}/src/lab_pcm.c" "${NATIVE_DIR}/src/core/context.c" "${PS5_DIR}/app/game_detect.c")
 target_include_directories(pv_shared PUBLIC "${PS5_DIR}/include" "${PS5_DIR}/src" "${PS5_DIR}/app" "${NATIVE_DIR}/src/core"
   "${NATIVE_DIR}/src/app" "${LAB_DIR}/src")
 target_compile_definitions(pv_shared PUBLIC AKENO_NATIVE_IPC

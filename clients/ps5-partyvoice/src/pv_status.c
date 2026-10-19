@@ -13,8 +13,12 @@
 #define SEP " \xC2\xB7 " /* " · " */
 
 int pv_evidence_network(const pv_status *s) { return s->ever_connected; }
+int pv_evidence_remote_audio(const pv_status *s) { return s->received > 0 && s->decoded_nonzero > 0; }
+int pv_evidence_submitted(const pv_status *s) { return s->out_speech_blocks > 0 || s->test_tone_blocks > 0; }
+int pv_evidence_mic_open(const pv_status *s) { return s->mic_open_ok > 0; }
+int pv_evidence_mic_capturing(const pv_status *s) { return s->mic_nonzero_frames > 0; }
 int pv_evidence_mic(const pv_status *s) { return s->sent_nonzero > 0; }
-int pv_evidence_speaker(const pv_status *s) { return s->decoded_nonzero > 0 && s->out_nonzero_blocks > 0; }
+int pv_evidence_speaker(const pv_status *s) { return s->decoded_nonzero > 0 && s->out_speech_blocks > 0; }
 
 void pv_status_summary(const pv_status *s, char *out, size_t len) {
     const char *net;
@@ -46,6 +50,23 @@ static const char *b(int v) { return v ? "true" : "false"; }
 
 static const char *paced_name(int paced) { return paced == 1 ? "yes" : paced == 0 ? "no" : "unknown"; }
 
+static const char *probe_name(int v) { return v == 1 ? "consumed" : v == 0 ? "returns-at-once" : v == -2 ? "not-run" : "undecided"; }
+
+static const char *process_name(akn_context_kind k) {
+    return k == AKN_CTX_FOREGROUND ? "foreground" : k == AKN_CTX_BACKGROUND ? "background" : k == AKN_CTX_DESKTOP ? "desktop" : "unknown";
+}
+
+static const char *test_name(pv_test_state t) {
+    switch (t) {
+    case PV_TEST_NONE: return "none";
+    case PV_TEST_PLAYING: return "playing";
+    case PV_TEST_SUBMITTED: return "submitted";
+    case PV_TEST_NOT_PLAYED: return "not-played";
+    case PV_TEST_OUTPUT_FAILED: return "output-failed";
+    }
+    return "none";
+}
+
 int pv_status_json(const pv_status *s, akeno_buf *o) {
     char summary[160];
     pv_status_summary(s, summary, sizeof(summary));
@@ -62,17 +83,34 @@ int pv_status_json(const pv_status *s, akeno_buf *o) {
                               "\"latencyMs\":%d,\"daemonIpc\":%d}",
                            s->close_code, s->attempts, s->reconnects, s->connections, b(s->ready_seen), b(s->participants_seen), s->latency_ms,
                            s->daemon_ipc);
-    rc |= akeno_buf_printf(o, ",\"mic\":{\"enabled\":%s,\"state\":\"%s\",\"muted\":%s,\"rc\":%d,\"rate\":%u,\"level\":%d,\"gain\":%d,\"detail\":",
+    rc |= akeno_buf_printf(o, ",\"mic\":{\"enabled\":%s,\"state\":\"%s\",\"muted\":%s,\"rc\":%d,\"rate\":%u,\"level\":%d,\"gain\":%d,\"refusal\":\"%s\","
+                              "\"openCalls\":%lu,\"avoided\":%lu,\"detail\":",
                            b(s->mic_enabled), pv_mic_state_name(s->mic), b(s->muted || s->deafened), (int)s->mic_rc, s->mic_rate, s->mic_level,
-                           s->mic_gain);
+                           s->mic_gain, pv_refusal_name(s->mic_refusal), s->mic_open_calls, s->mic_avoided);
     rc |= akeno_buf_append_json_string(o, s->mic_detail);
+    rc |= akeno_buf_append_str(o, ",\"attempts\":");
+    rc |= akeno_buf_append_json_string(o, s->mic_attempts);
     rc |= akeno_buf_printf(o, "},\"output\":{\"state\":\"%s\",\"deafened\":%s,\"volume\":%d,\"route\":%d,\"routeLabel\":", pv_out_state_name(s->out),
                            b(s->deafened), s->out_volume, s->route);
     rc |= akeno_buf_append_json_string(o, route ? route->label : "");
-    rc |= akeno_buf_printf(o, ",\"rc\":%d,\"paced\":\"%s\",\"level\":%d,\"detail\":", (int)s->out_rc, paced_name(s->paced), s->rx_level);
+    rc |= akeno_buf_printf(o, ",\"rc\":%d,\"refusal\":\"%s\",\"paced\":\"%s\",\"probe\":\"%s\",\"probeMs\":%.1f,\"selfPacedSleeps\":%lu,\"level\":%d,"
+                              "\"detail\":",
+                           (int)s->out_rc, pv_refusal_name(s->out_refusal), paced_name(s->paced), probe_name(s->probe_verdict), s->probe_ms,
+                           s->out_self_sleeps, s->rx_level);
     rc |= akeno_buf_append_json_string(o, s->out_detail);
-    rc |= akeno_buf_printf(o, "},\"evidence\":{\"networkConnected\":%s,\"micTransmitting\":%s,\"speakerOutput\":%s,\"gatewayHeardLevel\":%d}",
-                           b(pv_evidence_network(s)), b(pv_evidence_mic(s)), b(pv_evidence_speaker(s)), s->gateway_self_level_max);
+    rc |= akeno_buf_printf(o, "},\"test\":{\"state\":\"%s\",\"route\":%d,\"inVoice\":%s,\"openRc\":%d,\"toneBlocks\":%lu,\"verifiedBlocks\":%lu,"
+                              "\"hzMin\":%d,\"hzMax\":%d,\"peak\":%d,\"paced\":\"%s\"}",
+                           test_name(s->test_state), s->test_route, b(s->test_in_voice), (int)s->test_open_rc, s->test_tone_blocks,
+                           s->test_verified_blocks, s->test_hz_min, s->test_hz_max, s->test_peak_percent, paced_name(s->test_paced));
+    rc |= akeno_buf_printf(o, ",\"process\":{\"kind\":\"%s\",\"detail\":", process_name(s->process_kind));
+    rc |= akeno_buf_append_json_string(o, s->process_detail);
+    /* audible and heard are never measured: only people can answer them */
+    rc |= akeno_buf_printf(o,
+                           "},\"evidence\":{\"networkConnected\":%s,\"remoteAudioReceived\":%s,\"audioSubmitted\":%s,\"audioAudible\":\"unconfirmed\","
+                           "\"micOpen\":%s,\"micCapturing\":%s,\"micTransmitting\":%s,\"remoteHeardMic\":\"unconfirmed\",\"speakerOutput\":%s,"
+                           "\"gatewayHeardLevel\":%d}",
+                           b(pv_evidence_network(s)), b(pv_evidence_remote_audio(s)), b(pv_evidence_submitted(s)), b(pv_evidence_mic_open(s)),
+                           b(pv_evidence_mic_capturing(s)), b(pv_evidence_mic(s)), b(pv_evidence_speaker(s)), s->gateway_self_level_max);
     rc |= akeno_buf_append_str(o, ",\"participants\":[");
     for (int i = 0; i < s->people_count; i++) {
         const akn_voice_participant *p = &s->people[i];
@@ -84,11 +122,12 @@ int pv_status_json(const pv_status *s, akeno_buf *o) {
     }
     rc |= akeno_buf_printf(o,
                            "],\"stats\":{\"sent\":%lu,\"sentWithSound\":%lu,\"received\":%lu,\"decoded\":%lu,\"decodedWithSound\":%lu,\"concealed\":%lu,"
-                           "\"underruns\":%lu,\"outCalls\":%lu,\"outErrors\":%lu,\"outBlocksWithSound\":%lu,\"micReads\":%lu,\"micReadErrors\":%lu,"
-                           "\"micFrames\":%lu,\"micFramesWithSound\":%lu,\"encoded\":%lu,\"rxToneHz\":%d,\"txToneHz\":%d,\"testSounds\":%lu}",
+                           "\"underruns\":%lu,\"outCalls\":%lu,\"outErrors\":%lu,\"outBlocksWithSound\":%lu,\"outSpeechBlocks\":%lu,\"micReads\":%lu,"
+                           "\"micReadErrors\":%lu,\"micFrames\":%lu,\"micFramesWithSound\":%lu,\"encoded\":%lu,\"rxToneHz\":%d,\"txToneHz\":%d,"
+                           "\"testSounds\":%lu}",
                            s->sent, s->sent_nonzero, s->received, s->decoded, s->decoded_nonzero, s->concealed, s->underruns, s->out_calls,
-                           s->out_errors, s->out_nonzero_blocks, s->mic_reads, s->mic_read_errors, s->mic_frames, s->mic_nonzero_frames, s->encoded,
-                           s->rx_tone_hz, s->tx_tone_hz, s->test_sounds);
+                           s->out_errors, s->out_nonzero_blocks, s->out_speech_blocks, s->mic_reads, s->mic_read_errors, s->mic_frames,
+                           s->mic_nonzero_frames, s->encoded, s->rx_tone_hz, s->tx_tone_hz, s->test_sounds);
     rc |= akeno_buf_printf(o, ",\"runtime\":{\"uptimeS\":%llu,\"heartbeatGapMaxMs\":%d,\"gameRunning\":%s,\"gameSecondsInVoice\":%lu,\"cpuMs\":%lld}}",
                            (unsigned long long)(s->uptime_ms / 1000u), s->heartbeat_gap_max_ms, b(s->game_running), s->game_seconds_in_voice, s->cpu_ms);
     return rc ? -1 : 0;
@@ -118,36 +157,132 @@ static void code(char *buf, size_t len, int32_t rc) {
     else snprintf(buf, len, "0 (success)");
 }
 
+static const char *clock_text(int v) {
+    return v == 1 ? "consumed by an audio clock (the calls blocked about one block each)"
+           : v == 0 ? "NOT consumed in real time (the calls returned at once)"
+           : v == -2 ? "not measured (no port was opened)"
+                     : "undecided (too few calls, or in between)";
+}
+
+static void summary_section(sink *k, const pv_status *s) {
+    char c1[32], summary[160];
+    pv_status_summary(s, summary, sizeof(summary));
+    put(k, "[Summary - what was measured, and what only people can confirm]\n");
+    put(k, "Now:                           %s\n", summary);
+    put(k, "NETWORK CONNECTED:             %s%s\n", yes(pv_evidence_network(s)),
+        pv_evidence_network(s) ? " - the gateway accepted the voice pass, said ready and sent the participants" : "");
+    put(k, "REMOTE AUDIO RECEIVED:         %s - %lu packets received, %lu decoded, %lu frames with sound\n", yes(pv_evidence_remote_audio(s)),
+        s->received, s->decoded, s->decoded_nonzero);
+    if (pv_evidence_submitted(s))
+        put(k, "AUDIO SUBMITTED:               yes - accepted output blocks with sound: %lu of party speech, %lu of the test sound\n",
+            s->out_speech_blocks, s->test_tone_blocks);
+    else
+        put(k, "AUDIO SUBMITTED:               no - no output block with sound was accepted%s\n",
+            s->out == PV_OUT_FAILED || s->test_state == PV_TEST_NOT_PLAYED ? " (the output port did not open)" : "");
+    if (s->probe_verdict != -2) put(k, "                               the port: %s\n", clock_text(s->probe_verdict));
+    put(k, "AUDIO AUDIBLE:                 NOT CONFIRMED - only you can answer it (below). A successful call is not sound.\n");
+    if (pv_evidence_mic_open(s)) {
+        put(k, "MICROPHONE OPEN:               yes - sceAudioInOpen returned a handle %lu of %lu times in this run (%u Hz)\n", s->mic_open_ok,
+            s->mic_open_calls, s->mic_rate);
+        if (s->mic_refused_rc) {
+            code(c1, sizeof(c1), s->mic_refused_rc);
+            put(k, "                               last refusal in this run: %s: %s\n", c1, pv_refusal_meaning(s->mic_refused_kind));
+        }
+    } else if (s->mic_refused_rc) {
+        code(c1, sizeof(c1), s->mic_refused_rc);
+        put(k, "MICROPHONE OPEN:               no - %s: %s\n", c1, pv_refusal_meaning(s->mic_refused_kind));
+    } else {
+        put(k, "MICROPHONE OPEN:               no - %s\n", s->mic_opens ? "not opened" : "not turned on (it is never opened without your consent)");
+    }
+    put(k, "MICROPHONE CAPTURING:          %s - %lu frames captured, %lu not exact zeros\n", yes(pv_evidence_mic_capturing(s)), s->mic_frames,
+        s->mic_nonzero_frames);
+    put(k, "MICROPHONE TRANSMITTING:       %s - %lu packets sent, %lu of them with sound\n", yes(pv_evidence_mic(s)), s->sent, s->sent_nonzero);
+    put(k, "REMOTE USER HEARD MICROPHONE:  NOT CONFIRMED - only your friend can answer it%s\n",
+        s->gateway_self_level_max > 0 ? "" : " (the gateway decoded no sound from you)");
+    if (s->gateway_self_level_max > 0)
+        put(k, "                               the gateway decoded your audio (level up to %d of 100)\n", s->gateway_self_level_max);
+    if (s->last_failure[0]) put(k, "Last problem:                  %s\n", s->last_failure);
+    put(k, "\n");
+}
+
+/* What the measurements mean together; each line only when its measurements say so. */
+static void diagnosis_section(sink *k, const pv_status *s) {
+    put(k, "[Diagnosis]\n");
+    int any = 0;
+    if (s->process_kind == AKN_CTX_BACKGROUND && (pv_evidence_submitted(s) || s->probe_verdict == 1)) {
+        put(k, "- This service is a background process (no app of its own). On FW 12.20 AKENO Native, the foreground app, was\n"
+               "  heard with exactly the route 1 call; every background payload with that call was silent (audio lab v2:\n"
+               "  accepted and paced; audio lab v1 and voice 0.1.0: accepted). The blocks above reached the console's output\n"
+               "  call intact. If you heard nothing, this is the background-process limit, not lost or broken samples.\n");
+        any = 1;
+    }
+    if (s->probe_verdict == 0 || s->paced == 0) {
+        put(k, "- The output port took blocks without an audio clock consuming them (the calls returned at once): the console\n"
+               "  did not play these samples at playback speed.\n");
+        any = 1;
+    }
+    if (s->mic_refused_kind == PV_REFUSAL_PROCESS) {
+        put(k, "- The microphone refusal 0x809B0081 is the code background payloads also get from scePadOpen. AKENO Native,\n"
+               "  the foreground app, opened the microphone with this same call on 12.20 (16 kHz, 256 frames). To talk, use\n"
+               "  AKENO Native's voice (no game running) or a phone/PC in the party.\n");
+        any = 1;
+    }
+    if (s->out_refusal == PV_REFUSAL_RESOURCE || pv_refusal_of(s->test_open_rc, 0) == PV_REFUSAL_RESOURCE) {
+        put(k, "- Route 2 (your user's port) was refused with 0x80260011 (PS4 SDK name SYSTEM_RESOURCE): this process has no\n"
+               "  audio port for your user. Only route 1 opens.\n");
+        any = 1;
+    }
+    pv_refusal_kind out_kind = pv_refusal_of(s->out_rc, 0);
+    if (s->out == PV_OUT_FAILED && out_kind != PV_REFUSAL_RESOURCE && out_kind != PV_REFUSAL_NONE) {
+        put(k, "- The speaker route %d was not opened (0x%08X: %s): nothing could be played.\n", s->route, (unsigned)s->out_rc,
+            pv_refusal_meaning(out_kind));
+        any = 1;
+    }
+    if (s->mic_refused_rc && s->mic_refused_kind != PV_REFUSAL_PROCESS) {
+        put(k, "- The microphone was refused (0x%08X: %s). The same call is not repeated until a game starts or ends.\n",
+            (unsigned)s->mic_refused_rc, pv_refusal_meaning(s->mic_refused_kind));
+        any = 1;
+    }
+    if (s->test_state == PV_TEST_NOT_PLAYED) {
+        put(k, "- The last test sound was NOT played: the port of route %d did not open.\n", s->test_route);
+        any = 1;
+    }
+    if (s->test_state == PV_TEST_SUBMITTED && s->test_verified_blocks == 0) {
+        put(k, "- The test sound reached the output call, but its 880 Hz tone was not measured in the submitted blocks.\n");
+        any = 1;
+    }
+    if (s->process_kind == AKN_CTX_FOREGROUND) {
+        put(k, "- This service ran as the foreground application: the background-process limit does not apply here.\n");
+        any = 1;
+    }
+    if (s->heartbeat_gap_max_ms > 2000) {
+        put(k, "- The system paused this process for up to %d ms.\n", s->heartbeat_gap_max_ms);
+        any = 1;
+    }
+    if (!any) put(k, "- Nothing unusual was measured.\n");
+    put(k, "\n");
+}
+
 size_t pv_report_text(const pv_status *s, char *out, size_t len) {
     sink k = { out, len, 0 };
     if (len) out[0] = '\0';
-    char c1[32], c2[32], summary[160];
+    char c1[32], c2[32];
     time_t now = time(NULL);
     struct tm tm;
     gmtime_r(&now, &tm);
     char when[40];
     strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S UTC", &tm);
-    pv_status_summary(s, summary, sizeof(summary));
     const pv_route *route = pv_route_get(s->route);
 
     put(&k, "AKENO Party Voice report (EXPERIMENTAL)\n");
     put(&k, "Service:   %s %s, build %s\n", PV_APP, PV_VERSION, PV_BUILD_ID);
     put(&k, "Written:   %s, %llu s after the service started\n", when, (unsigned long long)(s->uptime_ms / 1000u));
     put(&k, "Platform:  %s\n", s->platform);
+    put(&k, "Process:   %s\n", s->process_detail[0] ? s->process_detail : "unknown");
     put(&k, "Privacy:   states, codes and counts only - no names, no IDs, no voice pass, no audio, no messages\n\n");
 
-    put(&k, "[Summary]\n");
-    put(&k, "Now:                      %s\n", summary);
-    put(&k, "NETWORK CONNECTED:        %s%s\n", yes(pv_evidence_network(s)),
-        pv_evidence_network(s) ? " - the gateway accepted the voice pass and sent the participants" : "");
-    put(&k, "MICROPHONE TRANSMITTING:  %s%s\n", yes(pv_evidence_mic(s)),
-        pv_evidence_mic(s) ? " - frames with sound were captured, encoded and sent; whether your friend hears you is THEIR answer" : "");
-    if (pv_evidence_mic(s) && s->gateway_self_level_max > 0)
-        put(&k, "                          the gateway decoded your audio (level up to %d of 100)\n", s->gateway_self_level_max);
-    put(&k, "SPEAKER OUTPUT ACTIVE:    %s%s\n", yes(pv_evidence_speaker(s)),
-        pv_evidence_speaker(s) ? " - incoming audio was decoded and the output port took it; whether you HEARD it is YOUR answer" : "");
-    if (s->last_failure[0]) put(&k, "Last problem:             %s\n", s->last_failure);
-    put(&k, "\n");
+    summary_section(&k, s);
+    diagnosis_section(&k, s);
 
     put(&k, "[Network]\n");
     put(&k, "State:                    %s%s%s\n", pv_net_state_name(s->net), s->net_error[0] ? " - " : "", s->net_error);
@@ -165,12 +300,25 @@ size_t pv_report_text(const pv_status *s, char *out, size_t len) {
     put(&k, "\n");
 
     put(&k, "[Microphone]\n");
-    put(&k, "Turned on by you:         %s now (it is never opened without that); opened %lu time%s in this run\n", yes(s->mic_enabled),
+    put(&k, "Turned on by you:         %s now (it is never opened without that); turned on %lu time%s in this run\n", yes(s->mic_enabled),
         s->mic_opens, s->mic_opens == 1 ? "" : "s");
-    code(c1, sizeof(c1), s->mic_rc);
-    put(&k, "State:                    %s, open result %s\n", pv_mic_state_name(s->mic), c1);
+    if (s->mic_rc) {
+        code(c1, sizeof(c1), s->mic_rc);
+        put(&k, "State:                    %s (this voice chat), open result %s (%s)\n", pv_mic_state_name(s->mic), c1, pv_refusal_name(s->mic_refusal));
+    } else {
+        put(&k, "State:                    %s (this voice chat)\n", pv_mic_state_name(s->mic));
+    }
+    if (s->mic_refused_rc) {
+        code(c1, sizeof(c1), s->mic_refused_rc);
+        put(&k, "Last refusal in this run: %s (%s) - %s\n", c1, pv_refusal_name(s->mic_refused_kind), pv_refusal_meaning(s->mic_refused_kind));
+    }
     put(&k, "Library / port:           %s\n", s->mic_detail[0] ? s->mic_detail : "(not opened)");
-    put(&k, "Opens:                    %lu; rate %u Hz, S16 mono, %d frames per read\n", s->mic_opens, s->mic_rate, PV_MIC_GRAIN);
+    put(&k, "Open calls:               %lu (of at most %d per run), %lu successful; tried last time: %s\n", s->mic_open_calls, PV_MIC_OPEN_LIMIT,
+        s->mic_open_ok, s->mic_attempts[0] ? s->mic_attempts : "-");
+    put(&k, "Not repeated:             %lu turn-on request%s answered from a known refusal (same user, same running app)\n", s->mic_avoided,
+        s->mic_avoided == 1 ? "" : "s");
+    if (s->mic_rate) put(&k, "Format:                   %u Hz, S16 mono, %d frames per read\n", s->mic_rate, PV_MIC_GRAIN);
+    else put(&k, "Format:                   - (never opened in this run)\n");
     code(c2, sizeof(c2), s->mic_last_read_rc);
     put(&k, "Reads:                    %lu, failed %lu (last failure %s)\n", s->mic_reads, s->mic_read_errors, s->mic_read_errors ? c2 : "none");
     put(&k, "Captured 20 ms frames:    %lu, with sound (not exact zeros) %lu\n", s->mic_frames, s->mic_nonzero_frames);
@@ -186,24 +334,54 @@ size_t pv_report_text(const pv_status *s, char *out, size_t len) {
     put(&k, "[Speakers]\n");
     code(c1, sizeof(c1), s->out_rc);
     put(&k, "Route:                    %d - %s\n", s->route, route ? route->label : "?");
-    put(&k, "State:                    %s, open result %s\n", pv_out_state_name(s->out), c1);
+    put(&k, "State:                    %s, open result %s (%s)\n", pv_out_state_name(s->out), c1, pv_refusal_name(s->out_refusal));
     put(&k, "Port:                     %s\n", s->out_detail[0] ? s->out_detail : "(not opened)");
-    put(&k, "Port opens:               %lu\n", s->out_opens);
+    put(&k, "Port opens:               %lu; not repeated after a refusal: %lu\n", s->out_opens, s->out_avoided);
+    code(c2, sizeof(c2), s->probe_rc);
+    if (s->probe_verdict != -2)
+        put(&k, "Clock probe:              %d silent blocks back to back; calls 2..n took %.1f ms for %.1f ms of audio -> %s%s%s\n", s->probe_blocks,
+            s->probe_ms, s->probe_blocks > 1 ? (s->probe_blocks - 1) * (double)PV_OUT_GRAIN * 1000.0 / PV_OUT_RATE : 0.0,
+            clock_text(s->probe_verdict), s->probe_rc ? ", output failed " : "", s->probe_rc ? c2 : "");
+    else
+        put(&k, "Clock probe:              not run (no port was opened)\n");
     put(&k, "Decoded frames:           %lu (with sound %lu), concealed %lu, silence %lu, queued for output %lu\n", s->decoded,
         s->decoded_nonzero, s->concealed, s->silent_frames, s->queued_frames);
     code(c2, sizeof(c2), s->out_last_rc);
-    put(&k, "Output submissions:       %lu, failed %lu (last failure %s), blocks with sound %lu\n", s->out_calls, s->out_errors,
-        s->out_errors ? c2 : "none", s->out_nonzero_blocks);
-    put(&k, "Timing per call:          min %.1f / avg %.1f / max %.1f ms -> %s\n", s->out_call_ms_min, s->out_call_ms_avg, s->out_call_ms_max,
-        s->paced == 1 ? "consumed at playback speed (an audio clock took the blocks)"
-        : s->paced == 0 ? "NOT paced (the calls returned at once: probably not played)"
-                        : "too few calls to judge");
+    put(&k, "Output submissions:       %lu, failed %lu (last failure %s); accepted blocks with sound %lu (party speech %lu, loudest %d%%)\n",
+        s->out_calls, s->out_errors, s->out_errors ? c2 : "none", s->out_nonzero_blocks, s->out_speech_blocks, s->out_speech_peak);
+    if (s->out_calls)
+        put(&k, "Timing:                   %.0f of %.0f ms inside output calls 2..n (per call min %.1f / avg %.1f / max %.1f ms) -> %s\n",
+            s->out_blocked_ms, s->out_audio_ms, s->out_call_ms_min, s->out_call_ms_avg, s->out_call_ms_max, clock_text(s->paced));
+    else
+        put(&k, "Timing:                   not measured (no output call in this run)\n");
+    put(&k, "Real-time guard:          slept %lu time%s because the port ran ahead of real time (0 = the port paced every block)\n",
+        s->out_self_sleeps, s->out_self_sleeps == 1 ? "" : "s");
     put(&k, "Buffer underruns:         %lu rebuffers, %lu late packets, %lu dropped (too much delay)\n", s->underruns, s->late, s->overflow);
     put(&k, "Volume / deafened:        %d%% / %s; level played now %d of 100\n", s->out_volume, yes(s->deafened), s->rx_level);
-    if (s->test_sounds) {
+    put(&k, "\n");
+
+    put(&k, "[Test sound - %lu requested in this run]\n", s->test_sounds);
+    if (s->test_state == PV_TEST_NONE) {
+        put(&k, "Last:                     none yet (AKENO NETWORK > Voice chat > Speaker route > Play the test sound)\n");
+    } else {
         code(c1, sizeof(c1), s->test_open_rc);
-        put(&k, "Test sounds:              %lu; last outside voice: route %d, open %s, %lu blocks, %s\n", s->test_sounds, s->test_route, c1,
-            s->test_calls, s->test_paced == 1 ? "paced" : s->test_paced == 0 ? "NOT paced" : "timing unknown");
+        put(&k, "Route / beeps:            %d / %d beep%s of %d Hz, -20 dBFS at 100 %% volume, %s\n", s->test_route, s->test_route,
+            s->test_route == 1 ? "" : "s", 880, s->test_in_voice ? "mixed into the voice output" : "on a port of its own (outside voice)");
+        put(&k, "Pipeline:                 generated -> Opus %lu packets -> jitter buffer -> decoded %lu -> volume -> stereo -> output call\n",
+            s->test_encoded, s->test_decoded);
+        if (!s->test_in_voice) put(&k, "Port:                     open result %s; %s\n", c1, s->test_detail[0] ? s->test_detail : "-");
+        switch (s->test_state) {
+        case PV_TEST_PLAYING: put(&k, "Result:                   playing\n"); break;
+        case PV_TEST_NOT_PLAYED: put(&k, "Result:                   NOT PLAYED - the output port did not open; nothing was sent to the console\n"); break;
+        case PV_TEST_OUTPUT_FAILED: put(&k, "Result:                   NOT SUBMITTED - the output call accepted no block of the tone\n"); break;
+        default:
+            put(&k, "Result:                   SUBMITTED - %lu accepted blocks carried the tone; %lu of them measured at 880 Hz +-5 %% in the\n"
+                    "                          buffer handed to the console (%d..%d Hz, left = right), peak %d%% of full scale\n",
+                s->test_tone_blocks, s->test_verified_blocks, s->test_hz_min, s->test_hz_max, s->test_peak_percent);
+            put(&k, "Timing:                   %s\n", clock_text(s->test_paced));
+            put(&k, "Audible:                  NOT CONFIRMED - only if you heard %d beep%s\n", s->test_route, s->test_route == 1 ? "" : "s");
+            break;
+        }
     }
     put(&k, "\n");
 
@@ -217,12 +395,12 @@ size_t pv_report_text(const pv_status *s, char *out, size_t len) {
     put(&k, "\n");
 
     put(&k, "[Your answers - fill in and send back]\n");
-    put(&k, "I joined the party (my friend saw me in voice):        ____\n");
-    put(&k, "I hear my friend (TV / headset on the DualSense / USB): ____\n");
-    put(&k, "My friend hears me:                                   ____\n");
-    put(&k, "Speaker route(s) I heard the test sound on (1-4):      ____\n");
-    put(&k, "Everything still works after returning to the game:   ____\n");
-    put(&k, "Game sound stayed while AKENO voice played:            ____\n");
+    put(&k, "AUDIO AUDIBLE - test sound (route 1, one beep) on the home screen:     ____ (TV / DualSense headset / USB headset)\n");
+    put(&k, "AUDIO AUDIBLE - test sound while a game runs:                          ____\n");
+    put(&k, "AUDIO AUDIBLE - I hear my friend:                                      ____\n");
+    put(&k, "REMOTE USER HEARD MICROPHONE - my friend hears me:                     ____\n");
+    put(&k, "My friend saw me in the voice chat:                                    ____\n");
+    put(&k, "Game still controllable and its sound kept (after L2+R3 several times): ____\n");
     return k.used;
 }
 

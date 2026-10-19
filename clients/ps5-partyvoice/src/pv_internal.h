@@ -15,6 +15,15 @@
 #define PV_TX_QUEUE 12          /* 240 ms of microphone packets waiting for the network */
 #define PV_THREAD_STACK (1024 * 1024) /* libopus keeps its work buffers on the stack (VAR_ARRAYS); TLS needs room too */
 #define PV_NOTES 8
+#define PV_REFUSALS 8
+
+/* A console refusal, remembered so the same call is not repeated in the same situation. */
+typedef struct {
+    int what;          /* 0 the microphone, 1..PV_ROUTES an output route */
+    int32_t user;      /* the user the call was made for (0xFF: the system user) */
+    int32_t bigapp;    /* the running app when it was refused (<= 0: none) */
+    int32_t rc;
+} pv_refusal;
 
 typedef struct {
     uint8_t data[AKN_VOICE_MAX_PACKET + 3];
@@ -31,6 +40,7 @@ typedef struct pv_session {
     int have_net, have_play, have_cap;
     atomic_int net_done, play_done, cap_done;
     atomic_int cap_run;         /* the capture thread runs while this is 1 */
+    int32_t cap_user;           /* the foreground user the microphone is opened for */
     /* lock: what the threads exchange */
     pthread_mutex_t lock;
     akn_jitter jitter;
@@ -56,6 +66,8 @@ struct pv_engine {
     uint64_t started_us, last_tick_us, last_game_poll_us, last_report_us, last_connected_tick_us;
     int report_dirty;
     int out_initialized;
+    pv_refusal refusals[PV_REFUSALS];
+    int refusal_count;
     char notes[PV_NOTES][200];
     int note_count;
     uint64_t last_people_note_us;
@@ -83,5 +95,11 @@ void pv_sleep_ms(unsigned ms);
 
 /* 1: the console should be heard by the others right now (microphone on, open, not muted). */
 int pv_transmitting_locked(const pv_engine *e);
+
+/* The refusal of this call in this situation (same device, user and running app), or NULL. */
+const pv_refusal *pv_refusal_find_locked(const pv_engine *e, int what, int32_t user);
+void pv_refusal_remember_locked(pv_engine *e, int what, int32_t user, int32_t rc);
+/* This process's context (read only), into e->st (e->lock not held). */
+void pv_refresh_process(pv_engine *e);
 
 #endif

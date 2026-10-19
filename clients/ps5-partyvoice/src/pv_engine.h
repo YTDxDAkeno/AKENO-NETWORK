@@ -6,9 +6,15 @@
  *   network   voice pass from the AKENO server through the daemon (IPC 3), TLS WebSocket to the
  *             gateway on the server's own host, hello, mute/deafen, received Opus into the jitter
  *             buffer, queued Opus out; reconnects with a new pass after a loss
- *   playback  jitter buffer -> Opus decode / concealment -> volume -> sceAudioOut (the chosen route);
- *             paced by the output call when it blocks, else by the clock
- *   capture   only after the user turned the microphone on: sceAudioIn -> 48 kHz -> gain -> Opus
+ *   playback  jitter buffer -> Opus decode / concealment -> (+ test sound) -> volume -> sceAudioOut
+ *             (the chosen route). The port is probed once (silent blocks back to back: does an audio
+ *             clock consume them?) and then paces the thread by blocking; the thread only sleeps
+ *             when the port runs more than a few blocks ahead of real time (it discards)
+ *   capture   only after the user turned the microphone on: sceAudioIn -> 48 kHz -> gain -> Opus.
+ *             A refusal is classified, and the same refused call is not repeated in the same
+ *             situation (same user, same running app)
+ *   test      N beeps of 880 Hz on route N, Opus-encoded and decoded by the same code as party
+ *             speech, mixed in before the volume; every submitted block is checked for the tone
  *
  * Every audio boundary is counted: frames read and nonzero, packets encoded and sent, packets
  * received and decoded, output calls and their timing. A successful call is never reported as
@@ -20,6 +26,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "context.h"
 #include "pv_backend.h"
 #include "voice_proto.h"
 
@@ -39,6 +46,42 @@ typedef enum {
     PV_MIC_UNAVAILABLE, /* no microphone library or function */
     PV_MIC_FAILED       /* opening or reading failed: see mic_rc */
 } pv_mic_state;
+
+/* Why the console refused the microphone (or an output port), from its code. The meanings of the
+ * 0x8026xxxx codes are the PS4 SDK names that emulators (shadPS4) carry; 0x809B0081 has no public
+ * meaning: it is what background payloads get from scePadOpen on 12.20 and 13.60, and what this
+ * background service got from sceAudioInOpen on 12.20, while AKENO Native, the foreground app,
+ * opened the microphone with the same call. */
+typedef enum {
+    PV_REFUSAL_NONE = 0,
+    PV_REFUSAL_PROCESS,   /* 0x809B0081: refused to this process (background payload) */
+    PV_REFUSAL_RATE,      /* 0x80260103 (audio in) / 0x80260008 (audio out): sample rate not accepted */
+    PV_REFUSAL_ARGUMENT,  /* another argument code of the library (0x802601xx / 0x8026000x) */
+    PV_REFUSAL_RESOURCE,  /* 0x80260011 SYSTEM_RESOURCE: no port for this user (route 2 on 12.20) */
+    PV_REFUSAL_BUSY,      /* port full / busy: someone else holds it; may change, so it may be tried again */
+    PV_REFUSAL_NO_USER,   /* no foreground user (user service) */
+    PV_REFUSAL_NO_LIBRARY,/* libSceAudioIn.sprx or a function missing */
+    PV_REFUSAL_OTHER
+} pv_refusal_kind;
+
+pv_refusal_kind pv_refusal_of(int32_t rc, int microphone);
+const char *pv_refusal_name(pv_refusal_kind k);     /* "process", "rate", ... for the status document */
+const char *pv_refusal_meaning(pv_refusal_kind k);  /* one sentence for the report */
+/* 1 when the refusal may go away by itself (the call may be repeated later in the same situation). */
+int pv_refusal_transient(pv_refusal_kind k);
+
+/* Does an audio clock consume the port? From the time spent inside output calls 2..n against the
+ * audio those calls carried: 1 yes (the calls block about one block each), 0 no (they return at
+ * once: the samples are not played at playback speed), -1 too few calls or in between. */
+int pv_clock_verdict(double blocked_ms, double audio_ms);
+
+typedef enum {
+    PV_TEST_NONE = 0,
+    PV_TEST_PLAYING,
+    PV_TEST_SUBMITTED,      /* the tone reached the output call in nonzero blocks that were accepted */
+    PV_TEST_NOT_PLAYED,     /* the route's port could not be opened: nothing was played */
+    PV_TEST_OUTPUT_FAILED   /* the port took no tone block */
+} pv_test_state;
 
 typedef enum {
     PV_OUT_OFF = 0,
@@ -80,6 +123,13 @@ typedef struct {
     unsigned mic_rate;
     char mic_detail[160];
     unsigned long mic_opens, mic_reads, mic_read_errors, mic_frames, mic_nonzero_frames, encoded, encode_errors;
+    unsigned long mic_open_calls;        /* sceAudioInOpen calls in this run (each configuration counts) */
+    unsigned long mic_open_ok;           /* of them successful */
+    unsigned long mic_avoided;           /* "turn on" requests answered from a known refusal, without a call */
+    pv_refusal_kind mic_refusal;         /* of the last failed open */
+    int32_t mic_refused_rc;              /* the last refusal in this run (kept across sessions, for the report) */
+    pv_refusal_kind mic_refused_kind;
+    char mic_attempts[160];              /* the last turn-on: "16000 Hz -> 0x809B0081" */
     int32_t mic_last_read_rc;
     int mic_level;                       /* 0..100 now */
     int mic_peak_percent;                /* since the microphone opened */
@@ -90,16 +140,36 @@ typedef struct {
     pv_out_state out;
     int32_t out_rc;
     char out_detail[160];
+    pv_refusal_kind out_refusal;
     unsigned long out_opens, decoded, concealed, silent_frames, decoded_nonzero, queued_frames;
     unsigned long out_calls, out_errors, out_nonzero_blocks, underruns, late, overflow;
+    unsigned long out_speech_blocks;     /* accepted blocks in which party speech had sound (after the volume) */
+    unsigned long out_avoided;           /* port opens answered from a known refusal, without a call */
+    int out_speech_peak;                 /* loudest speech sample submitted, percent of full scale */
     int32_t out_last_rc;
-    int paced;                           /* -1 unknown, 0 the calls return at once, 1 at playback speed */
+    int paced;                           /* pv_clock_verdict of the current port (-1 unknown) */
     double out_call_ms_min, out_call_ms_avg, out_call_ms_max;
+    double out_blocked_ms, out_audio_ms; /* calls 2..n: time inside the call, audio carried */
+    unsigned long out_self_sleeps;       /* the port ran ahead of real time and the thread slept */
+    /* the port clock probe: PV_PROBE_BLOCKS silent blocks back to back right after the open */
+    int probe_verdict;                   /* pv_clock_verdict, or -2 not run */
+    int probe_blocks;
+    double probe_ms;                     /* inside calls 2..n of the probe */
+    int32_t probe_rc;
     int rx_level, rx_tone_hz;
     unsigned long test_sounds;
-    int test_route;                      /* the last test sound: route, open result, calls, timing */
+    /* the last test sound */
+    pv_test_state test_state;
+    int test_route;
+    int test_in_voice;                   /* 1 mixed into the voice output, 0 on its own */
     int32_t test_open_rc;
-    unsigned long test_calls;
+    char test_detail[160];               /* the port it used (user, port type, format), or why none */
+    unsigned long test_calls;            /* accepted output calls while the tone played */
+    unsigned long test_tone_blocks;      /* accepted blocks that carried the tone (nonzero) */
+    unsigned long test_verified_blocks;  /* of them: the tone measured in the submitted buffer at 880 Hz +-5 % */
+    int test_hz_min, test_hz_max;        /* measured in the submitted buffer (left channel) */
+    int test_peak_percent;               /* loudest submitted tone sample */
+    unsigned long test_encoded, test_decoded; /* Opus packets of the tone */
     int test_paced;
 
     /* runtime */
@@ -113,6 +183,9 @@ typedef struct {
     char last_failure[200];
     char backend[48];
     char platform[200];
+    /* this process (AKENO Native's context check): a background payload or the foreground app */
+    akn_context_kind process_kind;
+    char process_detail[200];
 } pv_status;
 
 typedef struct {

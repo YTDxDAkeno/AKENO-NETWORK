@@ -5,6 +5,12 @@ the foreground app. Voice while a game runs needs a process that survives the ga
 the microphone and speaker from the background. Nobody has measured that on a PS5 yet. The Voice
 Lab (`clients/ps5-voicelab`) is the measurement.
 
+> **Update 2026-10-19 (Voice Alpha 0.1.0 measured, 0.2.0):** the voice service ran on FW 12.20. It
+> answers this page's questions for the voice service: the background payload joins and decodes, its
+> system-user port accepts audio but is **not heard** (home screen and game), the foreground user's
+> ports are refused (`0x80260011`), and the microphone is refused (`0x809B0081`, the code background
+> payloads get from `scePadOpen`). Analysis: [PS5_VOICE_AUDIO_0.2.md](PS5_VOICE_AUDIO_0.2.md).
+>
 > **Update 2026-10-19 (Phase 4.3):** on the owner's decision the voice service was built before the
 > Voice Lab ran: `akeno-party-voice.elf` ([PS5_PARTY_VOICE.md](PS5_PARTY_VOICE.md)), with the Voice
 > Lab's four output variants as selectable speaker routes, a test sound per route and the same

@@ -1,5 +1,13 @@
 # PS5 audio: research, the silent tone, and audio labs v2 and v3
 
+> **Update 2026-10-19 — the background voice service.** Voice Alpha 0.1.0 (a background payload)
+> opened AKENO Native's audible output call on FW 12.20 and was not heard, on the home screen and in
+> a game; its microphone call (Native 1.1's, which opened in the foreground) returned `0x809B0081`.
+> Its "NOT paced" was an artifact of its own sleeping, not a discarded port (reproduced in
+> simulation). With audio labs v1/v2 this makes three background payloads that were accepted and
+> silent, against one foreground app that was heard with the same call: the process context
+> decides. Details and the 0.2.0 test: [PS5_VOICE_AUDIO_0.2.md](PS5_VOICE_AUDIO_0.2.md).
+
 > **Update 2026-10-17 — the foreground app is audible.** AKENO NETWORK Native 0.1
 > (`d094e62bcaf1-ps5`) ran as the foreground application on the same PS5 with 12.20, played four
 > `sceAudioOut` tone tests, and the owner heard all four
