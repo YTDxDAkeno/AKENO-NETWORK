@@ -67,7 +67,7 @@ Release build, ps5-payload-sdk v0.44, clang 18):
 
 | First Toolbox in ShellUI | `sceRegMgrGetInt_hook` | A second injection over its patch (6440 16-KiB-aligned load bases) |
 | --- | --- | --- |
-| original v0.9.0 | `+0x318e8` | **100 % accepted** — the address bytes decode as a relocatable `call rel32`; the second Toolbox silently chains to the first |
+| original v0.9.0 | `+0x318e8` | **100 % accepted** — the address bytes decode as a relocatable `call rel32`. (Phase 4 correction: the trampoline this produces does not contain the old hook address; harmless only because `sceRegMgrGetInt_hook` never calls its trampoline. See [SHELLUI_DIRECT_ENTRY.md](SHELLUI_DIRECT_ENTRY.md#why-the-relocator-change-the-pr-14-lesson)) |
 | PR #14 custom host | `+0x2ef48` | **43 % fail**, **25 % exactly "relocation failed at +6"** (decode error), the rest at +8/+9/+10 |
 
 So the same lifecycle situation is **invisible with the original host and fatal with the PR #14

@@ -64,6 +64,20 @@ static int text(const unsigned char **p, const unsigned char *end, unsigned n, c
     return 0;
 }
 
+/* With AKN_DUMP_DOCS=<dir>, every checked document is also written there as the bytes the plugin
+ * sends to onionHEN (doc-NNN.bin), for tools/onionhen/check-direct-entry.sh. */
+static void dump_encoded(const unsigned char *buf, size_t size) {
+    static int n;
+    const char *dir = getenv("AKN_DUMP_DOCS");
+    if (!dir || !*dir) return;
+    char path[512];
+    snprintf(path, sizeof(path), "%s/doc-%03d.bin", dir, n++);
+    FILE *f = fopen(path, "wb");
+    if (!f) return;
+    fwrite(buf, 1, size, f);
+    fclose(f);
+}
+
 static int decode(const onion_ui_document *doc, wdoc *w) {
     memset(w, 0, sizeof(*w));
     size_t size = 0, used = 0;
@@ -75,6 +89,7 @@ static int decode(const onion_ui_document *doc, wdoc *w) {
         return -1;
     }
     w->size = size;
+    dump_encoded(buf, size);
     const unsigned char *p = buf + ONION_UI_DOCUMENT_HEADER_SIZE, *end = buf + size;
     unsigned count = rd32(buf + 12);
     char skip[300];

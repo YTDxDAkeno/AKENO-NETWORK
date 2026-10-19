@@ -4,6 +4,10 @@ Status (2026-10-18): **source research of onionHEN v0.9.0 (`aaa4264`) and AKENO'
 results; nothing new run on a PS5.** It answers the owner's three approaches in order and says
 exactly what is achieved. German short form: [shellui/DIAGNOSE-DE.md](shellui/DIAGNOSE-DE.md).
 
+> **Phase 4 (2026-10-18):** the proposed host features (1) and (2) of Approach B are now built as
+> one experimental patch on top of v0.9.0 — the Toolbox shortcut and a game Options-menu entry open
+> AKENO's page directly. See [SHELLUI_DIRECT_ENTRY.md](SHELLUI_DIRECT_ENTRY.md). Not hardware tested.
+
 ## What is achieved, and what is not
 
 | Behaviour | Status |

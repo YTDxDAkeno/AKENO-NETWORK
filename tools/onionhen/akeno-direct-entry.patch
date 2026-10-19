@@ -1,0 +1,722 @@
+From 337141912a3a266acd98a330a5e1cd51d724dae5 Mon Sep 17 00:00:00 2001
+From: AKENO NETWORK <noreply@akeno.invalid>
+Date: Sun, 18 Oct 2026 21:32:10 +0000
+Subject: [PATCH] AKENO direct entry: open one plugin's page from the Toolbox
+ shortcut or the game options menu
+
+- OnionHEN?Plugin=<ID> (boot-URI hook) redirects to the Toolbox route like
+  OnionHEN?Cheats; the resource hook then serves that plugin's root page as
+  the Settings root, once, on a fresh dynamic page stack. Without a
+  renderable page the Toolbox root opens as before.
+- [shortcuts] toolbox_target=toolbox|<plugin ID>: the existing Toolbox
+  shortcut (L2+R3 held, Share, long Share) opens that plugin's page.
+- [game_menu] plugin_entry=none|<plugin ID>: one entry next to
+  "Check for update" in a game's options menu, opening the same URI.
+- x64 relocator: an existing jmp [rip+0]; dq hook patch (a detour of an
+  earlier injection) is relocated as one 14-byte unit, so a repeated
+  injection chains to the old hook for every layout instead of failing
+  "relocation failed at +6" for some builds.
+
+Defaults keep the upstream behaviour; config files stay compatible both ways.
+---
+ config.ini.example                            |  6 ++
+ .../libonion_detour/source/x64_relocator.cpp  | 25 +++++++++
+ .../include/onion/settings.hpp                |  6 ++
+ source/libonion_settings/source/settings.cpp  | 34 ++++++++++++
+ source/shellui/include/dynamic_ui_runtime.hpp |  7 +++
+ source/shellui/include/hooked_funcs.hpp       |  2 +
+ source/shellui/include/shellui_state.hpp      |  2 +
+ source/shellui/include/toolbox_route.hpp      | 25 +++++++++
+ source/shellui/src/dynamic_ui_runtime.cpp     | 28 ++++++++++
+ source/shellui/src/hook_boot.cpp              | 19 ++++++-
+ source/shellui/src/hook_capture.cpp           |  4 +-
+ source/shellui/src/hook_launch.cpp            | 19 +++++++
+ source/shellui/src/hook_manifest.cpp          | 21 ++++++-
+ source/util/tests/test_plugin_ui.cpp          | 35 ++++++++++++
+ source/util/tests/test_settings.cpp           | 55 +++++++++++++++++++
+ source/util/tests/test_toolbox_route.cpp      | 36 ++++++++++++
+ source/util/tests/test_x64_relocator.cpp      | 48 ++++++++++++++++
+ 17 files changed, 367 insertions(+), 5 deletions(-)
+
+diff --git a/config.ini.example b/config.ini.example
+index f58fe7d..3cc67e1 100644
+--- a/config.ini.example
++++ b/config.ini.example
+@@ -51,6 +51,9 @@ show_title_ids=false
+ # show_onionhen_options adds OnionHEN entries to the game options menu.
+ # Available values: true, false
+ show_onionhen_options=true
++# plugin_entry adds one plugin's page to the game options menu.
++# Available values: none, or a plugin ID such as AKEN00001
++plugin_entry=none
+ 
+ [rest_mode]
+ # resume_reinject_delay_seconds waits after trophy SPRX are ready,
+@@ -135,6 +138,9 @@ cheats_menu=off
+ # toolbox controls the shortcut that opens the OnionHEN Toolbox.
+ # Available values: off, l2_r3, long_share, share
+ toolbox=off
++# toolbox_target is what the toolbox shortcut opens.
++# Available values: toolbox, or a plugin ID such as AKEN00001
++toolbox_target=toolbox
+ 
+ [kstuff]
+ # autoload loads kstuff when OnionHEN starts.
+diff --git a/source/libonion_detour/source/x64_relocator.cpp b/source/libonion_detour/source/x64_relocator.cpp
+index 4ce12fc..5eb1b31 100644
+--- a/source/libonion_detour/source/x64_relocator.cpp
++++ b/source/libonion_detour/source/x64_relocator.cpp
+@@ -30,6 +30,8 @@ struct RelocatedInstruction {
+   size_t destination_size = 0;
+   BranchKind branch = BranchKind::None;
+   uint8_t condition = 0;
++  /* jmp [rip+0]; dq target — copied verbatim, see is_absolute_jump_patch. */
++  bool absolute_jump_patch = false;
+ };
+ 
+ void set_error(onion_x64_relocate_result *result,
+@@ -51,6 +53,17 @@ size_t immediate_size(const hde64s &decoded) {
+   return size;
+ }
+ 
++/* The 14-byte absolute jump of write_absolute_jump and
++ * onion_x64_build_atomic_patch: what a detour of an earlier injection leaves at
++ * a function entry. Its RIP-relative operand addresses its own last 8 bytes,
++ * so the 14 bytes are position-independent as one unit. Decoding them as
++ * jmp [rip+0] followed by the hook address as instructions makes the outcome
++ * depend on the address bytes, i.e. on the build layout. */
++bool is_absolute_jump_patch(const uint8_t *code) {
++  static constexpr uint8_t prefix[] = {0xff, 0x25, 0, 0, 0, 0};
++  return std::memcmp(code, prefix, sizeof(prefix)) == 0;
++}
++
+ bool is_rip_relative_memory(const hde64s &decoded) {
+   return (decoded.flags & F_MODRM) && decoded.modrm_mod == 0 &&
+          decoded.modrm_rm == 5 && decoded.p_67 == 0;
+@@ -246,6 +259,14 @@ extern "C" bool onion_x64_relocate(
+     RelocatedInstruction &instruction = instructions[instruction_count];
+     instruction.source_offset = source_size;
+     instruction.destination_offset = destination_size;
++    if (is_absolute_jump_patch(source + source_size)) {
++      instruction.absolute_jump_patch = true;
++      instruction.destination_size = kAbsoluteJumpSize;
++      source_size += kAbsoluteJumpSize;
++      destination_size += kAbsoluteJumpSize;
++      ++instruction_count;
++      continue;
++    }
+     const unsigned decoded_size =
+         hde64_disasm(source + source_size, &instruction.decoded);
+     if (decoded_size == 0 || (instruction.decoded.flags & F_ERROR)) {
+@@ -272,6 +293,10 @@ extern "C" bool onion_x64_relocate(
+   for (size_t i = 0; i < instruction_count; ++i) {
+     const RelocatedInstruction &instruction = instructions[i];
+     uint8_t *output = destination + instruction.destination_offset;
++    if (instruction.absolute_jump_patch) {
++      std::memcpy(output, source + instruction.source_offset, kAbsoluteJumpSize);
++      continue;
++    }
+     if (instruction.branch == BranchKind::None) {
+       std::memcpy(output, source + instruction.source_offset,
+                   instruction.decoded.len);
+diff --git a/source/libonion_settings/include/onion/settings.hpp b/source/libonion_settings/include/onion/settings.hpp
+index 2698e5e..fa67eaf 100644
+--- a/source/libonion_settings/include/onion/settings.hpp
++++ b/source/libonion_settings/include/onion/settings.hpp
+@@ -297,6 +297,9 @@ struct Settings {
+   // [home_screen], [game_menu]
+   bool display_tids = false;
+   bool onionhen_game_opts = true;
++  /* A plugin ID: adds that plugin's page to the game options menu. Empty =
++   * none, the upstream behaviour. */
++  std::string game_menu_plugin_entry;
+ 
+   // [cooling]
+   bool enable_fan_speed = false;
+@@ -327,6 +330,9 @@ struct Settings {
+   // [shortcuts]
+   int cheats_shortcut_opt = 0;
+   int toolbox_shortcut_opt = 0;
++  /* A plugin ID: the Toolbox shortcut opens that plugin's page instead of the
++   * Toolbox root. Empty = the Toolbox, the upstream behaviour. */
++  std::string toolbox_shortcut_target;
+ 
+   // [kstuff]
+   // Load the embedded/override kstuff payload when OnionHEN starts.
+diff --git a/source/libonion_settings/source/settings.cpp b/source/libonion_settings/source/settings.cpp
+index d9bcb8e..4d4f293 100644
+--- a/source/libonion_settings/source/settings.cpp
++++ b/source/libonion_settings/source/settings.cpp
+@@ -723,6 +723,26 @@ const char *toolbox_shortcut_name(int v) {
+ 
+ std::string bool_text(bool value) { return value ? "true" : "false"; }
+ 
++/* A plugin ID (9 letters or digits, the plugin manager's rule) or the word
++ * meaning "no plugin" (empty); anything else keeps the default. */
++std::string parse_plugin_target(const char *s, const char *none_word,
++                                const std::string &def) {
++  if (!s)
++    return def;
++  if (streq_ci(s, none_word))
++    return {};
++  if (std::strlen(s) != 9)
++    return def;
++  for (const char *c = s; *c; ++c)
++    if (!std::isalnum(static_cast<unsigned char>(*c)))
++      return def;
++  return s;
++}
++
++std::string plugin_target_text(const std::string &id, const char *none_word) {
++  return id.empty() ? std::string(none_word) : id;
++}
++
+ bool apply_parser(IniParser *parser, Settings *out) {
+   const int version = atoi_def(ini_get(parser, "meta.schema_version"), -1);
+   if (version != kSettingsSchemaVersion) {
+@@ -746,6 +766,9 @@ bool apply_parser(IniParser *parser, Settings *out) {
+   out->onionhen_game_opts =
+       parse_bool(ini_get(parser, "game_menu.show_onionhen_options"),
+                  out->onionhen_game_opts);
++  out->game_menu_plugin_entry =
++      parse_plugin_target(ini_get(parser, "game_menu.plugin_entry"), "none",
++                          out->game_menu_plugin_entry);
+   out->rest_mode_delay_seconds = static_cast<uint64_t>(parse_int_range(
+       ini_get(parser, "rest_mode.resume_reinject_delay_seconds"),
+       static_cast<int>(out->rest_mode_delay_seconds), kRestModeDelayMinSeconds,
+@@ -812,6 +835,9 @@ bool apply_parser(IniParser *parser, Settings *out) {
+   out->toolbox_shortcut_opt =
+       parse_toolbox_shortcut(ini_get(parser, "shortcuts.toolbox"),
+                              out->toolbox_shortcut_opt);
++  out->toolbox_shortcut_target =
++      parse_plugin_target(ini_get(parser, "shortcuts.toolbox_target"),
++                          "toolbox", out->toolbox_shortcut_target);
+   out->kstuff_autoload =
+       parse_bool(ini_get(parser, "kstuff.autoload"), out->kstuff_autoload);
+   return true;
+@@ -906,6 +932,10 @@ std::string settings_serialize(const Settings &in) {
+   b += "# show_onionhen_options adds OnionHEN entries to the game options menu.\n";
+   b += "# Available values: true, false\n";
+   b += "show_onionhen_options=" + bool_text(in.onionhen_game_opts) + "\n";
++  b += "# plugin_entry adds one plugin's page to the game options menu.\n";
++  b += "# Available values: none, or a plugin ID such as AKEN00001\n";
++  b += "plugin_entry=" + plugin_target_text(in.game_menu_plugin_entry, "none") +
++       "\n";
+   b += "\n";
+   b += "[rest_mode]\n";
+   b += "# resume_reinject_delay_seconds waits after trophy SPRX are ready,\n";
+@@ -1005,6 +1035,10 @@ std::string settings_serialize(const Settings &in) {
+   b += "# Available values: off, l2_r3, long_share, share\n";
+   b += "toolbox=" + std::string(toolbox_shortcut_name(in.toolbox_shortcut_opt)) +
+        "\n";
++  b += "# toolbox_target is what the toolbox shortcut opens.\n";
++  b += "# Available values: toolbox, or a plugin ID such as AKEN00001\n";
++  b += "toolbox_target=" +
++       plugin_target_text(in.toolbox_shortcut_target, "toolbox") + "\n";
+   b += "\n";
+   b += "[kstuff]\n";
+   b += "# autoload loads kstuff when OnionHEN starts.\n";
+diff --git a/source/shellui/include/dynamic_ui_runtime.hpp b/source/shellui/include/dynamic_ui_runtime.hpp
+index d4c82f2..aa1d6c6 100644
+--- a/source/shellui/include/dynamic_ui_runtime.hpp
++++ b/source/shellui/include/dynamic_ui_runtime.hpp
+@@ -46,6 +46,13 @@ void append_plugin_links(
+     const std::vector<PluginSettingsLink> &settings,
+     const std::vector<std::string> &matched_link_ids);
+ bool render_resource(std::string_view resource, std::string &out_xml);
++/* Direct entry (OnionHEN?Plugin=<ID>): render the root page of `plugin_id`'s
++ * contribution as the first page of a fresh dynamic stack, because it becomes
++ * the Settings root. False, with nothing changed, when the plugin has no
++ * renderable root page. */
++bool render_plugin_root(std::string_view plugin_id, std::string &out_xml);
++/** The title of `plugin_id`'s root settings link; empty when it has none. */
++std::string plugin_root_title(std::string_view plugin_id);
+ DispatchResult dispatch_control(std::string_view control_id,
+                                 std::string_view value);
+ /** Resolve the current value of the active page's control by its XML id. */
+diff --git a/source/shellui/include/hooked_funcs.hpp b/source/shellui/include/hooked_funcs.hpp
+index 3977e8a..e1fb891 100644
+--- a/source/shellui/include/hooked_funcs.hpp
++++ b/source/shellui/include/hooked_funcs.hpp
+@@ -386,6 +386,8 @@ MonoString* GetString(MonoString* str);
+ int ItemzLaunchByUri(const char* uri);
+ void GoToHome();
+ void GoToURI(const char* uri);
++/* Opens what [shortcuts] toolbox_target names: the Toolbox, or a plugin's page. */
++void GoToToolboxShortcutTarget();
+ bool Get_Running_App_TID(std::string& title_id, int& BigAppid);
+ void generate_cheats_xml(std::string &new_xml, std::string& not_open_tid, bool running_as_debug_settings, bool show_while_not_open);
+ #include <onion/proc_query.h>
+diff --git a/source/shellui/include/shellui_state.hpp b/source/shellui/include/shellui_state.hpp
+index 1ed361b..9aaf78f 100644
+--- a/source/shellui/include/shellui_state.hpp
++++ b/source/shellui/include/shellui_state.hpp
+@@ -22,6 +22,8 @@ struct ToolboxUiState {
+ 
+   bool cheats_shortcut_activated = false;
+   bool cheats_shortcut_activated_not_open = false;
++  /* Plugin whose root page the next Settings root shows (OnionHEN?Plugin=). */
++  std::string direct_plugin_id;
+ 
+   bool is_game_open = true;
+   bool is_current_game_open = true;
+diff --git a/source/shellui/include/toolbox_route.hpp b/source/shellui/include/toolbox_route.hpp
+index 472a1bb..cf15213 100644
+--- a/source/shellui/include/toolbox_route.hpp
++++ b/source/shellui/include/toolbox_route.hpp
+@@ -141,6 +141,31 @@ inline bool valid_external_plugin_id(std::string_view id) {
+   return true;
+ }
+ 
++/* Direct entry into one plugin's pages: the boot-URI hook redirects
++ * "OnionHEN?Plugin=<ID>" to the Toolbox route (like OnionHEN?Cheats) and the
++ * resource hook then serves that plugin's root page as the Settings root. */
++inline constexpr std::string_view kPluginPageUriPrefix = "OnionHEN?Plugin=";
++
++/** The plugin ID of an "OnionHEN?Plugin=<ID>" URI; empty for any other URI. */
++inline std::string_view parse_plugin_page_uri(std::string_view uri) {
++  if (!uri.starts_with(kPluginPageUriPrefix))
++    return {};
++  const std::string_view id = uri.substr(kPluginPageUriPrefix.size());
++  return valid_external_plugin_id(id) ? id : std::string_view{};
++}
++
++inline std::string plugin_page_uri(std::string_view plugin_id) {
++  return std::string(kPluginPageUriPrefix) + std::string(plugin_id);
++}
++
++/** A pending direct entry replaces only the Settings root the redirect opens. */
++inline bool direct_plugin_takes_resource(std::string_view resource,
++                                         std::string_view debug_settings_xml,
++                                         std::string_view pending_plugin_id) {
++  return !pending_plugin_id.empty() && !debug_settings_xml.empty() &&
++         resource == debug_settings_xml;
++}
++
+ inline bool valid_sprx_config_id(std::string_view id) {
+   if (id.empty() || id.size() >= 32)
+     return false;
+diff --git a/source/shellui/src/dynamic_ui_runtime.cpp b/source/shellui/src/dynamic_ui_runtime.cpp
+index 44dada9..caf8cef 100644
+--- a/source/shellui/src/dynamic_ui_runtime.cpp
++++ b/source/shellui/src/dynamic_ui_runtime.cpp
+@@ -133,6 +133,34 @@ bool render_resource(std::string_view resource, std::string &out_xml) {
+   return true;
+ }
+ 
++bool render_plugin_root(std::string_view plugin_id, std::string &out_xml) {
++  const std::vector<PluginSettingsLink> links = plugin_settings_links();
++  const auto link = std::find_if(links.begin(), links.end(), [&](const auto &l) {
++    return l.plugin_id == plugin_id;
++  });
++  if (link == links.end()) return false;
++
++  RuntimeState &runtime = state();
++  std::lock_guard<std::mutex> lock(runtime.mutex);
++  std::string page_id;
++  const plugin_ui::ContributionSnapshot *entry =
++      resolve_resource(runtime.snapshot, link->resource, &page_id);
++  if (!entry || !entry->document || entry->document->plugin_id != plugin_id)
++    return false;
++  RenderResult rendered = render_page(*entry->document, page_id, runtime.profile);
++  if (rendered.status != RenderStatus::Ok) return false;
++  out_xml = std::move(rendered.xml);
++  runtime.page_stack.clear();
++  runtime.page_stack.push_back({*entry, std::move(page_id)});
++  return true;
++}
++
++std::string plugin_root_title(std::string_view plugin_id) {
++  for (const PluginSettingsLink &link : plugin_settings_links())
++    if (link.plugin_id == plugin_id) return link.title;
++  return {};
++}
++
+ bool resolve_control_value(std::string_view xml_control_id,
+                            std::string &out_value) {
+   RuntimeState &runtime = state();
+diff --git a/source/shellui/src/hook_boot.cpp b/source/shellui/src/hook_boot.cpp
+index 3af9471..3e8375e 100644
+--- a/source/shellui/src/hook_boot.cpp
++++ b/source/shellui/src/hook_boot.cpp
+@@ -15,6 +15,7 @@
+ #include <cstring>
+ 
+ #include "shellui_state.hpp"
++#include "toolbox_route.hpp"
+ #include <onion/platform.h>
+ 
+ std::string Mono_to_String(MonoString *str);
+@@ -54,10 +55,26 @@ bool handle_uri_boot_common(MonoString* uri, int opt, MonoString* titleIdForBoot
+       LOG_DEBUG("HomeUI top-nav OnionHEN URI detected");
+       return true;
+     }
++    else if (const std::string_view plugin_id =
++                 toolbox::parse_plugin_page_uri(uri_string);
++             !plugin_id.empty()) {
++      LOG_DEBUG("plugin page URI detected: %.*s",
++                static_cast<int>(plugin_id.size()), plugin_id.data());
++      g_ui.direct_plugin_id = std::string(plugin_id);
++      return true;
++    }
+ 
+     return false; // No redirect needed
+   }
+   
++void GoToToolboxShortcutTarget() {
++  if (!g_settings.toolbox_shortcut_target.empty()) {
++    GoToURI(toolbox::plugin_page_uri(g_settings.toolbox_shortcut_target).c_str());
++    return;
++  }
++  GoToURI(shellui_debug_settings_toolbox_uri());
++}
++
+   bool uri_boot_hook(MonoString* uri, int opt, MonoString* titleIdForBootAction) {
+     if (!shellui_hooks_are_ready())
+       return boot_orig ? boot_orig(uri, opt, titleIdForBootAction) : false;
+@@ -230,7 +247,7 @@ bool handle_uri_boot_common(MonoString* uri, int opt, MonoString* titleIdForBoot
+   
+       if (toolbox_sc_activated) {
+         LOG_DEBUG("Toolbox Shortcut Activated");
+-        GoToURI(shellui_debug_settings_toolbox_uri());
++        GoToToolboxShortcutTarget();
+         result.Buttons = None; // Clear the Select button to prevent triggering other actions
+       }
+     }
+diff --git a/source/shellui/src/hook_capture.cpp b/source/shellui/src/hook_capture.cpp
+index 90fb127..4348031 100644
+--- a/source/shellui/src/hook_capture.cpp
++++ b/source/shellui/src/hook_capture.cpp
+@@ -26,7 +26,7 @@ bool CaptureScreen(){
+   }
+   else if (g_settings.toolbox_shortcut_opt == TOOLBOX_LONG_SHARE){
+     //LOG_DEBUG("CaptureScreen: Long Share Shortcut activated");
+-    GoToURI(shellui_debug_settings_toolbox_uri());
++    GoToToolboxShortcutTarget();
+     return true;
+   }
+ 
+@@ -80,7 +80,7 @@ void OnShareButton(MonoObject * data) {
+   }
+   else if (g_settings.toolbox_shortcut_opt == TOOLBOX_SINGLE_SHARE) {
+     // LOG_DEBUG("Share Shortcut: Redirecting to Toolbox");
+-    GoToURI(shellui_debug_settings_toolbox_uri());
++    GoToToolboxShortcutTarget();
+     return;
+   }
+ 
+diff --git a/source/shellui/src/hook_launch.cpp b/source/shellui/src/hook_launch.cpp
+index 821650a..4b99122 100644
+--- a/source/shellui/src/hook_launch.cpp
++++ b/source/shellui/src/hook_launch.cpp
+@@ -12,6 +12,8 @@
+ #include <sys/stat.h>
+ 
+ #include "shellui_state.hpp"
++#include "dynamic_ui_runtime.hpp"
++#include "toolbox_route.hpp"
+ #include <cstring>
+ 
+ void save_appid(int value, const char* filename) {
+@@ -118,6 +120,23 @@ void createJson_hook(MonoObject* inst, MonoObject* array, MonoString* id, MonoSt
+                Mono_to_String(actionId).c_str(), 
+                Mono_to_String(messageId).c_str());
+ 
++    // [game_menu] plugin_entry: one plugin's page next to "Check for update",
++    // opened through OnionHEN?Plugin=<ID>. Absent while the plugin has no page.
++    if (id_str == "MENU_ID_CHECK_PATCH" &&
++        !g_settings.game_menu_plugin_entry.empty()) {
++        const std::string &plugin_id = g_settings.game_menu_plugin_entry;
++        const std::string title =
++            onion::shellui::dynamic_ui::plugin_root_title(plugin_id);
++        if (!title.empty()) {
++            createJson(inst, array,
++                       mono_string_new(Root_Domain, "MENU_ID_ONIONHEN_PLUGIN"),
++                       mono_string_new(Root_Domain, title.c_str()),
++                       mono_string_new(Root_Domain,
++                                       toolbox::plugin_page_uri(plugin_id).c_str()),
++                       actionId, nullptr, subMenu, true);
++        }
++    }
++
+     if(!g_settings.onionhen_game_opts) {
+         createJson(inst, array, id, label, actionUrl, actionId, messageId, subMenu, enable);
+         return;
+diff --git a/source/shellui/src/hook_manifest.cpp b/source/shellui/src/hook_manifest.cpp
+index 3504d1f..0437ee9 100644
+--- a/source/shellui/src/hook_manifest.cpp
++++ b/source/shellui/src/hook_manifest.cpp
+@@ -15,6 +15,7 @@
+ #include "external_sprx_ui.hpp"
+ #include <onion/platform.h>
+ #include <string>
++#include <utility>
+ 
+ extern MonoClass *MemoryStream_IO;
+ extern MonoObject *MemoryStream_Instance;
+@@ -48,8 +49,24 @@ uint64_t GetManifestResourceStream_Hook(uint64_t inst, MonoString *FileName) {
+   std::string new_xml_string;
+   std::string resourceName = Mono_to_String(FileName);
+   MonoDomain *domain = current_mono_domain();
+-  const bool dynamic_page =
+-      onion::shellui::dynamic_ui::render_resource(resourceName, new_xml_string);
++  bool dynamic_page = false;
++  if (toolbox::direct_plugin_takes_resource(resourceName, debug_settings_xml,
++                                            g_ui.direct_plugin_id)) {
++    /* OnionHEN?Plugin=<ID>: this Settings root shows the plugin's root page,
++     * once. Without a renderable page the Toolbox root opens as usual. */
++    const std::string plugin_id = std::exchange(g_ui.direct_plugin_id, {});
++    dynamic_page = onion::shellui::dynamic_ui::render_plugin_root(
++        plugin_id, new_xml_string);
++    if (dynamic_page)
++      LOG_INFO("direct entry: %s root page as the Settings root",
++               plugin_id.c_str());
++    else
++      LOG_WARN("direct entry: %s has no page; opening the Toolbox",
++               plugin_id.c_str());
++  }
++  if (!dynamic_page)
++    dynamic_page = onion::shellui::dynamic_ui::render_resource(resourceName,
++                                                               new_xml_string);
+ 
+   LOG_DEBUG("GetManifestResourceStream_Hook: %s domain=%p root=%p",
+               resourceName.c_str(), (void *)domain, (void *)Root_Domain);
+diff --git a/source/util/tests/test_plugin_ui.cpp b/source/util/tests/test_plugin_ui.cpp
+index e06f4d7..5960f8f 100644
+--- a/source/util/tests/test_plugin_ui.cpp
++++ b/source/util/tests/test_plugin_ui.cpp
+@@ -343,6 +343,41 @@ int test_registry_and_renderer(void) {
+   TEST_ASSERT_TRUE(onion::shellui::dynamic_ui::leave_active_page());
+   TEST_ASSERT_TRUE(!onion::shellui::dynamic_ui::leave_active_page());
+ 
++  /* Direct entry (OnionHEN?Plugin=TEST00001): the root page on a fresh stack. */
++  const std::string direct_title =
++      onion::shellui::dynamic_ui::plugin_root_title("TEST00001");
++  TEST_ASSERT_STREQ(settings_links[0].title.c_str(), direct_title.c_str());
++  TEST_ASSERT_TRUE(onion::shellui::dynamic_ui::plugin_root_title("NONE00001").empty());
++  std::string direct_xml;
++  TEST_ASSERT_TRUE(!onion::shellui::dynamic_ui::render_plugin_root("NONE00001",
++                                                                   direct_xml));
++  TEST_ASSERT_TRUE(direct_xml.empty());
++  TEST_ASSERT_TRUE(onion::shellui::dynamic_ui::render_resource(
++      root_resource, runtime_xml));
++  TEST_ASSERT_TRUE(onion::shellui::dynamic_ui::render_resource(
++      advanced_resource, runtime_xml));
++  TEST_ASSERT_TRUE(onion::shellui::dynamic_ui::render_plugin_root("TEST00001",
++                                                                  direct_xml));
++  std::string root_xml;
++  TEST_ASSERT_TRUE(onion::shellui::dynamic_ui::render_resource(root_resource,
++                                                               root_xml));
++  TEST_ASSERT_STREQ(root_xml.c_str(), direct_xml.c_str());
++  /* The root is the active page, not the "advanced" page left over from the
++   * earlier session: its control is not routed. */
++  TEST_ASSERT_EQ_INT(
++      static_cast<int>(onion::shellui::dynamic_ui::DispatchResult::NotOwned),
++      static_cast<int>(onion::shellui::dynamic_ui::dispatch_control(reload_id, "")));
++  TEST_ASSERT_TRUE(onion::shellui::dynamic_ui::render_resource(
++      advanced_resource, runtime_xml));
++  g_action_received = false;
++  TEST_ASSERT_EQ_INT(
++      static_cast<int>(onion::shellui::dynamic_ui::DispatchResult::Accepted),
++      static_cast<int>(onion::shellui::dynamic_ui::dispatch_control(reload_id, "")));
++  TEST_ASSERT_TRUE(g_action_received);
++  /* Back to the root, then leaving the root ends the dynamic stack. */
++  TEST_ASSERT_TRUE(onion::shellui::dynamic_ui::leave_active_page());
++  TEST_ASSERT_TRUE(!onion::shellui::dynamic_ui::leave_active_page());
++
+   TEST_ASSERT_EQ_INT(
+       static_cast<int>(onion::plugin_ui::Status::Ok),
+       static_cast<int>(registry.set_value("TEST00001", registered.handle,
+diff --git a/source/util/tests/test_settings.cpp b/source/util/tests/test_settings.cpp
+index cdf496b..acac922 100644
+--- a/source/util/tests/test_settings.cpp
++++ b/source/util/tests/test_settings.cpp
+@@ -781,6 +781,59 @@ static int test_overlay_font_and_order(void) {
+   return 0;
+ }
+ 
++/* AKENO direct entry: [shortcuts] toolbox_target and [game_menu] plugin_entry.
++ * Defaults are the upstream behaviour and an upstream config needs no edit. */
++static int test_plugin_targets_parse_policy(void) {
++  onion::Settings defaults{};
++  TEST_ASSERT_TRUE(defaults.toolbox_shortcut_target.empty());
++  TEST_ASSERT_TRUE(defaults.game_menu_plugin_entry.empty());
++  const std::string text = onion::settings_serialize(defaults);
++  TEST_ASSERT_TRUE(text.find("\ntoolbox_target=toolbox\n") != std::string::npos);
++  TEST_ASSERT_TRUE(text.find("\nplugin_entry=none\n") != std::string::npos);
++
++  struct Case {
++    const char *toolbox_target;
++    const char *plugin_entry;
++    const char *want_target;
++    const char *want_entry;
++  };
++  const Case cases[] = {
++      {"AKEN00001", "AKEN00001", "AKEN00001", "AKEN00001"},
++      {"toolbox", "none", "", ""},
++      {"TOOLBOX", "None", "", ""},
++      {"AKEN0001", "AKEN000011", "", ""},       /* wrong length: default */
++      {"AKEN-0001", "../../../x", "", ""},      /* not alphanumeric: default */
++      {"", "", "", ""},
++  };
++  for (const Case &c : cases) {
++    std::string path = temp_ini_path();
++    TEST_ASSERT_TRUE(!path.empty());
++    FILE *f = fopen(path.c_str(), "w");
++    TEST_ASSERT_TRUE(f != nullptr);
++    fprintf(f,
++            "[meta]\nschema_version=1\n\n[shortcuts]\ntoolbox=l2_r3\n"
++            "toolbox_target=%s\n\n[game_menu]\nplugin_entry=%s\n",
++            c.toolbox_target, c.plugin_entry);
++    fclose(f);
++    onion::Settings out{};
++    TEST_ASSERT_TRUE(onion::settings_load_file(path.c_str(), &out));
++    TEST_ASSERT_EQ_INT(1, out.toolbox_shortcut_opt);
++    TEST_ASSERT_STREQ(c.want_target, out.toolbox_shortcut_target.c_str());
++    TEST_ASSERT_STREQ(c.want_entry, out.game_menu_plugin_entry.c_str());
++
++    /* What the Toolbox writes back keeps the choice. */
++    TEST_ASSERT_TRUE(onion::settings_save_file(path.c_str(), out));
++    onion::Settings again{};
++    TEST_ASSERT_TRUE(onion::settings_load_file(path.c_str(), &again));
++    TEST_ASSERT_STREQ(out.toolbox_shortcut_target.c_str(),
++                      again.toolbox_shortcut_target.c_str());
++    TEST_ASSERT_STREQ(out.game_menu_plugin_entry.c_str(),
++                      again.game_menu_plugin_entry.c_str());
++    unlink(path.c_str());
++  }
++  return 0;
++}
++
+ extern "C" int test_settings_suite(void) {
+   int failures = 0;
+   failures += onion_test_run("settings_defaults_serialize", test_defaults_and_serialize_keys);
+@@ -816,5 +869,7 @@ extern "C" int test_settings_suite(void) {
+                              test_v0_0_10_config_keeps_kstuff_autoload);
+   failures += onion_test_run("settings_clamp_fan_threshold",
+                              test_clamp_fan_threshold);
++  failures += onion_test_run("settings_plugin_targets",
++                             test_plugin_targets_parse_policy);
+   return failures;
+ }
+diff --git a/source/util/tests/test_toolbox_route.cpp b/source/util/tests/test_toolbox_route.cpp
+index ff51733..ab32d77 100644
+--- a/source/util/tests/test_toolbox_route.cpp
++++ b/source/util/tests/test_toolbox_route.cpp
+@@ -461,6 +461,39 @@ static int test_progress_page_restore_is_reusable(void) {
+   return 0;
+ }
+ 
++static int test_plugin_page_uri(void) {
++  const std::string parsed(parse_plugin_page_uri("OnionHEN?Plugin=AKEN00001"));
++  TEST_ASSERT_STREQ("AKEN00001", parsed.c_str());
++  const std::string uri = plugin_page_uri("AKEN00001");
++  TEST_ASSERT_STREQ("OnionHEN?Plugin=AKEN00001", uri.c_str());
++  TEST_ASSERT_TRUE(parse_plugin_page_uri(plugin_page_uri("TEST00001")) == "TEST00001");
++  TEST_ASSERT_TRUE(parse_plugin_page_uri("OnionHEN?Plugin=").empty());
++  TEST_ASSERT_TRUE(parse_plugin_page_uri("OnionHEN?Plugin=AKEN0000").empty());
++  TEST_ASSERT_TRUE(parse_plugin_page_uri("OnionHEN?Plugin=AKEN000011").empty());
++  TEST_ASSERT_TRUE(parse_plugin_page_uri("OnionHEN?Plugin=AKEN0000/").empty());
++  TEST_ASSERT_TRUE(parse_plugin_page_uri("OnionHEN?Plugin=AKEN00001&x=1").empty());
++  TEST_ASSERT_TRUE(parse_plugin_page_uri("OnionHEN?Cheats").empty());
++  TEST_ASSERT_TRUE(parse_plugin_page_uri("OnionHEN?NavUI=1").empty());
++  TEST_ASSERT_TRUE(parse_plugin_page_uri("pssettings:play?function=debug_settings").empty());
++  return 0;
++}
++
++static int test_direct_plugin_takes_only_the_settings_root(void) {
++  TEST_ASSERT_TRUE(direct_plugin_takes_resource("debug_settings.xml",
++                                                "debug_settings.xml", "AKEN00001"));
++  TEST_ASSERT_TRUE(!direct_plugin_takes_resource("debug_settings.xml",
++                                                 "debug_settings.xml", ""));
++  TEST_ASSERT_TRUE(!direct_plugin_takes_resource("payloads.xml",
++                                                 "debug_settings.xml", "AKEN00001"));
++  TEST_ASSERT_TRUE(!direct_plugin_takes_resource(kPluginsXml,
++                                                 "debug_settings.xml", "AKEN00001"));
++  TEST_ASSERT_TRUE(!direct_plugin_takes_resource("", "", "AKEN00001"));
++  /* The plain route is untouched: a direct entry never changes resolve_resource. */
++  TEST_ASSERT_TRUE(resolve_resource(make_in("debug_settings.xml")).page ==
++                   Page::DebugSettings);
++  return 0;
++}
++
+ extern "C" int test_toolbox_route_suite(void) {
+   int fails = 0;
+   fails += onion_test_run("route.unknown", test_unknown_passthrough);
+@@ -505,5 +538,8 @@ extern "C" int test_toolbox_route_suite(void) {
+   fails += onion_test_run("remote_play.success_wins_terminal_race",
+                           test_remote_play_success_wins_terminal_race);
+   fails += onion_test_run("cheatmap.dynamic", test_dynamic_cheat_state);
++  fails += onion_test_run("route.plugin_page_uri", test_plugin_page_uri);
++  fails += onion_test_run("route.direct_plugin_root",
++                          test_direct_plugin_takes_only_the_settings_root);
+   return fails;
+ }
+diff --git a/source/util/tests/test_x64_relocator.cpp b/source/util/tests/test_x64_relocator.cpp
+index b4152fd..1d1166c 100644
+--- a/source/util/tests/test_x64_relocator.cpp
++++ b/source/util/tests/test_x64_relocator.cpp
+@@ -170,6 +170,50 @@ int test_loop_relative_rejected() {
+ 
+ } // namespace
+ 
++/* A second injection over an earlier detour (jmp [rip+0]; dq hook) must chain
++ * to that hook for every hook address, not depend on how its bytes decode
++ * (AKENO: the PR #14 host failed "relocation failed at +6" this way). */
++int test_existing_detour_chains_for_any_address() {
++  constexpr uintptr_t source_address = 0x900123450;
++  constexpr uintptr_t destination_address = 0x900023450;
++  for (uint64_t base = 0x800000000ull; base < 0x2000000000ull;
++       base += 0x4000ull * 977) {
++    for (uint64_t offset = 0; offset < 0x40000; offset += 0x10 * 37) {
++      const uint64_t hook = base + offset;
++      uint8_t source[28];
++      std::memset(source, 0x90, sizeof(source));
++      const uint8_t jump[] = {0xff, 0x25, 0, 0, 0, 0};
++      std::memcpy(source, jump, sizeof(jump));
++      std::memcpy(source + sizeof(jump), &hook, sizeof(hook));
++      uint8_t destination[ONION_X64_TRAMPOLINE_CAPACITY];
++      onion_x64_relocate_result result{};
++      TEST_ASSERT_TRUE(relocate(source, 14, source_address, destination_address,
++                                destination, result));
++      TEST_ASSERT_EQ_INT(14, static_cast<int>(result.source_size));
++      TEST_ASSERT_MEMEQ(source, destination, 14);
++      TEST_ASSERT_EQ_U64(hook, read_u64(destination + 6));
++    }
++  }
++  return 0;
++}
++
++/* The same patch after a short first instruction is still one unit. */
++int test_existing_detour_after_instruction() {
++  const uint64_t hook = 0x8000318e8ull;
++  uint8_t source[28];
++  std::memset(source, 0x90, sizeof(source));
++  const uint8_t prefix[] = {0x55, 0xff, 0x25, 0, 0, 0, 0};
++  std::memcpy(source, prefix, sizeof(prefix));
++  std::memcpy(source + sizeof(prefix), &hook, sizeof(hook));
++  uint8_t destination[ONION_X64_TRAMPOLINE_CAPACITY];
++  onion_x64_relocate_result result{};
++  TEST_ASSERT_TRUE(relocate(source, 14, 0x10000000, 0x20000000, destination,
++                            result));
++  TEST_ASSERT_EQ_INT(15, static_cast<int>(result.source_size));
++  TEST_ASSERT_MEMEQ(source, destination, 15);
++  return 0;
++}
++
+ extern "C" int test_x64_relocator_suite(void) {
+   int failures = 0;
+   failures += onion_test_run("x64reloc.plain", test_plain_copy_and_jump_back);
+@@ -183,5 +227,9 @@ extern "C" int test_x64_relocator_suite(void) {
+   failures += onion_test_run("x64reloc.jcc_near", test_jcc_near_external);
+   failures += onion_test_run("x64reloc.rip_range", test_rip_relative_out_of_range_fails);
+   failures += onion_test_run("x64reloc.loop_reject", test_loop_relative_rejected);
++  failures += onion_test_run("x64reloc.existing_detour_any_address",
++                             test_existing_detour_chains_for_any_address);
++  failures += onion_test_run("x64reloc.existing_detour_after_instruction",
++                             test_existing_detour_after_instruction);
+   return failures;
+ }
+-- 
+2.43.0
+
