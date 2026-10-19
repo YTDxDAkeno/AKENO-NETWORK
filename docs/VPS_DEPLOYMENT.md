@@ -173,6 +173,12 @@ docker compose --profile https ps
 Migrations run automatically and are transactional. Never run `docker compose down -v`
 during upgrades: `-v` deletes the database volume.
 
+When an upgrade changes `infrastructure/caddy/Caddyfile`, recreate Caddy
+(`docker compose --profile https up -d --no-deps --force-recreate caddy`): the file is
+bind-mounted on its own, and after `git pull` replaced it, `caddy reload` still reads the old one.
+The console voice upgrade has its own procedure and scripts:
+[SERVER_VOICE_UPGRADE.md](SERVER_VOICE_UPGRADE.md).
+
 ### Backups
 
 ```bash

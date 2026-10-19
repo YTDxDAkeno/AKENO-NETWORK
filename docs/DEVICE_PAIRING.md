@@ -45,7 +45,7 @@ User codes are 8 characters from a 31-character alphabet without look-alikes, sh
 | `presence:write` | `PUT /presence` |
 | `friends:read` / `friends:write` | Friends list and requests / send, accept, decline, cancel requests |
 | `messages:read` / `messages:write` | Direct, group and party conversations and messages / send, mark read, typing |
-| `parties:read` / `parties:write` | Current and joinable parties / create, join, leave, invite |
+| `parties:read` / `parties:write` | Current and joinable parties / create, join, leave, invite; with `parties:write` also the console voice pass (`POST /parties/:id/voice/device-token`) |
 | `sessions:read` / `sessions:write` | Game sessions / create, update, join, leave, close, invite |
 | `invitations:read` / `invitations:write` | Invitations and notifications / accept, decline, mark read |
 | `realtime` | The `/ws` WebSocket (the device then counts as online, like a browser tab) |

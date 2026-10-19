@@ -413,6 +413,7 @@ export class AuthService {
       auth.sessionId,
     );
     this.ctx.voice.onSessionsRevoked(auth.userId, (id) => id !== auth.sessionId);
+    this.ctx.voice.onDevicesRevoked(auth.userId, () => true);
   }
 
   async deleteExpiredSessions(): Promise<number> {

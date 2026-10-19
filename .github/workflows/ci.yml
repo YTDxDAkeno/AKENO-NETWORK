@@ -12,6 +12,11 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # LiveKit server of the compose voice profile, as a release binary for tests that start their own.
+  LIVEKIT_VERSION: 1.12.0
+  LIVEKIT_SHA256: 9b89eb169c6c5795393bad6b52a9d0c73640a5993b37162558b4e249e5fe3aee
+
 jobs:
   checks:
     name: Lint, typecheck, unit/integration tests, E2E
@@ -53,6 +58,16 @@ jobs:
 
       - name: Typecheck
         run: pnpm typecheck
+
+      # The voice gateway tests start this binary themselves (console <-> LiveKit participant both
+      # ways, mute, deafen, replacement, removal, refused passes); without it they are skipped.
+      - name: Fetch the pinned LiveKit server (checksum verified)
+        run: |
+          mkdir -p "$RUNNER_TEMP/livekit"
+          curl -sSfL --retry 4 -o "$RUNNER_TEMP/livekit/livekit.tgz" "https://github.com/livekit/livekit/releases/download/v${LIVEKIT_VERSION}/livekit_${LIVEKIT_VERSION}_linux_amd64.tar.gz"
+          echo "$LIVEKIT_SHA256  $RUNNER_TEMP/livekit/livekit.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/livekit/livekit.tgz" -C "$RUNNER_TEMP/livekit" livekit-server
+          echo "LIVEKIT_SERVER_BIN=$RUNNER_TEMP/livekit/livekit-server" >> "$GITHUB_ENV"
 
       - name: Unit and integration tests
         run: pnpm test
@@ -186,8 +201,86 @@ jobs:
       - name: Build production image
         run: docker build -f infrastructure/docker/Dockerfile -t akeno-network:ci .
 
+      - name: Build voice gateway image
+        run: docker build -f infrastructure/docker/voice-gateway.Dockerfile -t akeno-voice-gateway:ci .
+
       - name: Validate Compose configuration
         run: |
           POSTGRES_PASSWORD=ci-placeholder docker compose config --quiet
           POSTGRES_PASSWORD=ci-placeholder LIVEKIT_API_KEY=akenoci LIVEKIT_API_SECRET=ci0123456789abcdef0123456789abcdef \
+            VOICE_GATEWAY_URL=wss://akeno.example.com/voice-gateway \
             docker compose --profile https --profile voice config --quiet
+
+      - name: Validate the Caddyfile (app, /livekit and /voice-gateway routes)
+        run: |
+          docker run --rm -e AKENO_DOMAIN=akeno.example.com -v "$PWD/infrastructure/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+  voice-staging:
+    name: Voice staging drill - production Compose stack, upgrade from the baseline, console voice both ways, rollback
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      # Provisional production baseline: the last server state on GitHub before console voice
+      # (Alpha 0.4 server, identical server code up to the native line). Replace it with the
+      # commit the VPS really runs once that is verified (docs/SERVER_VOICE_UPGRADE.md).
+      STAGING_BASELINE: ae948512475a6752fb4cebd70234893e037044e1
+      # The PS5 voice-alpha of PR #18 (akeno-party-voice 0.1.0-alpha, native-IPC daemon, plugin
+      # 1.20 check tool), built for Linux and driven against the staging stack.
+      PS5_VOICE_ALPHA: ce06ba04c048a02cb4d2efeb707d6bc4ba2618fd
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake libssl-dev
+          pnpm install --frozen-lockfile
+          pnpm --filter @akeno/web exec playwright install --with-deps chromium
+
+      - name: Build the baseline and candidate images
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/baseline" "$STAGING_BASELINE"
+          docker build -f "$RUNNER_TEMP/baseline/infrastructure/docker/Dockerfile" -t akeno-network:baseline "$RUNNER_TEMP/baseline"
+          docker build -f infrastructure/docker/Dockerfile -t akeno-network:candidate .
+          docker build -f infrastructure/docker/voice-gateway.Dockerfile -t akeno-voice-gateway:candidate .
+
+      - name: Build the PS5 voice-alpha host programs (PR #18; checksummed third-party inputs)
+        run: |
+          git fetch --no-tags origin "$PS5_VOICE_ALPHA"
+          git worktree add --detach "$RUNNER_TEMP/ps5-voice-alpha" "$PS5_VOICE_ALPHA"
+          cd "$RUNNER_TEMP/ps5-voice-alpha"
+          clients/ps5-native/scripts/fetch-deps.sh
+          clients/ps5-ingame/scripts/fetch-deps.sh
+          cmake -S clients/ps5 -B clients/ps5/build -DAKENO_REQUIRE_MBEDTLS=ON -DCMAKE_BUILD_TYPE=Debug
+          cmake --build clients/ps5/build -j"$(nproc)" --target akeno-app-native-ipc
+          cmake -S clients/ps5-ingame -B clients/ps5-ingame/build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build clients/ps5-ingame/build -j"$(nproc)" --target akeno-ingame-check
+          cmake -S clients/ps5-partyvoice -B clients/ps5-partyvoice/build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build clients/ps5-partyvoice/build -j"$(nproc)" --target akeno-party-voice
+
+      - name: Staging drill (fresh database; baseline 404, upgrade scripts, audio by frequency, revocation, rollback, restore)
+        run: |
+          echo "127.0.0.1 akeno-staging.local" | sudo tee -a /etc/hosts
+          A="$RUNNER_TEMP/ps5-voice-alpha/clients"
+          node infrastructure/staging/voice-staging.mjs --baseline "$STAGING_BASELINE" --candidate HEAD \
+            --console-daemon "$A/ps5/build/akeno-app-native-ipc" --console-voice "$A/ps5-partyvoice/build/akeno-party-voice" \
+            --console-companion "$A/ps5-ingame/build/akeno-ingame-check" --report "$RUNNER_TEMP/voice-staging-report.json"
+
+      - name: Upload the staging report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: voice-staging-report
+          path: ${{ runner.temp }}/voice-staging-report.json
+          retention-days: 30
+          if-no-files-found: ignore

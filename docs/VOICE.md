@@ -7,8 +7,9 @@ is **never recorded, stored, transcribed or analysed**.
 
 Status, as of 2026-10-14: implemented and tested against a real LiveKit server (see
 [Testing](#testing)). **Not deployed.** Voice stays off until an operator configures it and
-opens the firewall ports listed below. Native PS5 voice is not part of this feature (see
-[PS5_AUDIO_RESEARCH.md](PS5_AUDIO_RESEARCH.md)).
+opens the firewall ports listed below. Paired PS5 consoles join the same rooms through the AKENO
+voice gateway ([SERVER_VOICE_UPGRADE.md](SERVER_VOICE_UPGRADE.md), section "Console voice" below);
+console audio has not yet run on a PS5.
 
 ## Choosing the media server
 
@@ -71,14 +72,17 @@ Code: `apps/server/src/modules/voice/` (service, routes), `apps/web/src/features
 | Member of that party | Token request, join (webhook), every 30 s (reconciliation) |
 | No block in either direction with anyone already in the room | Token request, join, reconciliation |
 | Account active (not suspended) | Join, reconciliation |
-| The browser session that requested the token is still valid | Join, reconciliation (after a token was issued by the running server) |
+| The browser session (or paired console) that requested the token of the connection in the room is still valid | Join, reconciliation (also after a restart: the credential is sealed, encrypted, into the token; a connection without a valid seal is removed) |
 | Room not full (party member limit) | LiveKit, at join |
 
 Access ends **at once** (the API removes the participant from the LiveKit room) when the user:
 leaves the party; is removed by the leader; the party closes or empties (the room is deleted);
 blocks or is blocked by someone in the room (the blocked user is disconnected); is suspended;
 deletes their account; or signs out the browser session that requested the token (signing out,
-"sign out other sessions", revoking that session, changing the password). Anything the voice
+"sign out other sessions", revoking that session, changing the password). This applies to the
+connection actually in the room: a newer token that another session or console requested but
+never used changes nothing, and after a restart the API asks LiveKit which credential the
+connected participant holds. Anything the voice
 server missed (for example during an outage) is corrected by the next reconciliation pass.
 
 Tokens:
@@ -215,6 +219,25 @@ Hardening of the LiveKit container in `compose.yaml`: non-root user, read-only f
 all capabilities dropped, `no-new-privileges`, 512 MB memory limit, pinned image, its own key
 pair, rooms only created by the API.
 
+### Console voice (voice gateway)
+
+Consoles cannot run WebRTC, so a paired console asks for a pass at
+`POST /api/v1/parties/:id/voice/device-token` (scope `parties:write`) and sends Opus over a TLS
+WebSocket to `wss://<AKENO_DOMAIN>/voice-gateway`; the gateway (`apps/voice-gateway`, compose
+service `voice-gateway` in this `voice` profile) joins the party's LiveKit room as that user. To
+enable it, with browser voice already working:
+
+```sh
+# .env
+VOICE_GATEWAY_URL=wss://<AKENO_DOMAIN>/voice-gateway
+docker compose --profile https --profile voice up -d voice-gateway app
+docker compose --profile https up -d --no-deps --force-recreate caddy   # new Caddyfile route
+```
+
+No extra port is opened: consoles use 443. Caddy has to be recreated (not reloaded) after a
+Caddyfile change, because the file is bind-mounted on its own. On an existing server use
+`infrastructure/scripts/voice-upgrade.sh` ([SERVER_VOICE_UPGRADE.md](SERVER_VOICE_UPGRADE.md)).
+
 ### NAT, TURN and Docker networking
 
 - The browser connects directly to the VPS's public IP on 7882/udp (ICE "host" candidate,
@@ -259,7 +282,7 @@ Rules of thumb (Opus with DTX and RED, mono):
 
 | What | Where | Result (2026-10-14) |
 | --- | --- | --- |
-| Token rules, refusals (non-member, no CSRF, paired device), signed webhooks (forged and altered bodies rejected), member-only visibility, intruder removal, kick/leave/close, blocks, suspension, session sign-out, reconciliation, outage isolation, unconfigured voice, configuration validation, CSP | `apps/server/test/voice.test.ts` (fake LiveKit room API) | 15 passed |
+| Token rules, refusals (non-member, no CSRF, paired device), signed webhooks (forged and altered bodies rejected), member-only visibility, intruder removal, kick/leave/close, blocks, suspension, session sign-out, revocation of the connected credential (unused newer tokens, backend restart, fail closed, a late refusal never removes a newer connection), reconciliation, outage isolation, unconfigured voice, configuration validation, CSP | `apps/server/test/voice.test.ts` (fake LiveKit room API) | 26 passed |
 | Preferences sanitizing, threshold/meter scale, microphone error messages | `apps/web/tests/unit/voice.test.ts` | 7 passed |
 | Real LiveKit 1.12.0 + two (then three) Chromium browsers with fake microphones: join, **received audio with energy** (WebRTC stats), speaking indicator, mute state, mute-for-me stops receiving, voice survives navigation, reload leaves cleanly, microphone test level, second tab takes over, kicked member loses voice and is refused a new token, phone layout + join from an invitation, leaving releases the microphone, no console or CSP errors | `apps/web/tests/e2e/voice.spec.ts` | passed, also within the full E2E suite; skipped when `E2E_LIVEKIT_URL` is not set |
 | Production image + compose `voice` profile (LiveKit as non-root, read-only): app reaches LiveKit API, webhooks arrive, two browsers exchange audio over UDP 7882 | manual script (see TESTING.md) | passed |
