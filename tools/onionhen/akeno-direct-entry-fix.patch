@@ -1,0 +1,1900 @@
+From 7fb3686ca347109c92bbc6026433bf839cca9068 Mon Sep 17 00:00:00 2001
+From: AKENO NETWORK <noreply@akeno.invalid>
+Date: Mon, 19 Oct 2026 01:50:06 +0000
+Subject: [PATCH] AKENO direct entry 4.1: link mode by default, a safe Settings
+ root, diagnostics
+
+The first direct entry failed on a PS5 (FW 12.20): the plugin's page was
+served as the Settings root, ShellUI's plugin bridge dropped about 13 s later,
+the daemon re-injected a new SceShellUI and controller input stayed dead.
+
+- [shortcuts] toolbox_target_mode=link|root, default link: the shortcut
+  opens the Toolbox route unchanged, and the Toolbox root lists the
+  toolbox_target plugin's page first and selected (the link the Plugins page
+  has). The Settings root is never replaced in link mode. Root mode is the
+  OnionHEN?Plugin=<ID> takeover, now opt-in.
+- Root mode serves the plugin's root page with root setting_list
+  id_debug_settings, like every other Settings root (the Toolbox root and the
+  Cheats page of OnionHEN?Cheats); the takeover used the page's own control
+  id. The page owns no parent (ToolboxUiState::enter_settings_root).
+- direct_entry.hpp: a pending request is taken once, expires after 15 s and
+  is cancelled by any other OnionHEN route; repeated shortcuts within 2 s are
+  one request; a plugin without a page opens the Toolbox. A Settings root
+  served by any other route drops plugin pages a closed Settings left open.
+- A session file in /system_tmp names the SceShellUI holding a session; a
+  SceShellUI that starts while one is open after recent activity turns root
+  mode off until restart (the shortcut opens the Toolbox) and says so.
+- AKENO_DIRECT: log lines for every step (shortcut, URI, redirect, root
+  served, root activated, page shown/popped, press outcome, session end) and
+  a 60 s input watch after it (whether ShellUI reads the pad, button changes,
+  one line per 5 s). No control ids or values are logged.
+- x64 relocator: compare the jmp [rip+0] prefix byte by byte; the 6-byte
+  memcmp read past the last instruction (ASan, test_x64_relocator).
+- Host tests: direct_entry suite (12) and plugin_ui_direct_entry_flow
+  driving the hook steps against the real registry, renderer, page stack and
+  ToolboxUiState; the root-page test now checks the root setting_list id.
+---
+ config.ini.example                            |   5 +
+ .../libonion_detour/source/x64_relocator.cpp  |   6 +-
+ .../include/onion/settings.hpp                |   8 +
+ source/libonion_settings/source/settings.cpp  |  21 +
+ source/shellui/include/direct_entry.hpp       | 529 ++++++++++++++++++
+ source/shellui/include/dynamic_ui_runtime.hpp |  17 +-
+ source/shellui/include/dynamic_ui_xml.hpp     |   5 +-
+ source/shellui/include/hooked_funcs.hpp       |   5 +-
+ source/shellui/include/shellui_state.hpp      |  13 +-
+ source/shellui/src/dynamic_ui_runtime.cpp     |  29 +-
+ source/shellui/src/dynamic_ui_xml.cpp         |   7 +-
+ source/shellui/src/hook_boot.cpp              |  33 +-
+ source/shellui/src/hook_capture.cpp           |   4 +-
+ source/shellui/src/hook_manifest.cpp          |  29 +-
+ source/shellui/src/hook_onpress.cpp           |   6 +-
+ source/shellui/src/hook_page_stack.cpp        |  13 +-
+ source/shellui/src/prx.cpp                    |  10 +
+ source/shellui/src/toolbox_xml.cpp            |   8 +-
+ source/util/tests/Makefile                    |   1 +
+ source/util/tests/test_direct_entry.cpp       | 440 +++++++++++++++
+ source/util/tests/test_main.cpp               |   2 +
+ source/util/tests/test_plugin_ui.cpp          | 206 ++++++-
+ 22 files changed, 1341 insertions(+), 56 deletions(-)
+ create mode 100644 source/shellui/include/direct_entry.hpp
+ create mode 100644 source/util/tests/test_direct_entry.cpp
+
+diff --git a/config.ini.example b/config.ini.example
+index 3cc67e1..71888de 100644
+--- a/config.ini.example
++++ b/config.ini.example
+@@ -141,6 +141,11 @@ toolbox=off
+ # toolbox_target is what the toolbox shortcut opens.
+ # Available values: toolbox, or a plugin ID such as AKEN00001
+ toolbox_target=toolbox
++# toolbox_target_mode is how the shortcut opens that plugin: link shows
++# the Toolbox with the plugin first and selected, root opens the plugin's
++# page directly (experimental).
++# Available values: link, root
++toolbox_target_mode=link
+ 
+ [kstuff]
+ # autoload loads kstuff when OnionHEN starts.
+diff --git a/source/libonion_detour/source/x64_relocator.cpp b/source/libonion_detour/source/x64_relocator.cpp
+index 5eb1b31..add660b 100644
+--- a/source/libonion_detour/source/x64_relocator.cpp
++++ b/source/libonion_detour/source/x64_relocator.cpp
+@@ -60,8 +60,10 @@ size_t immediate_size(const hde64s &decoded) {
+  * jmp [rip+0] followed by the hook address as instructions makes the outcome
+  * depend on the address bytes, i.e. on the build layout. */
+ bool is_absolute_jump_patch(const uint8_t *code) {
+-  static constexpr uint8_t prefix[] = {0xff, 0x25, 0, 0, 0, 0};
+-  return std::memcmp(code, prefix, sizeof(prefix)) == 0;
++  /* Byte by byte: a byte is read only if the ones before it match, like the
++   * decoder reads them; a 6-byte memcmp could run past the last instruction. */
++  return code[0] == 0xff && code[1] == 0x25 && code[2] == 0 && code[3] == 0 &&
++         code[4] == 0 && code[5] == 0;
+ }
+ 
+ bool is_rip_relative_memory(const hde64s &decoded) {
+diff --git a/source/libonion_settings/include/onion/settings.hpp b/source/libonion_settings/include/onion/settings.hpp
+index fa67eaf..78b7186 100644
+--- a/source/libonion_settings/include/onion/settings.hpp
++++ b/source/libonion_settings/include/onion/settings.hpp
+@@ -256,6 +256,12 @@ inline constexpr int kFanAutomaticThresholdCelsius = 77;
+ inline constexpr int kRestModeDelayMinSeconds = 0;
+ inline constexpr int kRestModeDelayMaxSeconds = 255;
+ inline constexpr int kRestModeDelayDefaultSeconds = 10;
++/* [shortcuts] toolbox_target_mode: how the Toolbox shortcut opens the plugin of
++ * toolbox_target. Link: the Toolbox root with that plugin's page as its first,
++ * focused entry (the route of every Toolbox page). Root: the plugin's page as
++ * the Settings root (OnionHEN?Plugin=<ID>), experimental. */
++inline constexpr int kToolboxTargetLink = 0;
++inline constexpr int kToolboxTargetRoot = 1;
+ inline constexpr int clamp_fan_threshold(int celsius) {
+   if (celsius < kFanThresholdMinCelsius)
+     return kFanThresholdMinCelsius;
+@@ -333,6 +339,8 @@ struct Settings {
+   /* A plugin ID: the Toolbox shortcut opens that plugin's page instead of the
+    * Toolbox root. Empty = the Toolbox, the upstream behaviour. */
+   std::string toolbox_shortcut_target;
++  /* kToolboxTargetLink or kToolboxTargetRoot. */
++  int toolbox_target_mode = kToolboxTargetLink;
+ 
+   // [kstuff]
+   // Load the embedded/override kstuff payload when OnionHEN starts.
+diff --git a/source/libonion_settings/source/settings.cpp b/source/libonion_settings/source/settings.cpp
+index 4d4f293..0c2d4b9 100644
+--- a/source/libonion_settings/source/settings.cpp
++++ b/source/libonion_settings/source/settings.cpp
+@@ -743,6 +743,18 @@ std::string plugin_target_text(const std::string &id, const char *none_word) {
+   return id.empty() ? std::string(none_word) : id;
+ }
+ 
++int parse_toolbox_target_mode(const char *s, int def) {
++  if (streq_ci(s, "link"))
++    return kToolboxTargetLink;
++  if (streq_ci(s, "root"))
++    return kToolboxTargetRoot;
++  return def;
++}
++
++const char *toolbox_target_mode_name(int v) {
++  return v == kToolboxTargetRoot ? "root" : "link";
++}
++
+ bool apply_parser(IniParser *parser, Settings *out) {
+   const int version = atoi_def(ini_get(parser, "meta.schema_version"), -1);
+   if (version != kSettingsSchemaVersion) {
+@@ -838,6 +850,9 @@ bool apply_parser(IniParser *parser, Settings *out) {
+   out->toolbox_shortcut_target =
+       parse_plugin_target(ini_get(parser, "shortcuts.toolbox_target"),
+                           "toolbox", out->toolbox_shortcut_target);
++  out->toolbox_target_mode =
++      parse_toolbox_target_mode(ini_get(parser, "shortcuts.toolbox_target_mode"),
++                                out->toolbox_target_mode);
+   out->kstuff_autoload =
+       parse_bool(ini_get(parser, "kstuff.autoload"), out->kstuff_autoload);
+   return true;
+@@ -1039,6 +1054,12 @@ std::string settings_serialize(const Settings &in) {
+   b += "# Available values: toolbox, or a plugin ID such as AKEN00001\n";
+   b += "toolbox_target=" +
+        plugin_target_text(in.toolbox_shortcut_target, "toolbox") + "\n";
++  b += "# toolbox_target_mode is how the shortcut opens that plugin: link shows\n";
++  b += "# the Toolbox with the plugin first and selected, root opens the plugin's\n";
++  b += "# page directly (experimental).\n";
++  b += "# Available values: link, root\n";
++  b += "toolbox_target_mode=" +
++       std::string(toolbox_target_mode_name(in.toolbox_target_mode)) + "\n";
+   b += "\n";
+   b += "[kstuff]\n";
+   b += "# autoload loads kstuff when OnionHEN starts.\n";
+diff --git a/source/shellui/include/direct_entry.hpp b/source/shellui/include/direct_entry.hpp
+new file mode 100644
+index 0000000..eaec39a
+--- /dev/null
++++ b/source/shellui/include/direct_entry.hpp
+@@ -0,0 +1,529 @@
++/* AKENO direct entry for onionHEN v0.9.0 (GPL-3.0, see LICENSE).
++ *
++ * [shortcuts] toolbox_target_mode=root: one plugin's page as the Settings root
++ * (OnionHEN?Plugin=<ID>), and the state that keeps that from outliving its
++ * Settings session. Host-testable: no Mono, and the time is passed in.
++ *
++ *   shortcut -> URI -> boot redirect (pending) -> Settings root served
++ *   -> root activated -> pushes / pops / presses -> root left (ended)
++ *
++ * Every step logs one "AKENO_DIRECT:" line (never a control id or a value). A
++ * pending request is taken once, expires after kPendingTtlMs, and any other
++ * OnionHEN route cancels it. While a session is open, kSessionFile names the
++ * SceShellUI process that holds it; a SceShellUI that starts and finds the file
++ * left by a process that ended during recent direct-entry activity turns root
++ * mode off until the console restarts (kDisabledFile; the shortcut then opens
++ * the Toolbox, link mode).
++ */
++#pragma once
++
++#include "dynamic_ui_runtime.hpp"
++#include "shellui_state.hpp"
++#include "toolbox_route.hpp"
++
++#include <onion/log.h>
++#include <onion/settings.hpp>
++#include <onion/system_tmp.h>
++
++#include <atomic>
++#include <cstdint>
++#include <cstdio>
++#include <ctime>
++#include <fcntl.h>
++#include <mutex>
++#include <string>
++#include <string_view>
++#include <sys/types.h>
++#include <unistd.h>
++
++namespace toolbox::direct_entry {
++
++/* Boot redirect -> Settings root request; normally well under a second. */
++inline constexpr uint64_t kPendingTtlMs = 15000;
++/* A second shortcut this soon after a dispatch is the same request. */
++inline constexpr uint64_t kDuplicateWindowMs = 2000;
++/* A SceShellUI that ended this soon after direct-entry activity disables it. */
++inline constexpr uint64_t kRecentActivityMs = 120000;
++/* Input watch: one line per interval, for this long after the last activity. */
++inline constexpr uint64_t kWatchIntervalMs = 5000;
++inline constexpr uint64_t kWatchWindowMs = 60000;
++
++inline constexpr std::string_view kSessionFileName = "akeno_direct_session";
++inline constexpr std::string_view kDisabledFileName = "akeno_direct_disabled";
++
++enum class ShortcutAction : uint8_t {
++  Toolbox,    /**< the upstream Toolbox route */
++  PluginRoot, /**< OnionHEN?Plugin=<ID> */
++  Ignore,     /**< duplicate of a request just dispatched */
++};
++
++/** One saved session (kSessionFile). */
++struct SessionRecord {
++  int pid = 0;
++  std::string stage;
++  std::string plugin;
++  uint64_t served_ms = 0;
++  uint64_t activity_ms = 0;
++};
++
++inline uint64_t now_ms() {
++  struct timespec ts {};
++  clock_gettime(CLOCK_MONOTONIC, &ts);
++  return static_cast<uint64_t>(ts.tv_sec) * 1000 +
++         static_cast<uint64_t>(ts.tv_nsec / 1000000);
++}
++
++inline std::string format_record(const SessionRecord &r) {
++  char line[160];
++  std::snprintf(line, sizeof(line),
++                "pid=%d stage=%s plugin=%s served_ms=%llu activity_ms=%llu\n",
++                r.pid, r.stage.c_str(), r.plugin.c_str(),
++                static_cast<unsigned long long>(r.served_ms),
++                static_cast<unsigned long long>(r.activity_ms));
++  return line;
++}
++
++inline bool parse_record(std::string_view text, SessionRecord &out) {
++  const std::string copy(text.substr(0, 159));
++  int pid = 0;
++  char stage[24] = {};
++  char plugin[24] = {};
++  unsigned long long served = 0, activity = 0;
++  if (std::sscanf(copy.c_str(),
++                  "pid=%d stage=%23s plugin=%23s served_ms=%llu activity_ms=%llu",
++                  &pid, stage, plugin, &served, &activity) != 5)
++    return false;
++  out = {pid, stage, plugin, served, activity};
++  return true;
++}
++
++/* A file under `dir`: written whole, read up to 255 bytes. */
++inline bool write_text(const std::string &path, std::string_view text) {
++  const int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
++  if (fd < 0) return false;
++  const bool ok = write(fd, text.data(), text.size()) ==
++                  static_cast<ssize_t>(text.size());
++  close(fd);
++  return ok;
++}
++
++inline bool read_text(const std::string &path, std::string &out) {
++  const int fd = open(path.c_str(), O_RDONLY);
++  if (fd < 0) return false;
++  char buffer[256];
++  const ssize_t n = read(fd, buffer, sizeof(buffer) - 1);
++  close(fd);
++  if (n < 0) return false;
++  out.assign(buffer, static_cast<size_t>(n));
++  return true;
++}
++
++class Session {
++public:
++  explicit Session(std::string dir = ONION_SYSTEM_TMP_ROOT)
++      : session_file_(dir + "/" + std::string(kSessionFileName)),
++        disabled_file_(dir + "/" + std::string(kDisabledFileName)) {}
++
++  /* SceShellUI start: what a predecessor left behind. */
++  void start(int pid, uint64_t now) {
++    std::lock_guard<std::mutex> lock(mu_);
++    pid_ = pid;
++    std::string text;
++    if (read_text(disabled_file_, text)) {
++      disabled_ = true;
++      while (!text.empty() && text.back() == '\n') text.pop_back();
++      LOG_WARN("AKENO_DIRECT: root mode off until the console restarts (%s)",
++               text.c_str());
++    }
++    if (!read_text(session_file_, text)) return;
++    unlink(session_file_.c_str());
++    SessionRecord prev;
++    if (!parse_record(text, prev)) {
++      LOG_WARN("AKENO_DIRECT: unreadable session file removed");
++      return;
++    }
++    const uint64_t age = since(prev.activity_ms, now);
++    LOG_WARN("AKENO_DIRECT: SceShellUI pid=%d starts while a direct-entry "
++             "session of pid=%d was open (%s, stage %s, last activity %llu ms "
++             "into the session and %llu ms ago)",
++             pid, prev.pid, prev.plugin.c_str(), prev.stage.c_str(),
++             static_cast<unsigned long long>(
++                 since(prev.served_ms, prev.activity_ms)),
++             static_cast<unsigned long long>(age));
++    if (age <= kRecentActivityMs) {
++      char why[160];
++      std::snprintf(why, sizeof(why),
++                    "SceShellUI pid=%d ended %llu ms after direct-entry "
++                    "activity (stage %s)",
++                    prev.pid, static_cast<unsigned long long>(age),
++                    prev.stage.c_str());
++      disable_locked(why);
++    }
++  }
++
++  /* The Toolbox shortcut (`source`: l2_r3, share, long_share). */
++  ShortcutAction on_shortcut(const char *source, std::string_view target,
++                             bool root_mode, bool plugin_has_page,
++                             uint64_t now) {
++    if (target.empty()) return ShortcutAction::Toolbox;
++    std::lock_guard<std::mutex> lock(mu_);
++    const std::string id(target);
++    if (!root_mode) {
++      LOG_INFO("AKENO_DIRECT: shortcut %s -> Toolbox, %s first (link mode)",
++               source, id.c_str());
++      return ShortcutAction::Toolbox;
++    }
++    if (disabled_) {
++      LOG_WARN("AKENO_DIRECT: shortcut %s -> Toolbox, %s first (root mode off "
++               "until restart)", source, id.c_str());
++      return ShortcutAction::Toolbox;
++    }
++    if (!plugin_has_page) {
++      LOG_WARN("AKENO_DIRECT: shortcut %s -> Toolbox (%s has no page; plugin "
++               "not running?)", source, id.c_str());
++      return ShortcutAction::Toolbox;
++    }
++    if (dispatched_ms_ != 0 && since(dispatched_ms_, now) < kDuplicateWindowMs) {
++      LOG_INFO("AKENO_DIRECT: shortcut %s ignored (%llu ms after the previous "
++               "request)", source,
++               static_cast<unsigned long long>(since(dispatched_ms_, now)));
++      return ShortcutAction::Ignore;
++    }
++    dispatched_ms_ = now;
++    LOG_INFO("AKENO_DIRECT: shortcut %s -> URI OnionHEN?Plugin=%s", source,
++             id.c_str());
++    return ShortcutAction::PluginRoot;
++  }
++
++  /* Boot hook, OnionHEN?Plugin=<ID>: true when the next Settings root is the
++   * plugin's page. Either way the URI opens Settings on the Toolbox route. */
++  bool on_plugin_uri(std::string_view id, bool root_mode, uint64_t now) {
++    std::lock_guard<std::mutex> lock(mu_);
++    const std::string plugin(id);
++    if (open_locked()) end_locked("a new request replaced it", now);
++    if (!root_mode || disabled_) {
++      stage_ = Stage::Idle;
++      LOG_INFO("AKENO_DIRECT: URI for %s -> Toolbox root (%s)", plugin.c_str(),
++               disabled_ ? "root mode off until restart" : "link mode");
++      return false;
++    }
++    stage_ = Stage::Pending;
++    plugin_ = plugin;
++    pending_ms_ = now;
++    LOG_INFO("AKENO_DIRECT: boot redirect -> Settings, %s pending as its root",
++             plugin.c_str());
++    return true;
++  }
++
++  /* Boot hook: another OnionHEN route replaces a pending request. */
++  void cancel_pending(const char *route) {
++    std::lock_guard<std::mutex> lock(mu_);
++    if (stage_ != Stage::Pending) return;
++    stage_ = Stage::Idle;
++    LOG_INFO("AKENO_DIRECT: pending %s cancelled by %s", plugin_.c_str(), route);
++  }
++
++  /* Resource hook: the plugin whose root page this Settings root shows, once;
++   * empty for every other resource, an expired request or no request. A
++   * Settings root served another way ends an open session. */
++  std::string take_root(std::string_view resource, std::string_view settings_root,
++                        uint64_t now) {
++    if (settings_root.empty() || resource != settings_root) return {};
++    std::lock_guard<std::mutex> lock(mu_);
++    if (stage_ == Stage::Pending) {
++      stage_ = Stage::Idle;
++      const uint64_t age = since(pending_ms_, now);
++      if (age > kPendingTtlMs) {
++        LOG_WARN("AKENO_DIRECT: request for %s expired after %llu ms -> "
++                 "Toolbox root", plugin_.c_str(),
++                 static_cast<unsigned long long>(age));
++        return {};
++      }
++      LOG_INFO("AKENO_DIRECT: Settings root requested %llu ms after the "
++               "redirect", static_cast<unsigned long long>(age));
++      return plugin_;
++    }
++    if (open_locked()) end_locked("the Settings root was opened again", now);
++    return {};
++  }
++
++  void root_served(std::string_view id, uint64_t now) {
++    std::lock_guard<std::mutex> lock(mu_);
++    stage_ = Stage::RootServed;
++    plugin_ = std::string(id);
++    served_ms_ = now;
++    LOG_INFO("AKENO_DIRECT: %s root page served as the Settings root "
++             "(setting_list id_debug_settings, fresh page stack)",
++             plugin_.c_str());
++    touch_locked(now);
++  }
++
++  void root_failed(std::string_view id, const char *why) {
++    std::lock_guard<std::mutex> lock(mu_);
++    stage_ = Stage::Idle;
++    const std::string plugin(id);
++    LOG_WARN("AKENO_DIRECT: %s root unavailable (%s) -> Toolbox root",
++             plugin.c_str(), why);
++  }
++
++  /* SettingPage.OnActivated: the first activation after the root was served
++   * is the root itself; it has the Settings focus from here on. */
++  void page_activated(int transition, uint64_t now) {
++    std::lock_guard<std::mutex> lock(mu_);
++    if (stage_ != Stage::RootServed) return;
++    stage_ = Stage::Active;
++    LOG_INFO("AKENO_DIRECT: root activated (transition %d, %llu ms after it "
++             "was served); input goes to %s", transition,
++             static_cast<unsigned long long>(since(served_ms_, now)),
++             plugin_.c_str());
++    touch_locked(now);
++  }
++
++  /* Resource hook: a plugin page was shown; `depth` pages are open. */
++  void navigated(size_t depth, uint64_t now) {
++    std::lock_guard<std::mutex> lock(mu_);
++    if (!open_locked()) return;
++    LOG_INFO("AKENO_DIRECT: page shown, depth %zu", depth);
++    touch_locked(now);
++  }
++
++  /* SettingPageStack.OnPopping on a plugin page; `depth` pages remain. */
++  void popped(size_t depth, uint64_t now) {
++    std::lock_guard<std::mutex> lock(mu_);
++    if (!open_locked()) return;
++    if (depth == 0) {
++      end_locked("root left, Settings closing", now);
++      return;
++    }
++    LOG_INFO("AKENO_DIRECT: page popped, depth %zu", depth);
++    touch_locked(now);
++  }
++
++  /* SettingPage.OnPressed on a plugin page. */
++  void pressed(const char *outcome, size_t depth, uint64_t now) {
++    std::lock_guard<std::mutex> lock(mu_);
++    if (!open_locked()) return;
++    LOG_INFO("AKENO_DIRECT: press at depth %zu -> %s", depth, outcome);
++    touch_locked(now);
++  }
++
++  /* GamePad.GetData after a session: ShellUI still reads the pad, and whether
++   * the buttons change. One relaxed load per frame otherwise. */
++  bool watching() const {
++    return watch_until_ms_.load(std::memory_order_relaxed) != 0;
++  }
++
++  void pad_frame(uint32_t buttons, uint64_t now) {
++    const uint64_t until = watch_until_ms_.load(std::memory_order_relaxed);
++    if (until == 0) return;
++    frames_.fetch_add(1, std::memory_order_relaxed);
++    if (last_buttons_.exchange(buttons, std::memory_order_relaxed) != buttons)
++      changes_.fetch_add(1, std::memory_order_relaxed);
++    uint64_t next = next_report_ms_.load(std::memory_order_relaxed);
++    if (now < next ||
++        !next_report_ms_.compare_exchange_strong(next, now + kWatchIntervalMs))
++      return;
++    const unsigned frames = frames_.exchange(0, std::memory_order_relaxed);
++    const unsigned changes = changes_.exchange(0, std::memory_order_relaxed);
++    if (now >= until) {
++      uint64_t expected = until;
++      if (watch_until_ms_.compare_exchange_strong(expected, 0))
++        LOG_INFO("AKENO_DIRECT: input watch done: ShellUI reads the pad "
++                 "(%u reads, %u button changes in the last interval)",
++                 frames, changes);
++      return;
++    }
++    LOG_INFO("AKENO_DIRECT: ShellUI reads the pad: %u reads, %u button "
++             "changes in the last interval", frames, changes);
++  }
++
++  bool disabled() const {
++    std::lock_guard<std::mutex> lock(mu_);
++    return disabled_;
++  }
++
++  /* Test hook: whether a session is open (root served, not left). */
++  bool open() const {
++    std::lock_guard<std::mutex> lock(mu_);
++    return open_locked();
++  }
++
++  const std::string &session_file() const { return session_file_; }
++  const std::string &disabled_file() const { return disabled_file_; }
++
++private:
++  enum class Stage : uint8_t { Idle, Pending, RootServed, Active };
++
++  static const char *stage_name(Stage stage) {
++    switch (stage) {
++    case Stage::Pending: return "pending";
++    case Stage::RootServed: return "root_served";
++    case Stage::Active: return "active";
++    case Stage::Idle: break;
++    }
++    return "idle";
++  }
++
++  /* Elapsed time; 0 when the clock reads earlier than `from`. */
++  static uint64_t since(uint64_t from, uint64_t now) {
++    return now >= from ? now - from : 0;
++  }
++
++  bool open_locked() const {
++    return stage_ == Stage::RootServed || stage_ == Stage::Active;
++  }
++
++  /* Activity: the session file and the input watch follow it. */
++  void touch_locked(uint64_t now) {
++    activity_ms_ = now;
++    const SessionRecord record{pid_, stage_name(stage_), plugin_, served_ms_,
++                               now};
++    if (!write_text(session_file_, format_record(record)))
++      LOG_WARN("AKENO_DIRECT: cannot write %s", session_file_.c_str());
++    watch_locked(now);
++  }
++
++  void watch_locked(uint64_t now) {
++    if (watch_until_ms_.load(std::memory_order_relaxed) == 0) {
++      next_report_ms_.store(now + kWatchIntervalMs, std::memory_order_relaxed);
++      frames_.store(0, std::memory_order_relaxed);
++      changes_.store(0, std::memory_order_relaxed);
++    }
++    watch_until_ms_.store(now + kWatchWindowMs, std::memory_order_relaxed);
++  }
++
++  void end_locked(const char *why, uint64_t now) {
++    LOG_INFO("AKENO_DIRECT: session ended (%s) after %llu ms; watching input "
++             "for %llu s", why,
++             static_cast<unsigned long long>(since(served_ms_, now)),
++             static_cast<unsigned long long>(kWatchWindowMs / 1000));
++    stage_ = Stage::Idle;
++    unlink(session_file_.c_str());
++    watch_locked(now);
++  }
++
++  void disable_locked(const char *why) {
++    disabled_ = true;
++    stage_ = Stage::Idle;
++    write_text(disabled_file_, std::string(why) + "\n");
++    LOG_WARN("AKENO_DIRECT: root mode off until the console restarts: %s; the "
++             "shortcut opens the Toolbox", why);
++  }
++
++  mutable std::mutex mu_;
++  const std::string session_file_;
++  const std::string disabled_file_;
++  int pid_ = 0;
++  Stage stage_ = Stage::Idle;
++  std::string plugin_;
++  uint64_t dispatched_ms_ = 0;
++  uint64_t pending_ms_ = 0;
++  uint64_t served_ms_ = 0;
++  uint64_t activity_ms_ = 0;
++  bool disabled_ = false;
++  std::atomic<uint64_t> watch_until_ms_{0};
++  std::atomic<uint64_t> next_report_ms_{0};
++  std::atomic<unsigned> frames_{0};
++  std::atomic<unsigned> changes_{0};
++  std::atomic<uint32_t> last_buttons_{0};
++};
++
++/** The SceShellUI process's session. */
++inline Session &shared_session() {
++  static Session session;
++  return session;
++}
++
++/* ---- Hook steps (the Mono hooks call these; host tests drive them) ---- */
++
++/** GoToToolboxShortcutTarget: the URI to open, empty for none. */
++inline std::string shortcut_uri(Session &session, const char *source,
++                                const onion::Settings &settings,
++                                std::string_view toolbox_uri, uint64_t now) {
++  const std::string &target = settings.toolbox_shortcut_target;
++  const bool plugin_has_page =
++      !target.empty() &&
++      !onion::shellui::dynamic_ui::plugin_root_title(target).empty();
++  switch (session.on_shortcut(source, target,
++                              settings.toolbox_target_mode ==
++                                  onion::kToolboxTargetRoot,
++                              plugin_has_page, now)) {
++  case ShortcutAction::PluginRoot:
++    return plugin_page_uri(target);
++  case ShortcutAction::Ignore:
++    return {};
++  case ShortcutAction::Toolbox:
++    break;
++  }
++  return std::string(toolbox_uri);
++}
++
++/** Boot hook, OnionHEN?Plugin=<ID>: the newest request wins over a Cheats
++ * flag; without root mode the URI opens the Toolbox root. */
++inline void accept_plugin_uri(Session &session, ToolboxUiState &ui,
++                              std::string_view plugin_id,
++                              const onion::Settings &settings, uint64_t now) {
++  ui.clear_cheat_shortcuts();
++  session.on_plugin_uri(plugin_id,
++                        settings.toolbox_target_mode == onion::kToolboxTargetRoot,
++                        now);
++}
++
++/** GetManifestResourceStream_Hook: true with `out_xml` when `resource` is a
++ * plugin page. The Settings root of a pending request is the plugin's root
++ * page (no parent to restore); a plugin page that fails to render leaves the
++ * resource to the Toolbox route. Any other Settings root starts with no plugin
++ * page open: Settings may have closed on a plugin page without a pop. */
++inline bool serve_plugin_page(Session &session, ToolboxUiState &ui,
++                              std::string_view resource,
++                              std::string_view settings_root,
++                              std::string &out_xml, uint64_t now) {
++  namespace dyn = onion::shellui::dynamic_ui;
++  if (const std::string plugin = session.take_root(resource, settings_root, now);
++      !plugin.empty()) {
++    if (dyn::render_plugin_root(plugin, out_xml)) {
++      session.root_served(plugin, now);
++      ui.enter_settings_root(Page::DynamicPlugin);
++      return true;
++    }
++    session.root_failed(plugin, "no renderable root page");
++  }
++  if (!settings_root.empty() && resource == settings_root) {
++    if (dyn::page_depth() != 0)
++      LOG_INFO("AKENO_DIRECT: %zu plugin page(s) left open by an earlier "
++               "Settings session dropped", dyn::page_depth());
++    dyn::clear_page_stack();
++    return false;
++  }
++  if (!dyn::render_resource(resource, out_xml)) return false;
++  ui.set_active_page(Page::DynamicPlugin);
++  session.navigated(dyn::page_depth(), now);
++  return true;
++}
++
++/** SettingPageStack.OnPopping while a plugin page is active. */
++inline void leave_plugin_page(Session &session, ToolboxUiState &ui,
++                              uint64_t now) {
++  namespace dyn = onion::shellui::dynamic_ui;
++  const bool dynamic_parent = dyn::leave_active_page();
++  if (!dynamic_parent) ui.leave_page(Page::DynamicPlugin);
++  LOG_DEBUG("dynamic_plugin_xml: page popped; dynamic_parent=%d",
++            dynamic_parent ? 1 : 0);
++  session.popped(dyn::page_depth(), now);
++}
++
++/** SettingPage.OnPressed on a plugin page: the press goes to the plugin. */
++inline onion::shellui::dynamic_ui::DispatchResult
++press_plugin_control(Session &session, std::string_view control_id,
++                     std::string_view value, uint64_t now) {
++  namespace dyn = onion::shellui::dynamic_ui;
++  const dyn::DispatchResult result = dyn::dispatch_control(control_id, value);
++  session.pressed(result == dyn::DispatchResult::Accepted ? "sent to the plugin"
++                  : result == dyn::DispatchResult::Unavailable
++                      ? "plugin unavailable"
++                      : "Settings (not a plugin control)",
++                  dyn::page_depth(), now);
++  return result;
++}
++
++} // namespace toolbox::direct_entry
+diff --git a/source/shellui/include/dynamic_ui_runtime.hpp b/source/shellui/include/dynamic_ui_runtime.hpp
+index aa1d6c6..82b6255 100644
+--- a/source/shellui/include/dynamic_ui_runtime.hpp
++++ b/source/shellui/include/dynamic_ui_runtime.hpp
+@@ -2,6 +2,7 @@
+ 
+ #include <onion/plugin_ui.hpp>
+ 
++#include <cstddef>
+ #include <cstdint>
+ #include <string>
+ #include <string_view>
+@@ -46,11 +47,25 @@ void append_plugin_links(
+     const std::vector<PluginSettingsLink> &settings,
+     const std::vector<std::string> &matched_link_ids);
+ bool render_resource(std::string_view resource, std::string &out_xml);
++/* The root setting_list id of every page that stands in for debug_settings.xml:
++ * the Toolbox root (generate_toolbox_xml) and the Cheats page opened by
++ * OnionHEN?Cheats (generate_cheats_xml, running_as_debug_settings). */
++inline constexpr std::string_view kSettingsRootListId = "id_debug_settings";
+ /* Direct entry (OnionHEN?Plugin=<ID>): render the root page of `plugin_id`'s
+  * contribution as the first page of a fresh dynamic stack, because it becomes
+- * the Settings root. False, with nothing changed, when the plugin has no
++ * the Settings root; its root setting_list is kSettingsRootListId, like every
++ * other Settings root. False, with nothing changed, when the plugin has no
+  * renderable root page. */
+ bool render_plugin_root(std::string_view plugin_id, std::string &out_xml);
++/** Pages on the dynamic stack (0 when no plugin page is active). */
++size_t page_depth();
++/** A new Settings root: no plugin page is open below it. */
++void clear_page_stack();
++/* The Toolbox root of [shortcuts] toolbox_target: `plugin_id`'s settings link
++ * (the link the Plugins page shows) as the page's first entry, with the initial
++ * focus. Call before adding anything else. False, with `page` unchanged, when
++ * the plugin has no page. */
++bool add_root_shortcut_link(ps5ui::Page &page, std::string_view plugin_id);
+ /** The title of `plugin_id`'s root settings link; empty when it has none. */
+ std::string plugin_root_title(std::string_view plugin_id);
+ DispatchResult dispatch_control(std::string_view control_id,
+diff --git a/source/shellui/include/dynamic_ui_xml.hpp b/source/shellui/include/dynamic_ui_xml.hpp
+index dbb33aa..f7d4640 100644
+--- a/source/shellui/include/dynamic_ui_xml.hpp
++++ b/source/shellui/include/dynamic_ui_xml.hpp
+@@ -41,9 +41,12 @@ const plugin_ui::ContributionSnapshot *resolve_resource(
+ const plugin_ui::Node *resolve_control(const plugin_ui::Document &document,
+                                        std::string_view page_id,
+                                        std::string_view xml_control_id);
++/* `root_list_id` replaces the id of the page's root setting_list; empty keeps
++ * the page's own control id. */
+ RenderResult render_page(const plugin_ui::Document &document,
+                          std::string_view page_id,
+-                         const FirmwareProfile &profile);
++                         const FirmwareProfile &profile,
++                         std::string_view root_list_id = {});
+ 
+ } // namespace onion::shellui::dynamic_ui
+ 
+diff --git a/source/shellui/include/hooked_funcs.hpp b/source/shellui/include/hooked_funcs.hpp
+index e1fb891..f6d7c35 100644
+--- a/source/shellui/include/hooked_funcs.hpp
++++ b/source/shellui/include/hooked_funcs.hpp
+@@ -386,8 +386,9 @@ MonoString* GetString(MonoString* str);
+ int ItemzLaunchByUri(const char* uri);
+ void GoToHome();
+ void GoToURI(const char* uri);
+-/* Opens what [shortcuts] toolbox_target names: the Toolbox, or a plugin's page. */
+-void GoToToolboxShortcutTarget();
++/* Opens what [shortcuts] toolbox_target names: the Toolbox, or a plugin's page
++ * (toolbox_target_mode, direct_entry.hpp). `source` names the shortcut. */
++void GoToToolboxShortcutTarget(const char *source);
+ bool Get_Running_App_TID(std::string& title_id, int& BigAppid);
+ void generate_cheats_xml(std::string &new_xml, std::string& not_open_tid, bool running_as_debug_settings, bool show_while_not_open);
+ #include <onion/proc_query.h>
+diff --git a/source/shellui/include/shellui_state.hpp b/source/shellui/include/shellui_state.hpp
+index 9aaf78f..a7a8967 100644
+--- a/source/shellui/include/shellui_state.hpp
++++ b/source/shellui/include/shellui_state.hpp
+@@ -22,8 +22,6 @@ struct ToolboxUiState {
+ 
+   bool cheats_shortcut_activated = false;
+   bool cheats_shortcut_activated_not_open = false;
+-  /* Plugin whose root page the next Settings root shows (OnionHEN?Plugin=). */
+-  std::string direct_plugin_id;
+ 
+   bool is_game_open = true;
+   bool is_current_game_open = true;
+@@ -58,6 +56,17 @@ struct ToolboxUiState {
+     active_page = page;
+   }
+ 
++  /* A page served as the Settings root (OnionHEN?Plugin=<ID>): no parent to
++   * restore when it is left, and no shortcut flag outlives it. */
++  void enter_settings_root(toolbox::Page page) {
++    parent_pages.clear();
++    parent_page = toolbox::Page::None;
++    child_page = toolbox::Page::None;
++    active_plugin.clear();
++    clear_cheat_shortcuts();
++    active_page = page;
++  }
++
+   bool is_active_page(toolbox::Page page) const {
+     return active_page == page;
+   }
+diff --git a/source/shellui/src/dynamic_ui_runtime.cpp b/source/shellui/src/dynamic_ui_runtime.cpp
+index caf8cef..8e3ad9a 100644
+--- a/source/shellui/src/dynamic_ui_runtime.cpp
++++ b/source/shellui/src/dynamic_ui_runtime.cpp
+@@ -147,7 +147,8 @@ bool render_plugin_root(std::string_view plugin_id, std::string &out_xml) {
+       resolve_resource(runtime.snapshot, link->resource, &page_id);
+   if (!entry || !entry->document || entry->document->plugin_id != plugin_id)
+     return false;
+-  RenderResult rendered = render_page(*entry->document, page_id, runtime.profile);
++  RenderResult rendered = render_page(*entry->document, page_id, runtime.profile,
++                                      kSettingsRootListId);
+   if (rendered.status != RenderStatus::Ok) return false;
+   out_xml = std::move(rendered.xml);
+   runtime.page_stack.clear();
+@@ -155,6 +156,32 @@ bool render_plugin_root(std::string_view plugin_id, std::string &out_xml) {
+   return true;
+ }
+ 
++size_t page_depth() {
++  RuntimeState &runtime = state();
++  std::lock_guard<std::mutex> lock(runtime.mutex);
++  return runtime.page_stack.size();
++}
++
++void clear_page_stack() {
++  RuntimeState &runtime = state();
++  std::lock_guard<std::mutex> lock(runtime.mutex);
++  runtime.page_stack.clear();
++}
++
++bool add_root_shortcut_link(ps5ui::Page &page, std::string_view plugin_id) {
++  if (plugin_id.empty()) return false;
++  for (const PluginSettingsLink &link : plugin_settings_links()) {
++    if (link.plugin_id != plugin_id) continue;
++    page.link(link.control_id, link.title, link.resource,
++              link.description.empty()
++                  ? std::optional<std::string>{}
++                  : std::optional<std::string>{link.description});
++    page.root_focus(link.control_id);
++    return true;
++  }
++  return false;
++}
++
+ std::string plugin_root_title(std::string_view plugin_id) {
+   for (const PluginSettingsLink &link : plugin_settings_links())
+     if (link.plugin_id == plugin_id) return link.title;
+diff --git a/source/shellui/src/dynamic_ui_xml.cpp b/source/shellui/src/dynamic_ui_xml.cpp
+index 2c3296d..cea19e5 100644
+--- a/source/shellui/src/dynamic_ui_xml.cpp
++++ b/source/shellui/src/dynamic_ui_xml.cpp
+@@ -179,7 +179,8 @@ const plugin_ui::Node *resolve_control(const plugin_ui::Document &document,
+ 
+ RenderResult render_page(const plugin_ui::Document &document,
+                          std::string_view page_id,
+-                         const FirmwareProfile &profile) {
++                         const FirmwareProfile &profile,
++                         std::string_view root_list_id) {
+   if (!profile.supported)
+     return {RenderStatus::UnsupportedFirmware, {}, "unsupported ShellUI firmware"};
+   std::string validation_error;
+@@ -191,7 +192,9 @@ RenderResult render_page(const plugin_ui::Document &document,
+   if (!page_node || page_node->kind != plugin_ui::NodeKind::Page)
+     return {RenderStatus::PageNotFound, {}, "UI page was not found"};
+ 
+-  ps5ui::Page page(control_id(document, page_node->id), page_node->title);
++  ps5ui::Page page(root_list_id.empty() ? control_id(document, page_node->id)
++                                        : std::string(root_list_id),
++                   page_node->title);
+   bool supported = true;
+   for (const plugin_ui::Node &child : document.nodes) {
+     if (!is_child(child, page_id)) continue;
+diff --git a/source/shellui/src/hook_boot.cpp b/source/shellui/src/hook_boot.cpp
+index 3e8375e..9ec541d 100644
+--- a/source/shellui/src/hook_boot.cpp
++++ b/source/shellui/src/hook_boot.cpp
+@@ -15,6 +15,7 @@
+ #include <cstring>
+ 
+ #include "shellui_state.hpp"
++#include "direct_entry.hpp"
+ #include "toolbox_route.hpp"
+ #include <onion/platform.h>
+ 
+@@ -36,43 +37,47 @@ bool handle_uri_boot_common(MonoString* uri, int opt, MonoString* titleIdForBoot
+                 !titleId.empty() ? titleId.c_str() : "NULL", 
+                 opt);
+   
++    auto &direct = toolbox::direct_entry::shared_session();
+     if(uri_string == "OnionHEN?Cheats") {
+       LOG_DEBUG("cheats_shortcut URI detected");
++      direct.cancel_pending("OnionHEN?Cheats");
+       g_ui.cheats_shortcut_activated = true;
+       return true; // Signal to redirect
+     }
+     else if(uri_string == "OnionHEN?Cheats_not_open") {
+       LOG_DEBUG("cheats_shortcut (not open) URI detected");
++      direct.cancel_pending("OnionHEN?Cheats_not_open");
+       g_ui.cheats_shortcut_activated_not_open = true;
+       return true;
+     }
+     else if (uri_string == "OnionHEN?DL_UPDATE") {
+         LOG_DEBUG("DL_UPDATE URI detected");
+-        
++        direct.cancel_pending("OnionHEN?DL_UPDATE");
+         return true; // Signal to redirect
+     }
+     else if (is_home_top_nav_uri(uri_string)) {
+       LOG_DEBUG("HomeUI top-nav OnionHEN URI detected");
++      direct.cancel_pending("the HomeUI OnionHEN entry");
+       return true;
+     }
+     else if (const std::string_view plugin_id =
+                  toolbox::parse_plugin_page_uri(uri_string);
+              !plugin_id.empty()) {
+-      LOG_DEBUG("plugin page URI detected: %.*s",
+-                static_cast<int>(plugin_id.size()), plugin_id.data());
+-      g_ui.direct_plugin_id = std::string(plugin_id);
++      toolbox::direct_entry::accept_plugin_uri(direct, g_ui, plugin_id,
++                                               g_settings,
++                                               toolbox::direct_entry::now_ms());
+       return true;
+     }
+ 
+     return false; // No redirect needed
+   }
+   
+-void GoToToolboxShortcutTarget() {
+-  if (!g_settings.toolbox_shortcut_target.empty()) {
+-    GoToURI(toolbox::plugin_page_uri(g_settings.toolbox_shortcut_target).c_str());
+-    return;
+-  }
+-  GoToURI(shellui_debug_settings_toolbox_uri());
++void GoToToolboxShortcutTarget(const char *source) {
++  const std::string uri = toolbox::direct_entry::shortcut_uri(
++      toolbox::direct_entry::shared_session(), source, g_settings,
++      shellui_debug_settings_toolbox_uri(), toolbox::direct_entry::now_ms());
++  if (!uri.empty())
++    GoToURI(uri.c_str());
+ }
+ 
+   bool uri_boot_hook(MonoString* uri, int opt, MonoString* titleIdForBootAction) {
+@@ -247,7 +252,7 @@ void GoToToolboxShortcutTarget() {
+   
+       if (toolbox_sc_activated) {
+         LOG_DEBUG("Toolbox Shortcut Activated");
+-        GoToToolboxShortcutTarget();
++        GoToToolboxShortcutTarget("l2_r3");
+         result.Buttons = None; // Clear the Select button to prevent triggering other actions
+       }
+     }
+@@ -255,6 +260,12 @@ void GoToToolboxShortcutTarget() {
+     if (result.Buttons & Option) {
+       LOG_DEBUG("Option button pressed");
+     }
++
++    // AKENO direct entry: after a session, whether ShellUI still reads the pad.
++    auto &direct = toolbox::direct_entry::shared_session();
++    if (direct.watching())
++      direct.pad_frame(static_cast<uint32_t>(result.Buttons),
++                       toolbox::direct_entry::now_ms());
+   
+     return result;
+   }
+diff --git a/source/shellui/src/hook_capture.cpp b/source/shellui/src/hook_capture.cpp
+index 4348031..5e69178 100644
+--- a/source/shellui/src/hook_capture.cpp
++++ b/source/shellui/src/hook_capture.cpp
+@@ -26,7 +26,7 @@ bool CaptureScreen(){
+   }
+   else if (g_settings.toolbox_shortcut_opt == TOOLBOX_LONG_SHARE){
+     //LOG_DEBUG("CaptureScreen: Long Share Shortcut activated");
+-    GoToToolboxShortcutTarget();
++    GoToToolboxShortcutTarget("long_share");
+     return true;
+   }
+ 
+@@ -80,7 +80,7 @@ void OnShareButton(MonoObject * data) {
+   }
+   else if (g_settings.toolbox_shortcut_opt == TOOLBOX_SINGLE_SHARE) {
+     // LOG_DEBUG("Share Shortcut: Redirecting to Toolbox");
+-    GoToToolboxShortcutTarget();
++    GoToToolboxShortcutTarget("share");
+     return;
+   }
+ 
+diff --git a/source/shellui/src/hook_manifest.cpp b/source/shellui/src/hook_manifest.cpp
+index 0437ee9..82a4f87 100644
+--- a/source/shellui/src/hook_manifest.cpp
++++ b/source/shellui/src/hook_manifest.cpp
+@@ -11,11 +11,11 @@
+ #include "remote_play.hpp"
+ #include "toolbox_route.hpp"
+ #include "dynamic_ui_runtime.hpp"
++#include "direct_entry.hpp"
+ #include "external_plugin_ui.hpp"
+ #include "external_sprx_ui.hpp"
+ #include <onion/platform.h>
+ #include <string>
+-#include <utility>
+ 
+ extern MonoClass *MemoryStream_IO;
+ extern MonoObject *MemoryStream_Instance;
+@@ -49,24 +49,11 @@ uint64_t GetManifestResourceStream_Hook(uint64_t inst, MonoString *FileName) {
+   std::string new_xml_string;
+   std::string resourceName = Mono_to_String(FileName);
+   MonoDomain *domain = current_mono_domain();
+-  bool dynamic_page = false;
+-  if (toolbox::direct_plugin_takes_resource(resourceName, debug_settings_xml,
+-                                            g_ui.direct_plugin_id)) {
+-    /* OnionHEN?Plugin=<ID>: this Settings root shows the plugin's root page,
+-     * once. Without a renderable page the Toolbox root opens as usual. */
+-    const std::string plugin_id = std::exchange(g_ui.direct_plugin_id, {});
+-    dynamic_page = onion::shellui::dynamic_ui::render_plugin_root(
+-        plugin_id, new_xml_string);
+-    if (dynamic_page)
+-      LOG_INFO("direct entry: %s root page as the Settings root",
+-               plugin_id.c_str());
+-    else
+-      LOG_WARN("direct entry: %s has no page; opening the Toolbox",
+-               plugin_id.c_str());
+-  }
+-  if (!dynamic_page)
+-    dynamic_page = onion::shellui::dynamic_ui::render_resource(resourceName,
+-                                                               new_xml_string);
++  /* A plugin page, or with OnionHEN?Plugin=<ID> in root mode the plugin's
++   * root page as this Settings root (direct_entry.hpp). */
++  const bool dynamic_page = toolbox::direct_entry::serve_plugin_page(
++      toolbox::direct_entry::shared_session(), g_ui, resourceName,
++      debug_settings_xml, new_xml_string, toolbox::direct_entry::now_ms());
+ 
+   LOG_DEBUG("GetManifestResourceStream_Hook: %s domain=%p root=%p",
+               resourceName.c_str(), (void *)domain, (void *)Root_Domain);
+@@ -75,9 +62,7 @@ uint64_t GetManifestResourceStream_Hook(uint64_t inst, MonoString *FileName) {
+   const bool shortcut_not_open = g_ui.cheats_shortcut_activated_not_open;
+ 
+   toolbox::RouteResult route{};
+-  if (dynamic_page) {
+-    g_ui.set_active_page(toolbox::Page::DynamicPlugin);
+-  } else {
++  if (!dynamic_page) {
+     route = toolbox::resolve_resource({
+         .resource = resourceName,
+         .names =
+diff --git a/source/shellui/src/hook_onpress.cpp b/source/shellui/src/hook_onpress.cpp
+index c1916fb..a9d5d04 100644
+--- a/source/shellui/src/hook_onpress.cpp
++++ b/source/shellui/src/hook_onpress.cpp
+@@ -6,6 +6,7 @@
+ #include "hooked_funcs.hpp"
+ #include "shellui_state.hpp"
+ #include "dynamic_ui_runtime.hpp"
++#include "direct_entry.hpp"
+ 
+ namespace {
+ 
+@@ -118,8 +119,9 @@ int OnPress_Hook(MonoObject *Instance, MonoObject *element, MonoObject *e) {
+   ctx.title = GetPropertyValue(element, "Title");
+ 
+   if (domain == toolbox::OnPressDomain::DynamicPlugin) {
+-    const auto dynamic_result = onion::shellui::dynamic_ui::dispatch_control(
+-        ctx.id, ctx.value);
++    const auto dynamic_result = toolbox::direct_entry::press_plugin_control(
++        toolbox::direct_entry::shared_session(), ctx.id, ctx.value,
++        toolbox::direct_entry::now_ms());
+     if (dynamic_result !=
+         onion::shellui::dynamic_ui::DispatchResult::NotOwned) {
+       return 0;
+diff --git a/source/shellui/src/hook_page_stack.cpp b/source/shellui/src/hook_page_stack.cpp
+index 9f5a103..724c336 100644
+--- a/source/shellui/src/hook_page_stack.cpp
++++ b/source/shellui/src/hook_page_stack.cpp
+@@ -15,6 +15,7 @@
+ #include "remote_play.hpp"
+ #include "shellui_state.hpp"
+ #include "dynamic_ui_runtime.hpp"
++#include "direct_entry.hpp"
+ #include "settings_page_refresh.hpp"
+ #include "toolbox_route.hpp"
+ 
+@@ -35,12 +36,9 @@ void SettingPageStackOnPopping_Hook(MonoObject *instance,
+       g_ui.leave_page(toolbox::Page::RemotePlay);
+       LOG_DEBUG("remote_play_xml: page popped and parent route restored");
+     } else if (g_ui.active_page == toolbox::Page::DynamicPlugin) {
+-      const bool dynamic_parent =
+-          onion::shellui::dynamic_ui::leave_active_page();
+-      if (!dynamic_parent)
+-        g_ui.leave_page(toolbox::Page::DynamicPlugin);
+-      LOG_DEBUG("dynamic_plugin_xml: page popped; dynamic_parent=%d",
+-                dynamic_parent ? 1 : 0);
++      toolbox::direct_entry::leave_plugin_page(
++          toolbox::direct_entry::shared_session(), g_ui,
++          toolbox::direct_entry::now_ms());
+     } else if (toolbox::restores_parent_on_pop(g_ui.active_page)) {
+       const toolbox::Page child = g_ui.active_page;
+       g_ui.leave_page(child);
+@@ -61,6 +59,9 @@ void SettingPageOnActivated_Hook(MonoObject *page, int transition) {
+   // Firmware TransitionType.Pop = 2. This is reached after stack transition completion.
+   if (shellui_hooks_are_ready() && page && transition == 2)
+     onion::shellui::settings::refresh(page);
++  if (shellui_hooks_are_ready() && page)
++    toolbox::direct_entry::shared_session().page_activated(
++        transition, toolbox::direct_entry::now_ms());
+ }
+ 
+ void SettingListCleanup_Hook(MonoObject *page) {
+diff --git a/source/shellui/src/prx.cpp b/source/shellui/src/prx.cpp
+index a3f71f4..8c0ee01 100644
+--- a/source/shellui/src/prx.cpp
++++ b/source/shellui/src/prx.cpp
+@@ -16,6 +16,7 @@ along with this program; see the file COPYING. If not, see
+ 
+ #include "detour.h"
+ #include "debug_settings_route_runtime.hpp"
++#include "direct_entry.hpp"
+ #include "dynamic_ui_runtime.hpp"
+ #include "hooked_funcs.hpp"
+ #include "defs.h"
+@@ -785,6 +786,15 @@ int main(int argc, char const* argv[]) {
+     return -1;
+   }
+   LOG_DEBUG("Settings loaded successfully");
++  toolbox::direct_entry::shared_session().start(
++      static_cast<int>(pid), toolbox::direct_entry::now_ms());
++  if (!g_settings.toolbox_shortcut_target.empty())
++    LOG_INFO("AKENO_DIRECT: shortcut target %s, %s mode%s",
++             g_settings.toolbox_shortcut_target.c_str(),
++             g_settings.toolbox_target_mode == onion::kToolboxTargetRoot
++                 ? "root" : "link",
++             toolbox::direct_entry::shared_session().disabled()
++                 ? " (root mode off until restart)" : "");
+ 
+   Root_Domain = mono_get_root_domain();
+   if (!Root_Domain) {
+diff --git a/source/shellui/src/toolbox_xml.cpp b/source/shellui/src/toolbox_xml.cpp
+index e7ec10e..106c1d6 100644
+--- a/source/shellui/src/toolbox_xml.cpp
++++ b/source/shellui/src/toolbox_xml.cpp
+@@ -1042,7 +1042,13 @@ void append_toolbox_about_group(ps5ui::Group& g) {
+ 
+ void generate_toolbox_xml(std::string& new_xml) {
+   ps5ui::Page page("id_debug_settings", toolbox_i18n::tr("root.title"));
+-  page.root_focus("id_group_pkg");
++  /* [shortcuts] toolbox_target (or [game_menu] plugin_entry): that plugin's
++   * page first and selected, the link the Plugins page has. */
++  const std::string &quick_plugin = !g_settings.toolbox_shortcut_target.empty()
++                                        ? g_settings.toolbox_shortcut_target
++                                        : g_settings.game_menu_plugin_entry;
++  if (!onion::shellui::dynamic_ui::add_root_shortcut_link(page, quick_plugin))
++    page.root_focus("id_group_pkg");
+ 
+   page.group(
+           "id_group_pkg", toolbox_i18n::tr("group.pkg"),
+diff --git a/source/util/tests/Makefile b/source/util/tests/Makefile
+index 8f8b5a7..9da7cb2 100644
+--- a/source/util/tests/Makefile
++++ b/source/util/tests/Makefile
+@@ -160,6 +160,7 @@ TEST_CXX_SRCS := \
+ 	test_sprx_catalog.cpp \
+ 	test_sprx_plugin_manager.cpp \
+ 	test_plugin_ui.cpp \
++	test_direct_entry.cpp \
+ 	test_plugin_sprx_pages.cpp \
+ 	test_plugin_progress.cpp \
+ 	test_progress_auto_return.cpp \
+diff --git a/source/util/tests/test_direct_entry.cpp b/source/util/tests/test_direct_entry.cpp
+new file mode 100644
+index 0000000..a4d964c
+--- /dev/null
++++ b/source/util/tests/test_direct_entry.cpp
+@@ -0,0 +1,440 @@
++/* AKENO direct entry (direct_entry.hpp): the session that keeps
++ * toolbox_target_mode=root from outliving its Settings session, the Settings
++ * root's page ownership, and the config keys. The page flow with a real plugin
++ * document is plugin_ui_direct_entry_flow in test_plugin_ui.cpp. */
++#include "test_harness.h"
++
++#include "direct_entry.hpp"
++#include "dynamic_ui_runtime.hpp"
++#include "shellui_state.hpp"
++#include "toolbox_route.hpp"
++
++#include <onion/settings.hpp>
++
++#include <atomic>
++#include <cstdio>
++#include <cstdlib>
++#include <string>
++#include <sys/stat.h>
++#include <thread>
++#include <unistd.h>
++#include <vector>
++
++using toolbox::direct_entry::Session;
++using toolbox::direct_entry::ShortcutAction;
++namespace de = toolbox::direct_entry;
++
++namespace {
++
++constexpr const char *kRoot = "debug_settings.xml";
++constexpr const char *kToolboxUri = "pssettings:play?mode=settings&function=debug_settings_old";
++
++std::string make_dir() {
++  char path[] = "/tmp/onion-direct-XXXXXX";
++  return mkdtemp(path) ? std::string(path) : std::string();
++}
++
++bool exists(const std::string &path) {
++  struct stat st {};
++  return stat(path.c_str(), &st) == 0;
++}
++
++void remove_dir(const std::string &dir) {
++  unlink((dir + "/" + std::string(de::kSessionFileName)).c_str());
++  unlink((dir + "/" + std::string(de::kDisabledFileName)).c_str());
++  rmdir(dir.c_str());
++}
++
++std::string load_config(const char *body, onion::Settings &out) {
++  char path[] = "/tmp/onion-direct-config-XXXXXX";
++  const int fd = mkstemp(path);
++  if (fd < 0) return {};
++  const std::string text(body);
++  const bool ok = write(fd, text.data(), text.size()) ==
++                  static_cast<ssize_t>(text.size());
++  close(fd);
++  out = onion::Settings{};
++  const bool loaded = ok && onion::settings_load_file(path, &out);
++  unlink(path);
++  return loaded ? std::string(path) : std::string();
++}
++
++/* 1, 3: the Toolbox shortcut keeps the upstream route unless root mode is on
++ * and the plugin has a page. */
++int test_shortcut_keeps_toolbox_route() {
++  onion::shellui::dynamic_ui::replace_snapshot({});
++  const std::string dir = make_dir();
++  TEST_ASSERT_TRUE(!dir.empty());
++  Session session(dir);
++  onion::Settings settings{};
++  /* Upstream config: no target. */
++  { const std::string got_ = de::shortcut_uri(session, "l2_r3", settings, kToolboxUri, 1000); TEST_ASSERT_STREQ(kToolboxUri, got_.c_str()); }
++  /* PR #16's config (target, no mode) is link mode now: the Toolbox route. */
++  settings.toolbox_shortcut_target = "AKEN00001";
++  TEST_ASSERT_EQ_INT(onion::kToolboxTargetLink, settings.toolbox_target_mode);
++  { const std::string got_ = de::shortcut_uri(session, "l2_r3", settings, kToolboxUri, 2000); TEST_ASSERT_STREQ(kToolboxUri, got_.c_str()); }
++  { const std::string got_ = de::shortcut_uri(session, "share", settings, kToolboxUri, 2100); TEST_ASSERT_STREQ(kToolboxUri, got_.c_str()); }
++  /* Root mode without a plugin page (plugin not running): the Toolbox. */
++  settings.toolbox_target_mode = onion::kToolboxTargetRoot;
++  { const std::string got_ = de::shortcut_uri(session, "l2_r3", settings, kToolboxUri, 5000); TEST_ASSERT_STREQ(kToolboxUri, got_.c_str()); }
++  /* Nothing was armed by any of these. */
++  TEST_ASSERT_TRUE(session.take_root(kRoot, kRoot, 5100).empty());
++  TEST_ASSERT_TRUE(!session.open());
++  remove_dir(dir);
++  return 0;
++}
++
++/* 9: a repeated shortcut is one request; a later one is a new request. */
++int test_duplicate_shortcut_ignored() {
++  const std::string dir = make_dir();
++  Session session(dir);
++  TEST_ASSERT_EQ_INT(static_cast<int>(ShortcutAction::PluginRoot),
++                     static_cast<int>(session.on_shortcut("l2_r3", "AKEN00001", true, true, 10000)));
++  TEST_ASSERT_EQ_INT(static_cast<int>(ShortcutAction::Ignore),
++                     static_cast<int>(session.on_shortcut("share", "AKEN00001", true, true, 10500)));
++  TEST_ASSERT_EQ_INT(static_cast<int>(ShortcutAction::Ignore),
++                     static_cast<int>(session.on_shortcut("l2_r3", "AKEN00001", true, true, 11999)));
++  TEST_ASSERT_EQ_INT(static_cast<int>(ShortcutAction::PluginRoot),
++                     static_cast<int>(session.on_shortcut("l2_r3", "AKEN00001", true, true, 12000)));
++  /* Link mode and the empty target never reach the duplicate check. */
++  TEST_ASSERT_EQ_INT(static_cast<int>(ShortcutAction::Toolbox),
++                     static_cast<int>(session.on_shortcut("l2_r3", "AKEN00001", false, true, 12001)));
++  TEST_ASSERT_EQ_INT(static_cast<int>(ShortcutAction::Toolbox),
++                     static_cast<int>(session.on_shortcut("l2_r3", "", true, true, 12002)));
++  remove_dir(dir);
++  return 0;
++}
++
++/* 2, 9: a pending request takes the Settings root exactly once, and no other
++ * resource. */
++int test_pending_taken_once() {
++  const std::string dir = make_dir();
++  Session session(dir);
++  TEST_ASSERT_TRUE(session.on_plugin_uri("AKEN00001", true, 1000));
++  TEST_ASSERT_TRUE(session.take_root("payloads.xml", kRoot, 1100).empty());
++  TEST_ASSERT_TRUE(session.take_root(kRoot, "", 1100).empty());
++  { const std::string got_ = session.take_root(kRoot, kRoot, 1200); TEST_ASSERT_STREQ("AKEN00001", got_.c_str()); }
++  TEST_ASSERT_TRUE(session.take_root(kRoot, kRoot, 1300).empty());
++  /* Link mode never arms the root. */
++  TEST_ASSERT_TRUE(!session.on_plugin_uri("AKEN00001", false, 2000));
++  TEST_ASSERT_TRUE(session.take_root(kRoot, kRoot, 2100).empty());
++  remove_dir(dir);
++  return 0;
++}
++
++/* 8: an interrupted request does not outlive its Settings opening. */
++int test_pending_expires_or_is_cancelled() {
++  const std::string dir = make_dir();
++  Session session(dir);
++  TEST_ASSERT_TRUE(session.on_plugin_uri("AKEN00001", true, 1000));
++  TEST_ASSERT_TRUE(session.take_root(kRoot, kRoot, 1000 + de::kPendingTtlMs + 1).empty());
++  TEST_ASSERT_TRUE(session.take_root(kRoot, kRoot, 1000 + de::kPendingTtlMs + 2).empty());
++  TEST_ASSERT_TRUE(session.on_plugin_uri("AKEN00001", true, 50000));
++  { const std::string got_ = session.take_root(kRoot, kRoot, 50000 + de::kPendingTtlMs); TEST_ASSERT_STREQ("AKEN00001", got_.c_str()); }
++  const char *routes[] = {"OnionHEN?Cheats", "OnionHEN?Cheats_not_open",
++                          "OnionHEN?DL_UPDATE", "the HomeUI OnionHEN entry"};
++  for (const char *route : routes) {
++    TEST_ASSERT_TRUE(session.on_plugin_uri("AKEN00001", true, 60000));
++    session.cancel_pending(route);
++    TEST_ASSERT_TRUE(session.take_root(kRoot, kRoot, 60001).empty());
++  }
++  remove_dir(dir);
++  return 0;
++}
++
++/* 6, 10, 11: the session file follows the session; the input watch is
++ * bounded. */
++int test_session_file_and_watch() {
++  const std::string dir = make_dir();
++  Session session(dir);
++  session.start(4242, 100);
++  TEST_ASSERT_TRUE(!session.watching());
++  TEST_ASSERT_TRUE(session.on_plugin_uri("AKEN00001", true, 1000));
++  { const std::string got_ = session.take_root(kRoot, kRoot, 1100); TEST_ASSERT_STREQ("AKEN00001", got_.c_str()); }
++  session.root_served("AKEN00001", 1150);
++  TEST_ASSERT_TRUE(session.open());
++  TEST_ASSERT_TRUE(exists(session.session_file()));
++  std::string text;
++  TEST_ASSERT_TRUE(de::read_text(session.session_file(), text));
++  de::SessionRecord record;
++  TEST_ASSERT_TRUE(de::parse_record(text, record));
++  TEST_ASSERT_EQ_INT(4242, record.pid);
++  TEST_ASSERT_STREQ("root_served", record.stage.c_str());
++  TEST_ASSERT_STREQ("AKEN00001", record.plugin.c_str());
++  TEST_ASSERT_EQ_U64(1150, record.served_ms);
++
++  session.page_activated(1, 1200);
++  session.navigated(2, 3000);
++  session.pressed("sent to the plugin", 2, 4000);
++  TEST_ASSERT_TRUE(de::read_text(session.session_file(), text));
++  TEST_ASSERT_TRUE(de::parse_record(text, record));
++  TEST_ASSERT_STREQ("active", record.stage.c_str());
++  TEST_ASSERT_EQ_U64(4000, record.activity_ms);
++  session.popped(1, 5000);
++  TEST_ASSERT_TRUE(session.open());
++  session.popped(0, 6000);
++  TEST_ASSERT_TRUE(!session.open());
++  TEST_ASSERT_TRUE(!exists(session.session_file()));
++
++  /* Watch: one report per interval, then it stops by itself. */
++  TEST_ASSERT_TRUE(session.watching());
++  uint64_t now = 6000;
++  for (int i = 0; i < 4000 && session.watching(); ++i, now += 16)
++    session.pad_frame(static_cast<uint32_t>((i / 30) & 1), now);
++  TEST_ASSERT_TRUE(!session.watching());
++  TEST_ASSERT_TRUE(now <= 6000 + de::kWatchWindowMs + de::kWatchIntervalMs + 32);
++  /* Popping a page outside a session changes nothing. */
++  session.popped(0, now);
++  TEST_ASSERT_TRUE(!session.watching());
++  remove_dir(dir);
++  return 0;
++}
++
++/* Another Settings root, or a new request, ends an open session. */
++int test_session_replaced() {
++  const std::string dir = make_dir();
++  Session session(dir);
++  TEST_ASSERT_TRUE(session.on_plugin_uri("AKEN00001", true, 1000));
++  { const std::string got_ = session.take_root(kRoot, kRoot, 1100); TEST_ASSERT_STREQ("AKEN00001", got_.c_str()); }
++  session.root_served("AKEN00001", 1100);
++  TEST_ASSERT_TRUE(session.take_root(kRoot, kRoot, 9000).empty());
++  TEST_ASSERT_TRUE(!session.open());
++  TEST_ASSERT_TRUE(!exists(session.session_file()));
++
++  TEST_ASSERT_TRUE(session.on_plugin_uri("AKEN00001", true, 20000));
++  { const std::string got_ = session.take_root(kRoot, kRoot, 20100); TEST_ASSERT_STREQ("AKEN00001", got_.c_str()); }
++  session.root_served("AKEN00001", 20100);
++  TEST_ASSERT_TRUE(session.on_plugin_uri("AKEN00001", true, 30000));
++  TEST_ASSERT_TRUE(!session.open());
++  { const std::string got_ = session.take_root(kRoot, kRoot, 30100); TEST_ASSERT_STREQ("AKEN00001", got_.c_str()); }
++  session.root_failed("AKEN00001", "test");
++  TEST_ASSERT_TRUE(!session.open());
++  TEST_ASSERT_TRUE(!exists(session.session_file()));
++  remove_dir(dir);
++  return 0;
++}
++
++/* 10, 11: a SceShellUI that ends during a direct-entry session turns root mode
++ * off for the boot; the shortcut is the Toolbox again. */
++int test_restart_during_session_disables_root_mode() {
++  const std::string dir = make_dir();
++  {
++    Session before(dir);
++    before.start(61, 90000);
++    TEST_ASSERT_TRUE(before.on_plugin_uri("AKEN00001", true, 170000));
++    { const std::string got_ = before.take_root(kRoot, kRoot, 170900); TEST_ASSERT_STREQ("AKEN00001", got_.c_str()); }
++    before.root_served("AKEN00001", 170927);
++    /* The process ends here: no pop, no cleanup. */
++  }
++  TEST_ASSERT_TRUE(exists(dir + "/" + std::string(de::kSessionFileName)));
++  Session after(dir);
++  after.start(99, 183804);
++  TEST_ASSERT_TRUE(after.disabled());
++  TEST_ASSERT_TRUE(!exists(after.session_file()));
++  TEST_ASSERT_TRUE(exists(after.disabled_file()));
++  std::string reason;
++  TEST_ASSERT_TRUE(de::read_text(after.disabled_file(), reason));
++  TEST_ASSERT_TRUE(reason.find("pid=61") != std::string::npos);
++  TEST_ASSERT_EQ_INT(static_cast<int>(ShortcutAction::Toolbox),
++                     static_cast<int>(after.on_shortcut("l2_r3", "AKEN00001", true, true, 200000)));
++  TEST_ASSERT_TRUE(!after.on_plugin_uri("AKEN00001", true, 200100));
++  TEST_ASSERT_TRUE(after.take_root(kRoot, kRoot, 200200).empty());
++
++  /* A third SceShellUI in the same boot keeps it off. */
++  Session third(dir);
++  third.start(120, 300000);
++  TEST_ASSERT_TRUE(third.disabled());
++  remove_dir(dir);
++  return 0;
++}
++
++/* A session file older than kRecentActivityMs is reported, not acted on; an
++ * unreadable one is removed. */
++int test_restart_long_after_session() {
++  const std::string dir = make_dir();
++  {
++    Session before(dir);
++    before.start(61, 1000);
++    TEST_ASSERT_TRUE(before.on_plugin_uri("AKEN00001", true, 2000));
++    { const std::string got_ = before.take_root(kRoot, kRoot, 2100); TEST_ASSERT_STREQ("AKEN00001", got_.c_str()); }
++    before.root_served("AKEN00001", 2100);
++  }
++  Session after(dir);
++  after.start(99, 2100 + de::kRecentActivityMs + 1);
++  TEST_ASSERT_TRUE(!after.disabled());
++  TEST_ASSERT_TRUE(!exists(after.session_file()));
++  TEST_ASSERT_TRUE(de::write_text(after.session_file(), "garbage\n"));
++  Session garbage(dir);
++  garbage.start(100, 500000);
++  TEST_ASSERT_TRUE(!garbage.disabled());
++  TEST_ASSERT_TRUE(!exists(garbage.session_file()));
++  remove_dir(dir);
++  return 0;
++}
++
++int test_record_format() {
++  const de::SessionRecord in{61, "active", "AKEN00001", 170927, 183000};
++  const std::string text = de::format_record(in);
++  de::SessionRecord out;
++  TEST_ASSERT_TRUE(de::parse_record(text, out));
++  TEST_ASSERT_EQ_INT(61, out.pid);
++  TEST_ASSERT_STREQ("active", out.stage.c_str());
++  TEST_ASSERT_STREQ("AKEN00001", out.plugin.c_str());
++  TEST_ASSERT_EQ_U64(170927, out.served_ms);
++  TEST_ASSERT_EQ_U64(183000, out.activity_ms);
++  TEST_ASSERT_TRUE(!de::parse_record("", out));
++  TEST_ASSERT_TRUE(!de::parse_record("pid=1 stage=x", out));
++  return 0;
++}
++
++/* 4, 6: the Settings root owns no parent; a linked plugin page does. */
++int test_settings_root_page_ownership() {
++  ToolboxUiState linked;
++  linked.set_active_page(toolbox::Page::DebugSettings);
++  linked.set_active_page(toolbox::Page::Plugins);
++  linked.set_active_page(toolbox::Page::DynamicPlugin);
++  TEST_ASSERT_EQ_U64(1, linked.parent_pages.size());
++  linked.leave_page(toolbox::Page::DynamicPlugin);
++  TEST_ASSERT_EQ_INT(static_cast<int>(toolbox::Page::Plugins),
++                     static_cast<int>(linked.active_page));
++
++  ToolboxUiState root;
++  root.set_active_page(toolbox::Page::Plugins);
++  root.set_active_page(toolbox::Page::DynamicPlugin); /* an earlier session */
++  root.active_plugin = "kstuff";
++  root.cheats_shortcut_activated = true;
++  root.enter_settings_root(toolbox::Page::DynamicPlugin);
++  TEST_ASSERT_TRUE(root.parent_pages.empty());
++  TEST_ASSERT_EQ_INT(static_cast<int>(toolbox::Page::None),
++                     static_cast<int>(root.parent_page));
++  TEST_ASSERT_TRUE(root.active_plugin.empty());
++  TEST_ASSERT_TRUE(!root.any_cheat_shortcut());
++  /* A child page and back keep the root; leaving the root restores nothing. */
++  root.set_active_page(toolbox::Page::DynamicPlugin);
++  TEST_ASSERT_TRUE(root.parent_pages.empty());
++  root.leave_page(toolbox::Page::DynamicPlugin);
++  TEST_ASSERT_EQ_INT(static_cast<int>(toolbox::Page::None),
++                     static_cast<int>(root.active_page));
++  return 0;
++}
++
++/* 12: config keys are compatible both ways. */
++int test_config_compatibility() {
++  onion::Settings defaults{};
++  TEST_ASSERT_EQ_INT(onion::kToolboxTargetLink, defaults.toolbox_target_mode);
++  const std::string text = onion::settings_serialize(defaults);
++  TEST_ASSERT_TRUE(text.find("\ntoolbox_target_mode=link\n") != std::string::npos);
++
++  onion::Settings s;
++  /* The owner's working F0 config (original onionHEN). */
++  TEST_ASSERT_TRUE(!load_config("[meta]\nschema_version=1\n\n[shortcuts]\n"
++                                "cheats_menu=off\ntoolbox=l2_r3\n", s).empty());
++  TEST_ASSERT_EQ_INT(1, s.toolbox_shortcut_opt);
++  TEST_ASSERT_TRUE(s.toolbox_shortcut_target.empty());
++  TEST_ASSERT_EQ_INT(onion::kToolboxTargetLink, s.toolbox_target_mode);
++  /* PR #16's config: the same keys now mean link mode. */
++  TEST_ASSERT_TRUE(!load_config("[meta]\nschema_version=1\n\n[game_menu]\n"
++                                "show_onionhen_options=true\nplugin_entry=AKEN00001\n\n"
++                                "[shortcuts]\ncheats_menu=off\ntoolbox=l2_r3\n"
++                                "toolbox_target=AKEN00001\n", s).empty());
++  TEST_ASSERT_STREQ("AKEN00001", s.toolbox_shortcut_target.c_str());
++  TEST_ASSERT_EQ_INT(onion::kToolboxTargetLink, s.toolbox_target_mode);
++  struct Case {
++    const char *value;
++    int want;
++  } cases[] = {{"root", onion::kToolboxTargetRoot}, {"ROOT", onion::kToolboxTargetRoot},
++               {"link", onion::kToolboxTargetLink}, {"direct", onion::kToolboxTargetLink},
++               {"", onion::kToolboxTargetLink},     {"1", onion::kToolboxTargetLink}};
++  for (const Case &c : cases) {
++    char body[256];
++    std::snprintf(body, sizeof(body),
++                  "[meta]\nschema_version=1\n\n[shortcuts]\ntoolbox=l2_r3\n"
++                  "toolbox_target=AKEN00001\ntoolbox_target_mode=%s\n", c.value);
++    TEST_ASSERT_TRUE(!load_config(body, s).empty());
++    TEST_ASSERT_EQ_INT(c.want, s.toolbox_target_mode);
++    /* What the Toolbox writes back keeps the choice. */
++    onion::Settings again;
++    TEST_ASSERT_TRUE(!load_config(onion::settings_serialize(s).c_str(), again).empty());
++    TEST_ASSERT_EQ_INT(c.want, again.toolbox_target_mode);
++    TEST_ASSERT_STREQ("AKEN00001", again.toolbox_shortcut_target.c_str());
++  }
++  return 0;
++}
++
++/* 9: hooks on several threads (input, boot, resources, pops) never corrupt the
++ * session; run under ASan/UBSan (and TSan in CI). */
++int test_concurrent_hooks() {
++  const std::string dir = make_dir();
++  Session session(dir);
++  std::atomic<bool> stop{false};
++  std::atomic<uint64_t> clock{1000};
++  std::vector<std::thread> threads;
++  threads.emplace_back([&] {
++    while (!stop) {
++      const uint64_t now = clock.fetch_add(7);
++      (void)session.on_shortcut("l2_r3", "AKEN00001", true, true, now);
++      if (session.on_plugin_uri("AKEN00001", true, now))
++        session.cancel_pending("OnionHEN?Cheats");
++    }
++  });
++  threads.emplace_back([&] {
++    while (!stop) {
++      const uint64_t now = clock.fetch_add(5);
++      (void)session.on_plugin_uri("AKEN00001", true, now);
++      const std::string plugin = session.take_root(kRoot, kRoot, now);
++      if (!plugin.empty()) session.root_served(plugin, now);
++      session.navigated(2, now);
++    }
++  });
++  threads.emplace_back([&] {
++    while (!stop) {
++      const uint64_t now = clock.fetch_add(3);
++      session.page_activated(1, now);
++      session.pressed("sent to the plugin", 1, now);
++      session.popped(now % 2, now);
++    }
++  });
++  threads.emplace_back([&] {
++    for (uint32_t i = 0; !stop; ++i)
++      if (session.watching()) session.pad_frame(i, clock.load());
++  });
++  for (int i = 0; i < 200; ++i) usleep(1000);
++  stop = true;
++  for (std::thread &t : threads) t.join();
++  /* Whatever state it ended in, the next Settings root is consistent. */
++  (void)session.take_root(kRoot, kRoot, clock.load() + de::kPendingTtlMs + 1);
++  TEST_ASSERT_TRUE(!session.open());
++  TEST_ASSERT_TRUE(!exists(session.session_file()));
++  remove_dir(dir);
++  return 0;
++}
++
++} // namespace
++
++extern "C" int test_direct_entry_suite(void) {
++  int failures = 0;
++  failures += onion_test_run("direct_entry.shortcut_toolbox_route",
++                             test_shortcut_keeps_toolbox_route);
++  failures += onion_test_run("direct_entry.duplicate_shortcut",
++                             test_duplicate_shortcut_ignored);
++  failures += onion_test_run("direct_entry.pending_taken_once",
++                             test_pending_taken_once);
++  failures += onion_test_run("direct_entry.pending_expires_or_cancelled",
++                             test_pending_expires_or_is_cancelled);
++  failures += onion_test_run("direct_entry.session_file_and_watch",
++                             test_session_file_and_watch);
++  failures += onion_test_run("direct_entry.session_replaced",
++                             test_session_replaced);
++  failures += onion_test_run("direct_entry.restart_during_session",
++                             test_restart_during_session_disables_root_mode);
++  failures += onion_test_run("direct_entry.restart_long_after",
++                             test_restart_long_after_session);
++  failures += onion_test_run("direct_entry.record_format", test_record_format);
++  failures += onion_test_run("direct_entry.settings_root_ownership",
++                             test_settings_root_page_ownership);
++  failures += onion_test_run("direct_entry.config_compatibility",
++                             test_config_compatibility);
++  failures += onion_test_run("direct_entry.concurrent_hooks",
++                             test_concurrent_hooks);
++  return failures;
++}
+diff --git a/source/util/tests/test_main.cpp b/source/util/tests/test_main.cpp
+index 2c0cb0a..42afe67 100644
+--- a/source/util/tests/test_main.cpp
++++ b/source/util/tests/test_main.cpp
+@@ -47,6 +47,7 @@ extern "C" int test_sprx_loader_suite(void);
+ extern "C" int test_sprx_catalog_suite(void);
+ extern "C" int test_sprx_plugin_manager_suite(void);
+ extern "C" int test_plugin_ui_suite(void);
++extern "C" int test_direct_entry_suite(void);
+ extern "C" int test_plugin_sprx_pages_suite(void);
+ extern "C" int test_plugin_progress_suite(void);
+ extern "C" int test_progress_auto_return_suite(void);
+@@ -103,6 +104,7 @@ int main() {
+   failures += test_sprx_catalog_suite();
+   failures += test_sprx_plugin_manager_suite();
+   failures += test_plugin_ui_suite();
++  failures += test_direct_entry_suite();
+   failures += test_plugin_sprx_pages_suite();
+   failures += test_plugin_progress_suite();
+   failures += test_progress_auto_return_suite();
+diff --git a/source/util/tests/test_plugin_ui.cpp b/source/util/tests/test_plugin_ui.cpp
+index 5960f8f..947184c 100644
+--- a/source/util/tests/test_plugin_ui.cpp
++++ b/source/util/tests/test_plugin_ui.cpp
+@@ -1,8 +1,10 @@
+ #include "test_harness.h"
+ 
++#include "direct_entry.hpp"
+ #include "dynamic_ui_xml.hpp"
+ #include "dynamic_ui_runtime.hpp"
+ #include "ps5_settings_ui.hpp"
++#include "shellui_state.hpp"
+ #include "plugin_ipc_server.hpp"
+ #include <onion/ipc_server.hpp>
+ #include <onion/plugin_session.hpp>
+@@ -10,9 +12,11 @@
+ #include <onion/plugin_ui_bridge.hpp>
+ 
+ #include <cstdint>
++#include <cstdlib>
+ #include <map>
+ #include <string>
+ #include <sys/socket.h>
++#include <sys/stat.h>
+ #include <thread>
+ #include <unistd.h>
+ #include <vector>
+@@ -358,10 +362,24 @@ int test_registry_and_renderer(void) {
+       advanced_resource, runtime_xml));
+   TEST_ASSERT_TRUE(onion::shellui::dynamic_ui::render_plugin_root("TEST00001",
+                                                                   direct_xml));
++  TEST_ASSERT_EQ_U64(1, onion::shellui::dynamic_ui::page_depth());
+   std::string root_xml;
+   TEST_ASSERT_TRUE(onion::shellui::dynamic_ui::render_resource(root_resource,
+                                                                root_xml));
+-  TEST_ASSERT_STREQ(root_xml.c_str(), direct_xml.c_str());
++  TEST_ASSERT_EQ_U64(1, onion::shellui::dynamic_ui::page_depth());
++  /* As the Settings root the page's setting_list is id_debug_settings, like
++   * the Toolbox root and OnionHEN?Cheats' page; everything else is the page
++   * the Toolbox link opens. */
++  const std::string linked_list_id =
++      "id=\"" + settings_links[0].control_id + "\"";
++  TEST_ASSERT_TRUE(root_xml.find(linked_list_id) != std::string::npos);
++  TEST_ASSERT_TRUE(direct_xml.find(linked_list_id) == std::string::npos);
++  TEST_ASSERT_TRUE(direct_xml.find("<setting_list id=\"id_debug_settings\"") !=
++                   std::string::npos);
++  std::string as_root = root_xml;
++  as_root.replace(as_root.find(linked_list_id), linked_list_id.size(),
++                  "id=\"id_debug_settings\"");
++  TEST_ASSERT_STREQ(as_root.c_str(), direct_xml.c_str());
+   /* The root is the active page, not the "advanced" page left over from the
+    * earlier session: its control is not routed. */
+   TEST_ASSERT_EQ_INT(
+@@ -377,6 +395,31 @@ int test_registry_and_renderer(void) {
+   /* Back to the root, then leaving the root ends the dynamic stack. */
+   TEST_ASSERT_TRUE(onion::shellui::dynamic_ui::leave_active_page());
+   TEST_ASSERT_TRUE(!onion::shellui::dynamic_ui::leave_active_page());
++  TEST_ASSERT_EQ_U64(0, onion::shellui::dynamic_ui::page_depth());
++
++  /* Link mode: the Toolbox root lists the plugin's page first, selected; the
++   * link is the one the Plugins page has. */
++  ps5ui::Page toolbox_root("id_debug_settings", "Toolbox");
++  TEST_ASSERT_TRUE(onion::shellui::dynamic_ui::add_root_shortcut_link(
++      toolbox_root, "TEST00001"));
++  toolbox_root.label("id_after", "after");
++  const std::string toolbox_xml = toolbox_root.build();
++  const std::string focus =
++      "initial_focus_to=\"" + settings_links[0].control_id + "\"";
++  TEST_ASSERT_TRUE(toolbox_xml.find(focus) != std::string::npos);
++  const size_t link_at = toolbox_xml.find(
++      "file=\"" + settings_links[0].resource + "\"");
++  TEST_ASSERT_TRUE(link_at != std::string::npos);
++  TEST_ASSERT_TRUE(link_at < toolbox_xml.find("id_after"));
++  TEST_ASSERT_TRUE(plugin_xml.find("file=\"" + settings_links[0].resource + "\"") !=
++                   std::string::npos);
++  ps5ui::Page no_plugin_root("id_debug_settings", "Toolbox");
++  const std::string untouched = no_plugin_root.build();
++  TEST_ASSERT_TRUE(!onion::shellui::dynamic_ui::add_root_shortcut_link(
++      no_plugin_root, "NONE00001"));
++  TEST_ASSERT_TRUE(!onion::shellui::dynamic_ui::add_root_shortcut_link(
++      no_plugin_root, ""));
++  { const std::string got_ = no_plugin_root.build(); TEST_ASSERT_STREQ(untouched.c_str(), got_.c_str()); }
+ 
+   TEST_ASSERT_EQ_INT(
+       static_cast<int>(onion::plugin_ui::Status::Ok),
+@@ -392,6 +435,165 @@ int test_registry_and_renderer(void) {
+   return 0;
+ }
+ 
++std::string g_flow_pressed;
++
++bool flow_sink(onion::plugin_ui::Handle, const onion::plugin_ui::Node &node,
++               std::string_view, void *) {
++  g_flow_pressed = node.id;
++  return true;
++}
++
++/* AKENO direct entry, root mode, end to end with a real document: the steps
++ * the ShellUI hooks run (direct_entry.hpp), against the real registry,
++ * renderer, dynamic page stack and ToolboxUiState. */
++int test_direct_entry_flow(void) {
++  namespace dyn = onion::shellui::dynamic_ui;
++  namespace de = toolbox::direct_entry;
++  constexpr const char *kRoot = "debug_settings.xml";
++  constexpr const char *kToolboxUri = "pssettings:play?function=debug_settings_old";
++  char dir_template[] = "/tmp/onion-direct-flow-XXXXXX";
++  const std::string dir = mkdtemp(dir_template) ? dir_template : "";
++  TEST_ASSERT_TRUE(!dir.empty());
++
++  onion::plugin_ui::Registry registry;
++  const auto registered = registry.register_encoded("TEST00001", make_document());
++  TEST_ASSERT_TRUE(registered.status == onion::plugin_ui::Status::Ok);
++  dyn::configure(0x12200000); /* the owner's firmware */
++  dyn::replace_snapshot(registry.snapshot());
++  dyn::set_action_sink(flow_sink, nullptr);
++  const onion::plugin_ui::Document &doc =
++      *registry.snapshot().find(registered.handle)->document;
++  const std::string advanced = dyn::resource_name(doc, "advanced");
++  const std::string enabled_id = dyn::control_id(doc, "enabled");
++  const std::string reload_id = dyn::control_id(doc, "reload");
++
++  onion::Settings settings{};
++  settings.toolbox_shortcut_target = "TEST00001";
++  settings.toolbox_target_mode = onion::kToolboxTargetRoot;
++  de::Session session(dir);
++  session.start(61, 1000);
++  ToolboxUiState ui;
++  uint64_t now = 100000;
++
++  for (int round = 0; round < 25; ++round, now += 10000) {
++    /* 1. Shortcut -> URI -> boot redirect. */
++    { const std::string got_ = de::shortcut_uri(session, "l2_r3", settings, kToolboxUri, now); TEST_ASSERT_STREQ("OnionHEN?Plugin=TEST00001", got_.c_str()); }
++    TEST_ASSERT_TRUE(de::shortcut_uri(session, "l2_r3", settings, kToolboxUri, now + 10).empty());
++    ui.cheats_shortcut_activated = true; /* a stale flag must not win */
++    de::accept_plugin_uri(session, ui, "TEST00001", settings, now + 50);
++    TEST_ASSERT_TRUE(!ui.any_cheat_shortcut());
++
++    /* 2. Unrelated resources before the root are untouched. */
++    std::string xml;
++    TEST_ASSERT_TRUE(!de::serve_plugin_page(session, ui, "payloads.xml", kRoot, xml, now + 60));
++    TEST_ASSERT_TRUE(xml.empty());
++
++    /* 3. The Settings root is the plugin's root page. */
++    TEST_ASSERT_TRUE(de::serve_plugin_page(session, ui, kRoot, kRoot, xml, now + 100));
++    TEST_ASSERT_TRUE(xml.find("<setting_list id=\"id_debug_settings\"") != std::string::npos);
++    TEST_ASSERT_TRUE(xml.find(enabled_id) != std::string::npos);
++    TEST_ASSERT_EQ_INT(static_cast<int>(toolbox::Page::DynamicPlugin),
++                       static_cast<int>(ui.active_page));
++    TEST_ASSERT_TRUE(ui.parent_pages.empty());
++    TEST_ASSERT_EQ_U64(1, dyn::page_depth());
++    TEST_ASSERT_TRUE(session.open());
++    session.page_activated(0, now + 200);
++
++    /* 4. A press on the root goes to the plugin. */
++    TEST_ASSERT_TRUE(de::press_plugin_control(session, enabled_id, "0", now + 300) ==
++                     dyn::DispatchResult::Accepted);
++    TEST_ASSERT_STREQ("enabled", g_flow_pressed.c_str());
++    TEST_ASSERT_TRUE(de::press_plugin_control(session, reload_id, "", now + 310) ==
++                     dyn::DispatchResult::NotOwned);
++
++    /* 5. A subpage, its press, back to the root. */
++    TEST_ASSERT_TRUE(de::serve_plugin_page(session, ui, advanced, kRoot, xml, now + 400));
++    TEST_ASSERT_EQ_U64(2, dyn::page_depth());
++    TEST_ASSERT_TRUE(de::press_plugin_control(session, reload_id, "", now + 500) ==
++                     dyn::DispatchResult::Accepted);
++    TEST_ASSERT_STREQ("reload", g_flow_pressed.c_str());
++    de::leave_plugin_page(session, ui, now + 600);
++    TEST_ASSERT_EQ_U64(1, dyn::page_depth());
++    TEST_ASSERT_TRUE(session.open());
++    TEST_ASSERT_EQ_INT(static_cast<int>(toolbox::Page::DynamicPlugin),
++                       static_cast<int>(ui.active_page));
++
++    if (round % 2 == 0) {
++      /* 6. Back on the root: Settings closes, nothing is left behind. */
++      de::leave_plugin_page(session, ui, now + 700);
++      TEST_ASSERT_EQ_U64(0, dyn::page_depth());
++    } else {
++      /* 6'. Settings closed without a pop (e.g. the PS button): the next
++       * Settings root drops the stale page and ends the session. */
++      TEST_ASSERT_TRUE(!de::serve_plugin_page(session, ui, kRoot, kRoot, xml, now + 700));
++      TEST_ASSERT_EQ_U64(0, dyn::page_depth());
++      ui.set_active_page(toolbox::Page::DebugSettings); /* the Toolbox route */
++    }
++    TEST_ASSERT_TRUE(!session.open());
++    TEST_ASSERT_TRUE(!de::read_text(session.session_file(), xml));
++    TEST_ASSERT_TRUE(ui.active_page != toolbox::Page::DynamicPlugin);
++    TEST_ASSERT_TRUE(ui.parent_pages.empty());
++  }
++
++  /* 7. The Toolbox route (F0) through the Plugins page is unchanged. */
++  std::string xml;
++  TEST_ASSERT_TRUE(!de::serve_plugin_page(session, ui, kRoot, kRoot, xml, now));
++  ui.set_active_page(toolbox::Page::DebugSettings);
++  ui.set_active_page(toolbox::Page::Plugins);
++  TEST_ASSERT_TRUE(de::serve_plugin_page(session, ui, dyn::resource_name(doc, "main"),
++                                         kRoot, xml, now + 100));
++  TEST_ASSERT_TRUE(xml.find("id_debug_settings") == std::string::npos);
++  TEST_ASSERT_TRUE(!session.open());
++  de::leave_plugin_page(session, ui, now + 200);
++  TEST_ASSERT_EQ_INT(static_cast<int>(toolbox::Page::Plugins),
++                     static_cast<int>(ui.active_page));
++
++  /* 8. The daemon disconnects mid-session (the bridge publishes an empty
++   * snapshot): presses go to Settings, leaving the page ends the session. */
++  now += 20000;
++  { const std::string got_ = de::shortcut_uri(session, "l2_r3", settings, kToolboxUri, now); TEST_ASSERT_STREQ("OnionHEN?Plugin=TEST00001", got_.c_str()); }
++  de::accept_plugin_uri(session, ui, "TEST00001", settings, now);
++  TEST_ASSERT_TRUE(de::serve_plugin_page(session, ui, kRoot, kRoot, xml, now + 100));
++  dyn::replace_snapshot({});
++  TEST_ASSERT_EQ_U64(0, dyn::page_depth());
++  TEST_ASSERT_TRUE(de::press_plugin_control(session, enabled_id, "1", now + 200) ==
++                   dyn::DispatchResult::NotOwned);
++  de::leave_plugin_page(session, ui, now + 300);
++  TEST_ASSERT_TRUE(!session.open());
++  TEST_ASSERT_EQ_INT(static_cast<int>(toolbox::Page::None),
++                     static_cast<int>(ui.active_page));
++
++  /* 9. Plugin not running: the shortcut and a pending URI both end on the
++   * Toolbox root. */
++  now += 20000;
++  { const std::string got_ = de::shortcut_uri(session, "l2_r3", settings, kToolboxUri, now); TEST_ASSERT_STREQ(kToolboxUri, got_.c_str()); }
++  de::accept_plugin_uri(session, ui, "TEST00001", settings, now);
++  TEST_ASSERT_TRUE(!de::serve_plugin_page(session, ui, kRoot, kRoot, xml, now + 100));
++  TEST_ASSERT_TRUE(!session.open());
++
++  /* 10. A SceShellUI restart in the middle of a session: the next one has
++   * root mode off, and the shortcut opens the Toolbox even with a page. */
++  dyn::replace_snapshot(registry.snapshot());
++  now += 20000;
++  { const std::string got_ = de::shortcut_uri(session, "l2_r3", settings, kToolboxUri, now); TEST_ASSERT_STREQ("OnionHEN?Plugin=TEST00001", got_.c_str()); }
++  de::accept_plugin_uri(session, ui, "TEST00001", settings, now);
++  TEST_ASSERT_TRUE(de::serve_plugin_page(session, ui, kRoot, kRoot, xml, now + 100));
++  de::Session restarted(dir);
++  restarted.start(99, now + 13000);
++  TEST_ASSERT_TRUE(restarted.disabled());
++  { const std::string got_ = de::shortcut_uri(restarted, "l2_r3", settings, kToolboxUri, now + 20000); TEST_ASSERT_STREQ(kToolboxUri, got_.c_str()); }
++  ToolboxUiState fresh;
++  de::accept_plugin_uri(restarted, fresh, "TEST00001", settings, now + 20000);
++  TEST_ASSERT_TRUE(!de::serve_plugin_page(restarted, fresh, kRoot, kRoot, xml, now + 20100));
++
++  dyn::replace_snapshot({});
++  dyn::set_action_sink(nullptr, nullptr);
++  unlink(restarted.disabled_file().c_str());
++  unlink(restarted.session_file().c_str());
++  rmdir(dir.c_str());
++  return 0;
++}
++
+ int test_owner_and_encoding_validation(void) {
+   onion::plugin_ui::Registry registry;
+   auto spoofed = registry.register_encoded("OTHER0001", make_document());
+@@ -957,6 +1159,8 @@ extern "C" int test_plugin_ui_suite(void) {
+   int failures = 0;
+   failures += onion_test_run("plugin_ui_registry_renderer",
+                              test_registry_and_renderer);
++  failures += onion_test_run("plugin_ui_direct_entry_flow",
++                             test_direct_entry_flow);
+   failures += onion_test_run("plugin_ui_owner_encoding",
+                              test_owner_and_encoding_validation);
+   failures += onion_test_run("plugin_ui_bridge_protocol",
+-- 
+2.43.0
+

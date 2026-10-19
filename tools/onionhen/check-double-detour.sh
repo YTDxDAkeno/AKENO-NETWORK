@@ -11,7 +11,8 @@
 #   pr14-custom-host  the same after tools/shellui_host/patch_onionhen.py of PR #14
 #   akeno-direct-host the same with tools/onionhen/akeno-direct-entry.patch (Phase 4)
 #
-# Second pass: the relocator of akeno-direct-entry.patch must make a repeated injection chain to
+# Second pass: the relocator of akeno-direct-entry.patch (+ the byte-wise prefix test of
+# akeno-direct-entry-fix.patch) must make a repeated injection chain to
 # the old hook for every recorded layout and every base (--expect-chain), so the patched host's
 # behaviour no longer depends on where its build puts sceRegMgrGetInt_hook.
 set -euo pipefail
@@ -47,11 +48,12 @@ rm -rf "$patched"
 mkdir -p "$patched/source"
 cp -a "$detour" "$patched/source/libonion_detour"
 git -C "$src" diff --quiet # the pinned checkout itself stays unmodified
-(cd "$patched" && git apply --include='source/libonion_detour/*' "$here/akeno-direct-entry.patch")
+(cd "$patched" && for patch in akeno-direct-entry.patch akeno-direct-entry-fix.patch; do
+  git apply --include='source/libonion_detour/*' "$here/$patch"; done)
 ! cmp -s "$detour/source/x64_relocator.cpp" "$patched/source/libonion_detour/source/x64_relocator.cpp"
 "${CXX:-g++}" -std=c++20 -O1 -Wall -Wextra -I"$patched/source/libonion_detour/include" -o "$work/double_detour_check_patched" \
   "$here/double_detour_check.cpp" "$patched/source/libonion_detour/source/x64_relocator.cpp" \
   "$patched/source/libonion_detour/source/hde64.cpp"
-echo "--- with the relocator of akeno-direct-entry.patch ---"
+echo "--- with the relocator of akeno-direct-entry.patch + akeno-direct-entry-fix.patch ---"
 "$work/double_detour_check_patched" --expect-chain original-v0.9.0="$ORIGINAL_OFFSET" \
   pr14-custom-host="$PR14_OFFSET" ${AKENO_DIRECT_OFFSET:+akeno-direct-host="$AKENO_DIRECT_OFFSET"}
