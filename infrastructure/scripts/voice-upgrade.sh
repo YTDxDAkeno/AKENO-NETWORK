@@ -15,7 +15,7 @@
 #
 # Only the app, the new voice-gateway and Caddy are (re)created; PostgreSQL and LiveKit are never
 # restarted. No database migration is involved. The rollback point (previous image tag, .env copy,
-# previous commit) must exist before `apply`: see the guide, step 3.
+# previous commit) must exist before `apply`: see the guide, step 2.
 set -euo pipefail
 
 AKENO_DIR="${AKENO_DIR:-$(pwd)}"
@@ -74,15 +74,15 @@ preflight() {
   say "Preflight (read-only)"
   [[ -n "$domain" ]] || fail "AKENO_DOMAIN is not set in .env"
   [[ -z "$(git status --porcelain --untracked-files=no)" ]] || fail "the checkout has uncommitted changes to tracked files (git status); publish or keep them first"
-  [[ -f apps/voice-gateway/package.json && -f infrastructure/docker/voice-gateway.Dockerfile ]] || fail "this checkout has no voice gateway yet: update the code first (guide step 4)"
+  [[ -f apps/voice-gateway/package.json && -f infrastructure/docker/voice-gateway.Dockerfile ]] || fail "this checkout has no voice gateway yet: update the code first (guide step 3)"
   grep -q 'voice/device-token' apps/server/src/modules/voice/routes.ts 2>/dev/null || fail "this checkout has no console voice pass route: update the code first"
   grep -q 'handle /voice-gateway' infrastructure/caddy/Caddyfile || fail "the Caddyfile has no /voice-gateway route"
   for key in LIVEKIT_URL LIVEKIT_API_KEY LIVEKIT_API_SECRET; do [[ -n "$(envval "$key")" ]] || fail "$key is empty: browser voice (LiveKit) must be set up first (docs/VOICE.md)"; done
   [[ -n "$(cid livekit)" ]] || fail "the LiveKit container is not running (docker compose --profile voice ps livekit)"
   [[ -n "$(cid db)" && -n "$(cid app)" ]] || fail "db or app is not running"
-  docker image inspect "$ROLLBACK_TAG" >/dev/null 2>&1 || fail "rollback image $ROLLBACK_TAG missing (guide step 3: docker tag akeno-network:latest $ROLLBACK_TAG)"
-  [[ -f "$ROLLBACK_ENV" ]] || fail "$ROLLBACK_ENV missing (guide step 3: cp .env $ROLLBACK_ENV)"
-  [[ -s "$ROLLBACK_COMMIT_FILE" ]] || fail "$ROLLBACK_COMMIT_FILE missing (guide step 3: git rev-parse HEAD > $ROLLBACK_COMMIT_FILE before the code update)"
+  docker image inspect "$ROLLBACK_TAG" >/dev/null 2>&1 || fail "rollback image $ROLLBACK_TAG missing (guide step 2: docker tag akeno-network:latest $ROLLBACK_TAG)"
+  [[ -f "$ROLLBACK_ENV" ]] || fail "$ROLLBACK_ENV missing (guide step 2: cp .env $ROLLBACK_ENV)"
+  [[ -s "$ROLLBACK_COMMIT_FILE" ]] || fail "$ROLLBACK_COMMIT_FILE missing (guide step 2: git rev-parse HEAD > $ROLLBACK_COMMIT_FILE before the code update)"
   local free_mb; free_mb="$(df -Pm /var/lib/docker 2>/dev/null | awk 'NR==2 {print $4}')"
   [[ -z "$free_mb" || "$free_mb" -ge 2048 ]] || fail "less than 2 GB free for Docker images (${free_mb} MB)"
   local avail_mb; avail_mb="$(free -m | awk '/^Mem:/ {print $7}')"
@@ -139,7 +139,7 @@ verify() {
   "${COMPOSE[@]}" ps --format 'table {{.Service}}\t{{.Status}}'
   echo "  server errors in the last 10 minutes:"
   "${COMPOSE[@]}" logs --no-color --since 10m app 2>/dev/null | grep -E '"level":(50|60)' | tail -10 | cut -c1-300 || echo "    none"
-  if ((ok)); then echo "Verify passed. Next: browser voice with two browsers, then the PS5 (guide, step 7)."; else echo "Verify FAILED: see above; roll back if the website is affected." >&2; exit 1; fi
+  if ((ok)); then echo "Verify passed. Next: browser voice with two browsers, then the PS5 (docs/server-voice/PS5-ERSTTEST-DE.md)."; else echo "Verify FAILED: see above; roll back if the website is affected." >&2; exit 1; fi
 }
 
 rollback() {
