@@ -38,6 +38,7 @@ env:
   PS5_SDK_COMMIT: f5d40f02770e9b0001dd9e18056eca70b3da8b40 # same SDK as ps5-shellui.yml
   ONIONHEN_COMMIT: aaa4264588e00da33faccc7642d27c3c4cc339b1 # onionHEN v0.9.0, the base of the patches
   PLUGIN_SHA256: 201d2c883e02747e2ec096ba1742bc3bf47eec3a098e2b8a498f6d67fdea4aa9 # AKEN00001 1.10 as on the owner's PS5
+  PLUGIN_110_COMMIT: f8013704a7812902a46ed481b1e5db59d76f57b8 # PR #17's head: its tree builds exactly that file
   PACKAGE: AKENO-NETWORK-PS5-PHASE4-FIX
 
 jobs:
@@ -81,6 +82,8 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # the 1.10 plugin is rebuilt from its own commit
 
       - name: Install build requirements
         run: |
@@ -114,14 +117,22 @@ jobs:
           (cd "$RUNNER_TEMP/ps5-sdk-src" && PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk" ./libcxx.sh)
           PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk" PORTS_WORK="$RUNNER_TEMP/ports" tools/onionhen/build-sdk-ports.sh
 
-      - name: Plugin AKEN00001 (unchanged 1.10, must equal the hardware-tested build)
+      - name: Plugin AKEN00001 (unchanged 1.10, rebuilt from its commit, must equal the hardware-tested build)
         shell: bash
         run: |
+          # The tree's plugin is 1.20 (voice alpha, ps5-voice.yml); this package keeps the 1.10 the owner tested.
           export PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk"
           clients/ps5-ingame/scripts/fetch-deps.sh
-          make -C clients/ps5-ingame/console -j"$(nproc)"
-          clients/ps5-ingame/console/check-plugin.sh clients/ps5-ingame/build-ps5 | tee "$RUNNER_TEMP/gate-plugin.txt"
-          echo "$PLUGIN_SHA256  clients/ps5-ingame/build-ps5/AKEN00001.elf" | sha256sum -c -
+          tree="$RUNNER_TEMP/plugin-1.10"
+          git worktree add --detach "$tree" "$PLUGIN_110_COMMIT"
+          mkdir -p "$tree/clients/ps5-ingame/third_party" "$tree/clients/ps5-native/third_party"
+          cp -r clients/ps5-ingame/third_party/onion-sdk "$tree/clients/ps5-ingame/third_party/"
+          cp clients/ps5-native/third_party/stb_image.h "$tree/clients/ps5-native/third_party/"
+          make -C "$tree/clients/ps5-ingame/console" -j"$(nproc)"
+          "$tree/clients/ps5-ingame/console/check-plugin.sh" "$tree/clients/ps5-ingame/build-ps5" | tee "$RUNNER_TEMP/gate-plugin.txt"
+          echo "$PLUGIN_SHA256  $tree/clients/ps5-ingame/build-ps5/AKEN00001.elf" | sha256sum -c -
+          mkdir -p clients/ps5-ingame/build-ps5
+          cp "$tree/clients/ps5-ingame/build-ps5/AKEN00001.elf" clients/ps5-ingame/build-ps5/AKEN00001.elf
 
       - name: Voice Lab still builds and passes its import gate (not part of this package)
         shell: bash

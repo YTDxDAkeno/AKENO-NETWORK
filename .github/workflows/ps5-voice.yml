@@ -1,0 +1,325 @@
+name: PS5 party voice alpha (experimental)
+
+# AKENO Party Voice (docs/PS5_PARTY_VOICE.md): the background voice service akeno-party-voice.elf, the
+# AKEN00001 plugin 1.20 with its voice page, and the package AKENO-NETWORK-PS5-VOICE-ALPHA with German
+# guides. The Phase 4.1 host and the daemon are not built or changed here. Nothing is sent to a console,
+# and a PC run is never evidence that a PS5 can capture or play audio from the background.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ps5-voice-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PS5_SDK_COMMIT: f5d40f02770e9b0001dd9e18056eca70b3da8b40 # same SDK as ps5-native.yml and ps5-phase4.yml
+  LIVEKIT_VERSION: 1.12.0
+  LIVEKIT_SHA256: 9b89eb169c6c5795393bad6b52a9d0c73640a5993b37162558b4e249e5fe3aee
+  # AKEN00001 1.10 as on the owner's PS5 (Phase 4.1, FW 12.20): rebuilt from PR #17's head as the rollback.
+  PLUGIN_110_COMMIT: f8013704a7812902a46ed481b1e5db59d76f57b8
+  PLUGIN_110_SHA256: 201d2c883e02747e2ec096ba1742bc3bf47eec3a098e2b8a498f6d67fdea4aa9
+  PHASE41_HOST_SHA256: 560a2202ae97a832cf5635d07fce41062999e972ac7683e9adad475eb9828858
+  PACKAGE: AKENO-NETWORK-PS5-VOICE-ALPHA
+
+jobs:
+  host:
+    name: Voice service and plugin tests (ASan/UBSan, TSan, clang-tidy, onionHEN page rules)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install build requirements
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake g++ clang-18 clang-tidy-18 python3 git
+
+      - name: Fetch pinned third-party inputs (checksums verified)
+        run: |
+          clients/ps5-native/scripts/fetch-deps.sh
+          clients/ps5-ingame/scripts/fetch-deps.sh
+
+      - name: Voice service unit tests (ASan/UBSan, -Werror)
+        run: |
+          cmake -S clients/ps5-partyvoice -B clients/ps5-partyvoice/build -DPV_SANITIZE=ON -DCMAKE_BUILD_TYPE=Debug
+          cmake --build clients/ps5-partyvoice/build -j"$(nproc)"
+          ctest --test-dir clients/ps5-partyvoice/build --output-on-failure
+
+      - name: Voice service unit tests (ThreadSanitizer)
+        run: |
+          cmake -S clients/ps5-partyvoice -B clients/ps5-partyvoice/build-tsan -DPV_TSAN=ON -DCMAKE_BUILD_TYPE=Debug
+          cmake --build clients/ps5-partyvoice/build-tsan -j"$(nproc)" --target pv_unit_tests
+          TSAN_OPTIONS="halt_on_error=1 second_deadlock_stack=1" setarch "$(uname -m)" -R clients/ps5-partyvoice/build-tsan/pv_unit_tests
+
+      - name: Voice service static analysis (Clang analyzer and bugprone checks)
+        run: |
+          cmake -S clients/ps5-partyvoice -B clients/ps5-partyvoice/build-clang -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-18 \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          cmake --build clients/ps5-partyvoice/build-clang -j"$(nproc)"
+          checks='-*,clang-analyzer-*,bugprone-*,-bugprone-easily-swappable-parameters,-bugprone-narrowing-conversions,-bugprone-implicit-widening-of-multiplication-result,-bugprone-reserved-identifier,-bugprone-assignment-in-if-condition,-bugprone-branch-clone,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-bugprone-multi-level-implicit-pointer-conversion,-clang-analyzer-valist.Uninitialized'
+          cd clients/ps5-partyvoice
+          clang-tidy-18 -p build-clang --quiet --warnings-as-errors='*' --checks="$checks" \
+            src/pv_engine.c src/pv_net.c src/pv_audio.c src/pv_status.c src/pv_control.c src/pv_main.c src/pv_backend_host.c
+
+      - name: "Plugin 1.20 tests (ASan/UBSan): voice pages within onionHEN v0.9.0's rules, voice controls"
+        run: |
+          cmake -S clients/ps5-ingame -B clients/ps5-ingame/build -DAKN_SANITIZE=ON -DCMAKE_BUILD_TYPE=Debug
+          cmake --build clients/ps5-ingame/build -j"$(nproc)"
+          ctest --test-dir clients/ps5-ingame/build --output-on-failure
+
+      - name: Plugin 1.20's documents through the Phase 4.1 host's Toolbox link and direct root
+        run: tools/onionhen/check-direct-entry.sh clients/ps5-ingame/build/akn_ingame_tests
+
+  e2e:
+    name: End to end - server, LiveKit, voice gateway, daemon, voice service, plugin, a PC participant
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: akeno
+          POSTGRES_PASSWORD: akeno_ci_password
+          POSTGRES_DB: akeno_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U akeno -d akeno_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      TEST_DATABASE_ADMIN_URL: postgres://akeno:akeno_ci_password@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install build requirements
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake libssl-dev
+
+      - name: Install dependencies and build the server and the gateway
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Fetch pinned third-party inputs (checksums verified)
+        run: |
+          clients/ps5-native/scripts/fetch-deps.sh
+          clients/ps5-ingame/scripts/fetch-deps.sh
+
+      - name: Fetch the pinned LiveKit server (checksum verified)
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/livekit"
+          curl -sSfL --retry 4 -o "$RUNNER_TEMP/livekit/livekit.tgz" "https://github.com/livekit/livekit/releases/download/v${LIVEKIT_VERSION}/livekit_${LIVEKIT_VERSION}_linux_amd64.tar.gz"
+          echo "$LIVEKIT_SHA256  $RUNNER_TEMP/livekit/livekit.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/livekit/livekit.tgz" -C "$RUNNER_TEMP/livekit" livekit-server
+
+      - name: Server voice pass and device tests (device route, scope, revocation)
+        run: pnpm --filter @akeno/server exec vitest run test/voice.test.ts test/devices.test.ts
+
+      - name: Voice gateway tests with the real LiveKit server
+        run: LIVEKIT_SERVER_BIN="$RUNNER_TEMP/livekit/livekit-server" pnpm --filter @akeno/voice-gateway test
+
+      - name: Build the native-IPC daemon, the plugin check tool and the voice service (sanitizers)
+        run: |
+          cmake -S clients/ps5 -B clients/ps5/build-asan -DAKENO_SANITIZE=ON -DAKENO_REQUIRE_MBEDTLS=ON -DCMAKE_BUILD_TYPE=Debug
+          cmake --build clients/ps5/build-asan -j"$(nproc)" --target akeno-app-native-ipc
+          cmake -S clients/ps5-ingame -B clients/ps5-ingame/build -DAKN_SANITIZE=ON -DCMAKE_BUILD_TYPE=Debug
+          cmake --build clients/ps5-ingame/build -j"$(nproc)" --target akeno-ingame-check
+          cmake -S clients/ps5-partyvoice -B clients/ps5-partyvoice/build -DPV_SANITIZE=ON -DCMAKE_BUILD_TYPE=Debug
+          cmake --build clients/ps5-partyvoice/build -j"$(nproc)" --target akeno-party-voice
+
+      - name: End to end (both directions by decoded frequency, mute, deafen, speaking, leave, reconnect, revocation, failures, restart, UI cycles, game running)
+        run: |
+          PV_E2E_OUT="$RUNNER_TEMP/e2e" node clients/ps5-partyvoice/tests/e2e/run.mjs --voice clients/ps5-partyvoice/build/akeno-party-voice \
+            --daemon clients/ps5/build-asan/akeno-app-native-ipc --companion clients/ps5-ingame/build/akeno-ingame-check \
+            --livekit "$RUNNER_TEMP/livekit/livekit-server"
+
+      - name: Upload the reports of the end-to-end run (PC, not PS5 evidence)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: akeno-party-voice-e2e-reports
+          path: ${{ runner.temp }}/e2e
+          retention-days: 30
+          if-no-files-found: ignore
+
+  ps5:
+    name: Build the PS5 voice alpha package (voice service, plugin 1.20, plugin 1.10 rollback)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # the 1.10 plugin is rebuilt from its own commit
+
+      - name: Install SDK build requirements
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-18 lld-18 llvm-18-dev make cmake wget file binutils gcc python3
+
+      - name: Fetch and install the pinned SDK
+        shell: bash
+        run: |
+          git clone --filter=blob:none https://github.com/ps5-payload-dev/sdk.git "$RUNNER_TEMP/ps5-sdk-src"
+          git -C "$RUNNER_TEMP/ps5-sdk-src" checkout --detach "$PS5_SDK_COMMIT"
+          test "$(git -C "$RUNNER_TEMP/ps5-sdk-src" rev-parse HEAD)" = "$PS5_SDK_COMMIT"
+          mkdir -p "$RUNNER_TEMP/ps5-payload-sdk"
+          make -C "$RUNNER_TEMP/ps5-sdk-src" DESTDIR="$RUNNER_TEMP/ps5-payload-sdk" install
+
+      - name: Fetch pinned third-party inputs (checksums verified)
+        run: |
+          clients/ps5-native/scripts/fetch-deps.sh
+          clients/ps5-ingame/scripts/fetch-deps.sh
+
+      - name: Voice service, built twice (byte-identical), import gate
+        shell: bash
+        run: |
+          export PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk"
+          commit="$(git rev-parse --short=12 HEAD)"
+          make -C clients/ps5-partyvoice/console -j"$(nproc)" BUILD="$RUNNER_TEMP/pv-repro" GIT_COMMIT="$commit"
+          make -C clients/ps5-partyvoice/console -j"$(nproc)" GIT_COMMIT="$commit" package
+          cmp "$RUNNER_TEMP/pv-repro/akeno-party-voice.elf" clients/ps5-partyvoice/build-ps5/akeno-party-voice.elf
+          clients/ps5-partyvoice/console/check-partyvoice.sh clients/ps5-partyvoice/build-ps5 | tee "$RUNNER_TEMP/gate-voice.txt"
+
+      - name: Plugin AKEN00001 1.20 (voice alpha), built twice (byte-identical), descriptor and import gates
+        shell: bash
+        run: |
+          export PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk"
+          make -C clients/ps5-ingame/console -j"$(nproc)" BUILD="$RUNNER_TEMP/plugin-repro"
+          make -C clients/ps5-ingame/console -j"$(nproc)"
+          cmp "$RUNNER_TEMP/plugin-repro/AKEN00001.elf" clients/ps5-ingame/build-ps5/AKEN00001.elf
+          clients/ps5-ingame/console/check-plugin.sh clients/ps5-ingame/build-ps5 | tee "$RUNNER_TEMP/gate-plugin.txt"
+
+      - name: Plugin AKEN00001 1.10 rebuilt from its commit (rollback; must equal the hardware-tested file)
+        shell: bash
+        run: |
+          export PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk"
+          tree="$RUNNER_TEMP/plugin-1.10"
+          git worktree add --detach "$tree" "$PLUGIN_110_COMMIT"
+          mkdir -p "$tree/clients/ps5-ingame/third_party" "$tree/clients/ps5-native/third_party"
+          cp -r clients/ps5-ingame/third_party/onion-sdk "$tree/clients/ps5-ingame/third_party/"
+          cp clients/ps5-native/third_party/stb_image.h "$tree/clients/ps5-native/third_party/"
+          make -C "$tree/clients/ps5-ingame/console" -j"$(nproc)"
+          echo "$PLUGIN_110_SHA256  $tree/clients/ps5-ingame/build-ps5/AKEN00001.elf" | sha256sum -c -
+
+      - name: Assemble, check and describe the package
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/$PACKAGE"
+          mkdir -p "$out/host" "$out/voice/launcher" "$out/plugin/rollback" "$out/daemon" "$out/docs/gates" "$out/licenses" "$RUNNER_TEMP/debug"
+          cp clients/ps5-partyvoice/build-ps5/akeno-party-voice.elf "$out/voice/"
+          cp clients/ps5-partyvoice/package/homebrew.js "$out/voice/launcher/homebrew.js"
+          cp clients/ps5-partyvoice/build-ps5/akeno-party-voice.debug.elf "$RUNNER_TEMP/debug/"
+          cp clients/ps5-ingame/build-ps5/AKEN00001.elf "$out/plugin/AKEN00001-voice-alpha.elf"
+          cp clients/ps5-ingame/build-ps5/AKEN00001.debug.elf "$RUNNER_TEMP/debug/AKEN00001-voice-alpha.debug.elf"
+          cp "$RUNNER_TEMP/plugin-1.10/clients/ps5-ingame/build-ps5/AKEN00001.elf" "$out/plugin/rollback/AKEN00001-1.10.elf"
+          cp docs/shellui/voice-alpha/README-USE-EXISTING-PHASE4.1-HOST.txt "$out/host/"
+          cp docs/shellui/voice-alpha/README-KEEP-YOUR-DAEMON.txt "$out/daemon/"
+          cp docs/shellui/voice-alpha/INSTALL-DE.md docs/shellui/voice-alpha/VOICE-TEST-DE.md docs/shellui/voice-alpha/DIAGNOSTICS-DE.md \
+             docs/shellui/voice-alpha/SERVER-PREREQUISITES-DE.md docs/shellui/voice-alpha/ROLLBACK-DE.md "$out/docs/"
+          cp docs/PS5_PARTY_VOICE.md "$out/docs/"
+          cp "$RUNNER_TEMP/gate-voice.txt" "$out/docs/gates/GATE-voice-service.txt"
+          cp "$RUNNER_TEMP/gate-plugin.txt" "$out/docs/gates/GATE-plugin.txt"
+          # flat docs folder: links into the repository become plain file names or repository URLs
+          sed -i -e 's#](\.\./\.\./\(PS5_PARTY_VOICE\.md\)#](\1#g' -e 's#](\.\./\.\./\([A-Za-z_./-]*\))#]('"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$GITHUB_SHA"'/docs/\1)#g' "$out"/docs/*.md
+          sed -i -e 's#](shellui/voice-alpha/#](#g' -e 's#](\([A-Z_0-9.]*\.md\))#](\1)#g' "$out"/docs/PS5_PARTY_VOICE.md
+          # licences
+          cp LICENSE "$out/licenses/AKENO-MIT.txt"
+          cp clients/ps5-ingame/third_party/onion-sdk/LICENSE "$out/licenses/GPL-3.0.txt"
+          cp clients/ps5-native/third_party/opus/COPYING "$out/licenses/libopus-BSD-3-Clause.txt"
+          tar xjf clients/ps5/third_party/mbedtls-3.6.7.tar.bz2 -O mbedtls-3.6.7/LICENSE > "$out/licenses/mbedTLS-Apache-2.0.txt"
+          if [[ -f "$RUNNER_TEMP/ps5-sdk-src/LICENSE" ]]; then cp "$RUNNER_TEMP/ps5-sdk-src/LICENSE" "$out/licenses/ps5-payload-sdk-LICENSE.txt"; fi
+          {
+            echo "Source notices"
+            echo "  AKENO NETWORK sources: MIT (AKENO-MIT.txt), $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/tree/$GITHUB_SHA"
+            echo "  plugin/*.elf link the OnionHEN plugin SDK runtime (GPLv3, GPL-3.0.txt):"
+            echo "    https://github.com/OnionBuddies/onionHEN-plugin-sdk commit $(git -C clients/ps5-ingame/third_party/onion-sdk rev-parse HEAD)"
+            echo "    corresponding source: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/tree/$GITHUB_SHA/clients/ps5-ingame"
+            echo "  voice/akeno-party-voice.elf: libopus 1.5.2 (libopus-BSD-3-Clause.txt), mbedTLS 3.6.7 (mbedTLS-Apache-2.0.txt),"
+            echo "    stb_image (public domain / MIT, docs/LICENSES.md); corresponding source: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/tree/$GITHUB_SHA/clients/ps5-partyvoice"
+            echo "  every ELF links the PS5 payload SDK runtime: https://github.com/ps5-payload-dev/sdk commit $PS5_SDK_COMMIT"
+          } > "$out/licenses/SOURCES.txt"
+          grep -q 'Version 3, 29 June 2007' "$out/licenses/GPL-3.0.txt"
+          grep -q 'Apache License' "$out/licenses/mbedTLS-Apache-2.0.txt"
+          grep -q 'Xiph.Org' "$out/licenses/libopus-BSD-3-Clause.txt"
+          for elf in "$out"/voice/*.elf "$out"/plugin/*.elf "$out"/plugin/rollback/*.elf; do
+            readelf -h "$elf" | grep -q 'ELF64'
+            readelf -h "$elf" | grep -q 'Advanced Micro Devices X86-64'
+          done
+          echo "$PLUGIN_110_SHA256  $out/plugin/rollback/AKEN00001-1.10.elf" | sha256sum -c -
+          nm="$RUNNER_TEMP/ps5-payload-sdk/bin/prospero-nm"
+          sha() { sha256sum "$1" | cut -d' ' -f1; }
+          {
+            echo "AKENO NETWORK - PS5 party voice ALPHA (EXPERIMENTAL; NOT run on a PS5; nothing here is evidence of PS5 audio)"
+            echo "Built:           $(date -u +%Y-%m-%dT%H:%M:%SZ) by $GITHUB_WORKFLOW run $GITHUB_RUN_ID"
+            echo "AKENO commit:    $GITHUB_SHA ($GITHUB_REF_NAME)"
+            echo "Source:          $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/tree/$GITHUB_SHA"
+            echo "PS5 SDK:         ps5-payload-dev/sdk $PS5_SDK_COMMIT"
+            echo "Compiler:        $("$RUNNER_TEMP/ps5-payload-sdk/bin/prospero-clang" --version | head -1)"
+            echo "libopus:         1.5.2 ($(sha clients/ps5-native/third_party/opus-1.5.2.tar.gz))"
+            echo "mbedTLS:         3.6.7 ($(sha clients/ps5/third_party/mbedtls-3.6.7.tar.bz2)); CA bundle certifi 2026.07.22 ($(sha clients/ps5/third_party/cacert.pem))"
+            echo "OnionHEN SDK:    $(git -C clients/ps5-ingame/third_party/onion-sdk rev-parse HEAD)"
+            echo
+            echo "voice/akeno-party-voice.elf          NEW background voice service $(grep -o 'PV_VERSION "[^"]*"' clients/ps5-partyvoice/src/pv.h | cut -d'"' -f2), build $(git rev-parse --short=12 HEAD)-ps5"
+            echo "                                     sha256 $(sha "$out/voice/akeno-party-voice.elf"); built twice, byte-identical"
+            echo "voice/launcher/homebrew.js           optional websrv launcher entry (background, daemon: true)"
+            echo "plugin/AKEN00001-voice-alpha.elf     NEW plugin AKEN00001 1.20 (voice page); install as /data/OnionHEN/plugins/AKEN00001.elf"
+            echo "                                     sha256 $(sha "$out/plugin/AKEN00001-voice-alpha.elf"); built twice, byte-identical"
+            echo "plugin/rollback/AKEN00001-1.10.elf   the hardware-tested plugin 1.10, rebuilt from $PLUGIN_110_COMMIT"
+            echo "                                     sha256 $(sha "$out/plugin/rollback/AKEN00001-1.10.elf") (= the file on the owner's PS5)"
+            echo "host/                                NOT included: keep the Phase 4.1 host OnionHEN-AKENO-direct-fixed.elf"
+            echo "                                     (sha256 $PHASE41_HOST_SHA256), unchanged"
+            echo "daemon/                              NOT included: keep your native-IPC daemon (interface 3, e.g. 196ca13c71d1-ps5-native-ipc)"
+            echo
+            echo "Hardware status: NOTHING in this package has run on a PS5. Whether a background payload may capture the"
+            echo "  microphone and be heard while a game runs is unknown on FW 12.20 and is what docs/VOICE-TEST-DE.md measures."
+            echo "  PC evidence only: unit tests (ASan/UBSan, TSan), the end-to-end run with the real server, LiveKit, the voice"
+            echo "  gateway, the native-IPC daemon and a PC participant (workflow run above)."
+            echo "Server requirement: the AKENO server must offer POST /api/v1/parties/:id/voice/device-token and the voice gateway"
+            echo "  (wss://<domain>/voice-gateway). On 2026-10-18 production answered 404: see docs/SERVER-PREREQUISITES-DE.md."
+            echo
+            echo "System imports (voice service):"
+            "$nm" -D --undefined-only "$out/voice/akeno-party-voice.elf" | awk '{print $2}' | grep -E '^(sce|kernel_)' | sort | sed 's/^/  /'
+            echo "Shared libraries (voice service):"
+            readelf -d "$out/voice/akeno-party-voice.elf" | grep NEEDED | sed 's/^.*\[/  /; s/\]$//'
+            echo
+            sed 's/^/  /' "$RUNNER_TEMP/gate-voice.txt"
+            sed 's/^/  /' "$RUNNER_TEMP/gate-plugin.txt"
+          } > "$out/BUILDINFO.txt"
+          (cd "$out" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+          (cd "$out" && sha256sum -c SHA256SUMS > /dev/null)
+          (cd "$RUNNER_TEMP/debug" && sha256sum *.elf > SHA256SUMS)
+          cat "$out/BUILDINFO.txt"
+          cat "$out/SHA256SUMS"
+
+      - name: Upload the package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE }}-${{ github.sha }}
+          path: ${{ runner.temp }}/${{ env.PACKAGE }}/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload the debug ELFs separately
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE }}-debug-${{ github.sha }}
+          path: ${{ runner.temp }}/debug/
+          retention-days: 30
