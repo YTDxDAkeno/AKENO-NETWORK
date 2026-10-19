@@ -1,0 +1,201 @@
+name: PS5 Phase 4 direct entry (experimental)
+
+# Direct AKENO entry from a running game (docs/SHELLUI_DIRECT_ENTRY.md): the patched host
+# "onionHEN v0.9.0 + tools/onionhen/akeno-direct-entry.patch", its checks, the unchanged plugin and
+# the Voice Lab, packaged as AKENO-NETWORK-PS5-PHASE4 with German guides. Nothing is sent to a
+# console, and a successful build is not evidence that anything works on firmware 12.20.
+
+on:
+  push:
+    paths:
+      - ".github/workflows/ps5-phase4.yml"
+      - "tools/onionhen/**"
+      - "clients/ps5-ingame/**"
+      - "clients/ps5-voicelab/**"
+      - "docs/shellui/phase4/**"
+      - "docs/SHELLUI_DIRECT_ENTRY.md"
+  pull_request:
+    paths:
+      - ".github/workflows/ps5-phase4.yml"
+      - "tools/onionhen/**"
+      - "clients/ps5-ingame/**"
+      - "clients/ps5-voicelab/**"
+      - "docs/shellui/phase4/**"
+      - "docs/SHELLUI_DIRECT_ENTRY.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ps5-phase4-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PS5_SDK_COMMIT: f5d40f02770e9b0001dd9e18056eca70b3da8b40 # same SDK as ps5-shellui.yml
+  ONIONHEN_COMMIT: aaa4264588e00da33faccc7642d27c3c4cc339b1 # onionHEN v0.9.0, the base of the patch
+  PLUGIN_SHA256: 201d2c883e02747e2ec096ba1742bc3bf47eec3a098e2b8a498f6d67fdea4aa9 # AKEN00001 1.10 as on the owner's PS5
+  PACKAGE: AKENO-NETWORK-PS5-PHASE4
+
+jobs:
+  checks:
+    name: Detour, direct-entry and companion checks (PC)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install build requirements
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake g++ git
+
+      - name: Repeated injection with v0.9.0's and the patched relocator
+        run: tools/onionhen/check-double-detour.sh
+
+      - name: Companion host tests (ASan/UBSan)
+        run: |
+          clients/ps5-ingame/scripts/fetch-deps.sh
+          cmake -S clients/ps5-ingame -B clients/ps5-ingame/build -DAKN_SANITIZE=ON -DCMAKE_BUILD_TYPE=Debug
+          cmake --build clients/ps5-ingame/build -j"$(nproc)"
+          ctest --test-dir clients/ps5-ingame/build --output-on-failure
+
+      - name: AKEN00001's documents through the patched host's direct entry (ASan/UBSan)
+        run: tools/onionhen/check-direct-entry.sh clients/ps5-ingame/build/akn_ingame_tests
+
+  build:
+    name: Build the Phase 4 package (patched host, unchanged plugin, Voice Lab)
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install build requirements
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-18 lld-18 llvm-18 llvm-18-dev make cmake ninja-build \
+            wget curl file binutils gcc g++ python3 python3-pip python3-pyelftools librsvg2-bin autoconf automake \
+            libtool pkg-config perl xz-utils unzip
+          pip3 install --break-system-packages keystone-engine==0.9.2
+          kso="$(python3 -c 'import keystone, os; print(os.path.join(os.path.dirname(keystone.__file__), "libkeystone.so"))')"
+          mkdir -p "$RUNNER_TEMP/keystone/lib"
+          ln -sf "$kso" "$RUNNER_TEMP/keystone/lib/libkeystone.so"
+          ln -sf "$kso" "$RUNNER_TEMP/keystone/lib/libkeystone.so.0"
+
+      - name: Cache the SDK with libc++ and ports
+        id: sdk-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ps5-payload-sdk
+          key: ps5-sdk-${{ env.PS5_SDK_COMMIT }}-libcxx-ports-${{ hashFiles('tools/onionhen/build-sdk-ports.sh') }}
+
+      - name: Install the pinned SDK, its libc++ and the ports onionHEN links
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LLVM_CONFIG=/usr/lib/llvm-18/bin/llvm-config PATH=/usr/lib/llvm-18/bin:$PATH
+          git clone --filter=blob:none https://github.com/ps5-payload-dev/sdk.git "$RUNNER_TEMP/ps5-sdk-src"
+          git -C "$RUNNER_TEMP/ps5-sdk-src" checkout --detach "$PS5_SDK_COMMIT"
+          test "$(git -C "$RUNNER_TEMP/ps5-sdk-src" rev-parse HEAD)" = "$PS5_SDK_COMMIT"
+          make -C "$RUNNER_TEMP/ps5-sdk-src" DESTDIR="$RUNNER_TEMP/ps5-payload-sdk" install
+          (cd "$RUNNER_TEMP/ps5-sdk-src" && PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk" ./libcxx.sh)
+          PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk" PORTS_WORK="$RUNNER_TEMP/ports" tools/onionhen/build-sdk-ports.sh
+
+      - name: Plugin AKEN00001 (unchanged 1.10, must equal the hardware-tested build)
+        shell: bash
+        run: |
+          export PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk"
+          clients/ps5-ingame/scripts/fetch-deps.sh
+          make -C clients/ps5-ingame/console -j"$(nproc)"
+          clients/ps5-ingame/console/check-plugin.sh clients/ps5-ingame/build-ps5 | tee "$RUNNER_TEMP/gate-plugin.txt"
+          echo "$PLUGIN_SHA256  clients/ps5-ingame/build-ps5/AKEN00001.elf" | sha256sum -c -
+
+      - name: Voice Lab (separate experimental payload) and its import gate
+        shell: bash
+        run: |
+          export PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk"
+          make -C clients/ps5-voicelab/console -j"$(nproc)"
+          clients/ps5-voicelab/console/check-voicelab.sh clients/ps5-voicelab/build-ps5 | tee "$RUNNER_TEMP/gate-voicelab.txt"
+
+      - name: Patched host, built twice (byte-identical); onionHEN's host tests on the patched tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk" HOST_WORK="$RUNNER_TEMP/host-work"
+          KEYSTONE_PREFIX="$RUNNER_TEMP/keystone" tools/onionhen/build-host.sh "$RUNNER_TEMP/host-a"
+          tools/onionhen/build-host.sh "$RUNNER_TEMP/host-b"
+          cmp "$RUNNER_TEMP/host-a/OnionHEN-AKENO-direct.elf" "$RUNNER_TEMP/host-b/OnionHEN-AKENO-direct.elf"
+          tail -n 1 "$RUNNER_TEMP/host-a/host-tests.txt"
+          strings "$RUNNER_TEMP/host-work/onionhen/build/bin/shellui.elf" | grep -q 'OnionHEN?Plugin='
+
+      - name: Repeated injection over this host's sceRegMgrGetInt patch must chain for every base
+        shell: bash
+        run: |
+          offset="0x$(/usr/lib/llvm-18/bin/llvm-nm "$RUNNER_TEMP/host-a/shellui.sym.elf" \
+            | awk '/ T _Z20sceRegMgrGetInt_hooklPi$/ { print $1 }' | sed 's/^0*//')"
+          test "$offset" != "0x"
+          echo "sceRegMgrGetInt_hook at +$offset"
+          echo "$offset" > "$RUNNER_TEMP/hook-offset.txt"
+          AKENO_DIRECT_OFFSET="$offset" tools/onionhen/check-double-detour.sh | tee "$RUNNER_TEMP/gate-detour.txt"
+
+      - name: Package (no hardware release)
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/$PACKAGE"
+          mkdir -p "$out/plugin" "$out/host" "$out/voice" "$out/docs" "$out/licenses"
+          cp clients/ps5-ingame/build-ps5/AKEN00001.elf "$out/plugin/"
+          cp "$RUNNER_TEMP/host-a/OnionHEN-AKENO-direct.elf" "$out/host/"
+          cp tools/onionhen/config-akeno-direct.ini "$out/host/"
+          cp clients/ps5-voicelab/build-ps5/akeno-voicelab.elf "$out/voice/"
+          cp docs/shellui/phase4/INSTALL-DE.md docs/shellui/phase4/CONTROL-CENTER-TEST-DE.md \
+             docs/shellui/phase4/VOICE-TEST-DE.md docs/shellui/phase4/ROLLBACK-DE.md "$out/docs/"
+          cp docs/SHELLUI_DIRECT_ENTRY.md tools/onionhen/akeno-direct-entry.patch "$out/docs/"
+          cp "$RUNNER_TEMP/host-a/host-tests.txt" "$out/docs/GATE-host-tests.txt"
+          cp "$RUNNER_TEMP/gate-plugin.txt" "$out/docs/GATE-plugin.txt"
+          cp "$RUNNER_TEMP/gate-voicelab.txt" "$out/docs/GATE-voicelab.txt"
+          cp "$RUNNER_TEMP/gate-detour.txt" "$out/docs/GATE-detour.txt"
+          # flat docs folder: links between these files lose their repo paths
+          sed -i -e 's#](\.\./\.\./\(SHELLUI_[A-Z_]*\.md\)#](\1#g' -e 's#](shellui/phase4/#](#g' "$out"/docs/*.md
+          cp "$RUNNER_TEMP/host-work/onionhen/LICENSE" "$out/licenses/onionHEN-GPL-3.0.txt"
+          cp clients/ps5-ingame/third_party/onion-sdk/LICENSE "$out/licenses/GPL-3.0.txt"
+          cp LICENSE "$out/licenses/AKENO-MIT.txt"
+          grep -q 'Version 3, 29 June 2007' "$out/licenses/onionHEN-GPL-3.0.txt"
+          for elf in "$out"/plugin/*.elf "$out"/host/*.elf "$out"/voice/*.elf; do readelf -h "$elf" | grep -q 'ELF64'; done
+          sha() { sha256sum "$1" | cut -d' ' -f1; }
+          {
+            echo "AKENO NETWORK - PS5 Phase 4: direct entry from a running game (EXPERIMENTAL, not hardware tested)"
+            echo "Built:           $(date -u +%Y-%m-%dT%H:%M:%SZ) by $GITHUB_WORKFLOW run $GITHUB_RUN_ID"
+            echo "AKENO commit:    $GITHUB_SHA ($GITHUB_REF_NAME)"
+            echo "Source:          $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/tree/$GITHUB_SHA"
+            echo "PS5 SDK:         ps5-payload-dev/sdk $PS5_SDK_COMMIT, libc++ 18.1.8, ports of tools/onionhen/build-sdk-ports.sh"
+            echo "Compiler:        $(/usr/lib/llvm-18/bin/clang --version | head -1)"
+            echo
+            echo "host/OnionHEN-AKENO-direct.elf   EXPERIMENTAL host: aydencharles/onionHEN $ONIONHEN_COMMIT (v0.9.0)"
+            echo "                                 + docs/akeno-direct-entry.patch (source: GPL-3.0, licenses/)"
+            echo "                                 sha256 $(sha "$out/host/OnionHEN-AKENO-direct.elf")"
+            echo "                                 sceRegMgrGetInt_hook at +$(cat "$RUNNER_TEMP/hook-offset.txt"); built twice, identical"
+            echo "                                 NOT the official v0.9.0 binary (official: sha256 1f1f7c88...7c212, kept for rollback)"
+            echo "host/config-akeno-direct.ini     the two new config.ini keys (toolbox_target, plugin_entry)"
+            echo "plugin/AKEN00001.elf             UNCHANGED plugin 1.10, identical to the hardware-tested build"
+            echo "                                 sha256 $(sha "$out/plugin/AKEN00001.elf")"
+            echo "voice/akeno-voicelab.elf         Voice Lab (separate experimental payload, docs/VOICE-TEST-DE.md)"
+            echo "                                 sha256 $(sha "$out/voice/akeno-voicelab.elf")"
+            echo "daemon                           unchanged, not included: keep the native-IPC daemon you run"
+            echo
+            echo "Hardware status: not run on a PS5. See docs/CONTROL-CENTER-TEST-DE.md and docs/VOICE-TEST-DE.md."
+          } > "$out/BUILDINFO.txt"
+          (cd "$out" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+          (cd "$out" && sha256sum -c SHA256SUMS > /dev/null)
+          cat "$out/BUILDINFO.txt"
+          cat "$out/SHA256SUMS"
+
+      - name: Upload the experimental package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE }}-${{ github.sha }}
+          path: ${{ runner.temp }}/${{ env.PACKAGE }}/
+          if-no-files-found: error
+          retention-days: 30
