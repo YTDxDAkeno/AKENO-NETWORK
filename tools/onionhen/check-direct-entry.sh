@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Opens AKEN00001's real documents through the patched host's direct entry (direct_entry_check.cpp):
 # runs the companion's host tests with AKN_DUMP_DOCS so they write every document they check, then
-# compiles onionHEN's plugin registry and dynamic page renderer (pinned v0.9.0 + akeno-direct-entry.patch;
-# a sparse checkout of the five files involved) and replays each document. PC only.
+# compiles onionHEN's plugin registry and dynamic page renderer (pinned v0.9.0 + akeno-direct-entry.patch
+# + akeno-direct-entry-fix.patch; a sparse checkout of the files involved) and replays each document
+# in link mode (the Toolbox root's link) and root mode (the Settings root). PC only.
 #
 #   tools/onionhen/check-direct-entry.sh <akn_ingame_tests binary> [onionhen checkout]
 set -euo pipefail
@@ -25,9 +26,12 @@ if [[ -z "$src" ]]; then
   git -C "$src" -c advice.detachedHead=false checkout -q -f --detach "$ONIONHEN_COMMIT"
 fi
 test "$(git -C "$src" rev-parse HEAD)" = "$ONIONHEN_COMMIT"
-git -C "$src" checkout -q -- . # drop an earlier run's patch
-git -C "$src" apply --include='source/shellui/include/*' --include='source/shellui/src/dynamic_ui_*' \
-  --include='source/libonion_plugin_ui/*' "$here/akeno-direct-entry.patch"
+git -C "$src" checkout -q -- . # drop an earlier run's patches
+git -C "$src" clean -qfdx -- source
+for patch in akeno-direct-entry.patch akeno-direct-entry-fix.patch; do
+  git -C "$src" apply --include='source/shellui/include/*' --include='source/shellui/src/dynamic_ui_*' \
+    --include='source/libonion_plugin_ui/*' "$here/$patch"
+done
 s="$src/source"
 
 docs="$work/docs"

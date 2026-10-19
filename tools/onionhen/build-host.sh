@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Builds the EXPERIMENTAL "onionHEN v0.9.0 + AKENO direct entry" host: the pinned upstream onionHEN
-# (aydencharles/onionHEN tag v0.9.0, aaa4264) with exactly one patch, akeno-direct-entry.patch,
-# using onionHEN's own build pipeline (scripts/build.sh --release). PC only; nothing is sent to a
-# console. docs/SHELLUI_DIRECT_ENTRY.md says what the patch changes and why.
+# (aydencharles/onionHEN tag v0.9.0, aaa4264) with the patch series PATCHES (Phase 4's
+# akeno-direct-entry.patch, then Phase 4.1's akeno-direct-entry-fix.patch), using onionHEN's own build
+# pipeline (scripts/build.sh --release). PC only; nothing is sent to a console.
+# docs/SHELLUI_DIRECT_ENTRY.md says what the patches change and why.
 #
 #   PS5_PAYLOAD_SDK=/opt/ps5-payload-sdk tools/onionhen/build-host.sh <out dir> [--baseline]
 #
 # The SDK needs libc++ (the SDK's libcxx.sh) and the ports of build-sdk-ports.sh.
-#   <out dir>/OnionHEN-AKENO-direct.elf   the patched host
+#   <out dir>/OnionHEN-AKENO-direct-fixed.elf   the patched host (Phase 4.1)
 #   <out dir>/shellui.sym.elf             its ShellUI payload with symbols (for the hook offset)
 #   <out dir>/host-tests.txt              onionHEN's own host test suite on the patched tree
 # With --baseline it builds the UNPATCHED upstream instead (<out dir>/OnionHEN-v0.9.0-rebuilt.elf),
@@ -17,6 +18,7 @@ set -euo pipefail
 ONIONHEN_URL=https://github.com/aydencharles/onionHEN.git
 ONIONHEN_COMMIT=aaa4264588e00da33faccc7642d27c3c4cc339b1 # tag v0.9.0
 KSTUFF_SHA256=ab9a6cb4d3b1daf139d4d646e402b1cf569071acd64599c936d7a3a6164dc779 # kstuff-lite v1.11, what build.sh downloads
+PATCHES=(akeno-direct-entry.patch akeno-direct-entry-fix.patch) # applied in this order
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 out="$(mkdir -p "${1:?out dir}" && cd "$1" && pwd)"
@@ -36,7 +38,7 @@ git -C "$src" -c advice.detachedHead=false checkout -q --detach "$ONIONHEN_COMMI
 test "$(git -C "$src" rev-parse HEAD)" = "$ONIONHEN_COMMIT"
 git -C "$src" submodule update --init -q
 if [[ $baseline == 0 ]]; then
-  git -C "$src" apply --index "$here/akeno-direct-entry.patch"
+  for patch in "${PATCHES[@]}"; do git -C "$src" apply --index "$here/$patch"; done
   git -C "$src" diff --cached --stat
 fi
 
@@ -50,7 +52,7 @@ if [[ $baseline == 1 ]]; then
   sha256sum "$out/OnionHEN-v0.9.0-rebuilt.elf"
   exit 0
 fi
-cp "$src/build/bin/OnionHEN.elf" "$out/OnionHEN-AKENO-direct.elf"
+cp "$src/build/bin/OnionHEN.elf" "$out/OnionHEN-AKENO-direct-fixed.elf"
 
 # shellui.elf once more without stripping, from the same objects; its .text must be identical.
 link="$(cd "$src/build" && ninja -t commands shellui | tail -1 | sed 's/ && cd .*//; s#-o bin/shellui.elf#-o bin/shellui.sym.elf#')"
@@ -68,4 +70,4 @@ if [[ -n "${KEYSTONE_PREFIX:-}" ]]; then
   grep -q 'All util host tests passed' "$out/host-tests.txt"
   ! grep -q '^\[FAIL\]' "$out/host-tests.txt"
 fi
-sha256sum "$out/OnionHEN-AKENO-direct.elf"
+sha256sum "$out/OnionHEN-AKENO-direct-fixed.elf"

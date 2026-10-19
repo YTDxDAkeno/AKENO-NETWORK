@@ -1,18 +1,138 @@
-# Direct AKENO entry from a running game (Phase 4, EXPERIMENTAL)
+# Direct AKENO entry from a running game (Phase 4 and 4.1, EXPERIMENTAL)
 
-> **HARDWARE RESULT 2026-10-19 — this build FAILED on the owner's PS5 (FW 12.20). Do not retry the
-> patched host's direct entry until it is revised.** With `toolbox_target=AKEN00001` the direct root
-> rendered (`direct entry: AKEN00001 root page as the Settings root`), then ~13 s later the ShellUI
-> plugin bridge disconnected and the console stopped responding to controller input while the game
-> kept rendering. Leading suspect: making a **dynamic plugin page the Settings root** and the
-> back/focus handoff from it — the one behaviour with no proven onionHEN precedent (onionHEN's own
-> Cheats shortcut replaces the root with a *generated Toolbox* page, not a dynamic plugin page). Not
-> conclusively a crash; needs on-hardware isolation. **Safe path, now CONFIRMED on the owner's PS5
-> (12.20, 2026-10-19): the original onionHEN v0.9.0 + the unchanged plugin, with `toolbox=l2_r3`
-> only** — holding L2+R3 in a game opens the normal Toolbox, then Toolbox → Plugins → AKENO NETWORK
-> reaches the working social UI, controller input intact. No patched binary. This is the F0 fallback
-> and the control case for debugging the patched host. See
-> [shellui/phase4/ROLLBACK-DE.md](shellui/phase4/ROLLBACK-DE.md).
+> **Phase 4 (below) FAILED on the owner's PS5 (FW 12.20, 2026-10-19); do not use
+> `OnionHEN-AKENO-direct.elf` again.** Phase 4.1 ([next section](#phase-41)) replaces it with
+> `OnionHEN-AKENO-direct-fixed.elf`: by default the shortcut opens the Toolbox with AKENO first and
+> selected (no Settings-root takeover); the direct root is opt-in, corrected and instrumented.
+> **Hardware (owner, FW 12.20, 2026-10-19, host `560a2202…`): H1–H5 passed** – the new host with
+> upstream behaviour, and link mode on the home screen and in a running game (*Atelier Yumia*),
+> returning to the same game with the controller responsive. **Root mode: opens AKENO directly in a
+> running game, repeated open/close cycles included, game and controller keep working; the Phase 4
+> freeze did not reproduce.** The owner's log of that boot shows 10 direct entries, each with
+> `root page served`, `root activated` and `session ended (root left, Settings closing)`, pad reads
+> continuing in the input watch, and none of the stop lines (no ShellUI disconnect, no second
+> injection, no `recovery exhausted`, no `root mode off`). Confirmed on this console (FW 12.20); not
+> labelled stable (no prolonged test), and nothing is known for other firmware. The original onionHEN v0.9.0 + `toolbox=l2_r3` path (F0,
+> passed 2026-10-19) stays the fallback. German guides:
+> [shellui/phase4-fix/INSTALL-DE.md](shellui/phase4-fix/INSTALL-DE.md),
+> [TEST-DE.md](shellui/phase4-fix/TEST-DE.md), [ROLLBACK-DE.md](shellui/phase4-fix/ROLLBACK-DE.md).
+
+## Phase 4.1
+
+### What failed
+
+The owner ran the Phase 4 host with `toolbox=l2_r3`, `toolbox_target=AKEN00001` and
+`plugin_entry=AKEN00001`. The game kept rendering, AKENO did not stay usable and the console stopped
+responding to the controller until a full restart; the original host afterwards worked normally (F0).
+The relevant boot:
+
+```text
+[ 93.180] Toolbox online for SceShellUI pid=61 (ready protocol)
+[135.418] Big App started ... tid=PPSA25468
+[136.756] rest: toolbox recovery exhausted gen=1 requested_pid=101
+[170.927] [ShellUI] info: direct entry: AKEN00001 root page as the Settings root
+[183.804] [plugin-bridge] ShellUI disconnected
+[197.131] Activating toolbox...
+```
+
+### Evidence, by strength
+
+**Confirmed from the source (v0.9.0 + the Phase 4 patch):**
+
+1. **The input path did not change.** In `GetData_hook` (L2 + R3) and the capture hooks (Share, long
+   Share) the patch only swapped the URI string. The pad read and `result.Buttons = None` on the one
+   activation frame are upstream's; the only state is the per-hold timer, reset on release. The
+   shortcut code cannot keep input captured. Consistent with F0 passing on the original host.
+2. **The direct root broke onionHEN's Settings-root convention.** Every page onionHEN serves for
+   `debug_settings.xml` has the root `setting_list` id `id_debug_settings`: the Toolbox root
+   (`generate_toolbox_xml`) and the page of onionHEN's own in-game shortcut `OnionHEN?Cheats`
+   (`generate_cheats_xml` switches its list id to `id_debug_settings` exactly when it runs as the
+   Settings root). Phase 4 served the plugin page with its child-page id `id_onion_ui_…`; its own PC
+   test even required the direct root to equal the linked child page byte for byte. This is the only
+   structural difference between the proven Cheats-as-root mechanism and the failed takeover (same
+   boot redirect, same resource hook, same `plugin="debug_settings_plugin"`, no root focus in either).
+3. **Page ownership was wrong for a root.** `set_active_page(DynamicPlugin)` treats the page as a
+   child and records whatever page was active before (possibly from an earlier Settings session) as
+   its parent, and a closed Settings left plugin pages on the dynamic stack. Wrong state, not shown to
+   crash anything, fixed anyway.
+4. **PR #16's relocator change read out of bounds:** a 6-byte `memcmp` at every instruction offset
+   (ASan, `test_x64_relocator`). On the console it reads a few bytes of mapped code during
+   injection, which succeeded at 93 s; not a plausible cause of the freeze, fixed.
+
+**Inferred from the log and the daemon source (strong, not proven):**
+
+5. **SceShellUI was most likely replaced around 183.8 s.** `[plugin-bridge] ShellUI disconnected` is
+   the daemon's read loop ending. If only the socket had dropped while ShellUI lived, its bridge
+   thread would reconnect within about a second (`plugin_ui_bridge_client.cpp`: `sleep(1)`, connect);
+   no reconnect is in the excerpt. Outside rest mode, `Activating toolbox...` is logged by the
+   SceSysCore NOTE_EXEC worker for a *newly executed* SceShellUI, after it waits for the trophy SPRX
+   and the default 10 s `resume_reinject_delay_seconds`: 183.8 s + ~3 s + 10 s ≈ 197.1 s. A crash
+   and a watchdog kill of a hung UI thread both fit; the log cannot tell them apart (no crash dump, and
+   the `[lifecycle] SysCore EXEC SceShellUI pid=…` line is debug-level).
+
+**Hypothesis (the most likely mechanism, needs the console):** Sony's legacy Settings addresses its
+root page as `id_debug_settings`; a root without that list leaves the DebugSettingsOld screen with no
+usable root page/focus (the 13 s fit a UI-thread hang ended by a watchdog better than an immediate
+crash), SceShellUI is replaced while a game is in the foreground, and input focus does not return to
+the game. Sony's Legacy.dll is not available here to confirm it. *Update 2026-10-19:* the 4.1 root
+mode opens AKENO directly on the owner's console in a running game, repeatedly, and the log shows
+every session ending through `SettingPageStack.OnPopping` on the root (so the session file and the
+next-Settings-root fallback were not needed). That is consistent with this hypothesis but does not
+isolate the root list id: 4.1's root mode also changed the root page's ownership and added the
+session guards.
+
+**Not causal / open:**
+
+- Controller hardware and the game: ruled out by the A/B (original host fine before and after).
+- Repeated injection: no `Detour failed`/`relocation failed` in that boot; the re-injection at 197 s
+  went into a new process.
+- `rest: toolbox recovery exhausted gen=1 requested_pid=101` (1.3 s after the Big App start): the
+  daemon's NOTE_EXEC worker for a process it identified as SceShellUI (pid 101, not the live 61)
+  failed to inject. Daemon code neither patch touches; it was reported in working logs too. Side
+  effect worth knowing: `toolbox_on_new_shellui` clears the Toolbox ready marker while pid 61 still
+  carries the Toolbox. Not shown to matter here; left as is.
+- Toolchain: the patched host is built with Ubuntu clang 18.1.3, the official release with Homebrew
+  clang 18.1.8. All ShellUI hooks are installed by Mono class/method name, not fixed offsets; the
+  one native detour is checked by `check-double-detour.sh` at the measured offset. Tests H1–H4 run
+  the new binary with upstream behaviour first to separate a build problem from the direct entry.
+
+### What Phase 4.1 changes (`tools/onionhen/akeno-direct-entry-fix.patch`, applied after Phase 4's)
+
+| Change | Why |
+| --- | --- |
+| `[shortcuts] toolbox_target_mode=link\|root`, **default `link`**: the shortcut opens the **unchanged Toolbox route**; the Toolbox root lists the `toolbox_target` plugin's page first with the initial focus (the very link the Plugins page has). ✕ opens AKENO as a child page, ○ returns to the Toolbox, ○ to the game | Uses only mechanisms proven on the owner's console (Toolbox root, `root_focus`, a plugin page as a child). PR #16's config (`toolbox_target=AKEN00001`, no mode) now means link mode: the configuration that failed no longer replaces the Settings root |
+| Root mode (opt-in): the plugin's root page with root list `id_debug_settings`; `ToolboxUiState::enter_settings_root` (no parent, no Cheats flag) | Same contract as the Toolbox root and `OnionHEN?Cheats` |
+| `direct_entry.hpp` session: a request is taken once, expires after 15 s, is cancelled by any other OnionHEN route; repeated shortcuts within 2 s are one request; a plugin without a page opens the Toolbox; any other Settings root drops plugin pages a closed Settings left open | Duplicate, stale, reentrant and interrupted requests |
+| Session file `/system_tmp/onionhen/akeno_direct_session` names the SceShellUI holding a session; a SceShellUI that starts while one is open after activity in the last 120 s logs it and turns root mode off until reboot (`akeno_direct_disabled`) | Tells a ShellUI replacement apart from a bridge disconnect; no repeat after a crash/restart loop |
+| `AKENO_DIRECT:` log lines for each step and a 60 s input watch (ShellUI pad reads and button changes, one line per 5 s) | Crash (next ShellUI reports the open session), hang (watch lines stop), lost focus with ShellUI alive (watch lines continue while the owner sees no reaction), page rejected (`root page served` without `root activated`). No control ids, values or message text are logged |
+| Relocator: byte-wise `jmp [rip+0]` test | The ASan finding above |
+
+Not changed: the plugin (byte-identical `201d2c88…`), daemon, server, kstuff handling, every
+other Toolbox feature, `GetData_hook`'s button handling. `[game_menu] plugin_entry` keeps its Phase 4
+code (it sends the same URI, so it follows the mode) but stays `none` in this test round.
+
+### Verification (PC only)
+
+- onionHEN's host suite on the patched tree: **483/483** (470 existing + 13 new: `direct_entry.*`
+  ×12 – shortcut route, duplicates, single take, expiry/cancellation, session file and input watch,
+  replacement, restart during a session, restart long after, record format, root ownership, config
+  compatibility, concurrent hooks – and `plugin_ui_direct_entry_flow`, which drives the hook steps
+  against the real registry, renderer, page stack and `ToolboxUiState` for 25 open/close rounds,
+  closing without a pop, the F0 route, a daemon disconnect, a stopped plugin and a ShellUI restart).
+- The same suite under ASan/UBSan and TSan (`check-host-tests.sh`): 483/483 each; no sanitizer report
+  on a patched line. Four reports on unchanged upstream lines remain (three misaligned loads in
+  `hde64.cpp`, one use-after-scope in upstream's `test_toolbox_route.cpp:165`). The gate fails on
+  Phase 4's patch alone (the relocator over-read), so it does catch patched-line defects.
+- `check-direct-entry.sh`: all 12 real AKEN00001 documents (up to 203 nodes) open from the Toolbox
+  root link and as the Settings root with `id_debug_settings`, reach the same pages, route every
+  press (ASan/UBSan).
+- `check-double-detour.sh`: chains for every recorded layout and for this host's `+0x33618`.
+- Host built twice with the pinned SDK: byte-identical. Plugin: byte-identical to `201d2c88…`.
+- **None of this shows that the freeze is fixed.** Only the owner's console can (TEST-DE.md H1–H10).
+
+---
+
+## Phase 4 (failed on hardware; kept for reference)
 
 Status (2026-10-18): **built and PC-tested, not run on a PS5.** German guides for the owner:
 [shellui/phase4/INSTALL-DE.md](shellui/phase4/INSTALL-DE.md),

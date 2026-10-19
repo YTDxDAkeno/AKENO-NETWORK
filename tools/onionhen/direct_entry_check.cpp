@@ -1,14 +1,20 @@
 /*
- * Opens AKENO's real plugin documents the way the patched host's direct entry does
- * (tools/onionhen/akeno-direct-entry.patch, docs/SHELLUI_DIRECT_ENTRY.md). It compiles onionHEN's own
- * plugin registry and dynamic page renderer (pinned v0.9.0 + the patch) on a PC and feeds them the
- * documents AKEN00001 1.10 sends (dumped by the companion's tests: every state, up to the largest
- * possible document):
+ * Opens AKENO's real plugin documents the way the patched host does (tools/onionhen/akeno-direct-entry.patch
+ * + akeno-direct-entry-fix.patch, docs/SHELLUI_DIRECT_ENTRY.md). It compiles onionHEN's own plugin
+ * registry and dynamic page renderer (pinned v0.9.0 + the patches) on a PC and feeds them the documents
+ * AKEN00001 1.10 sends (dumped by the companion's tests: every state, up to the largest possible
+ * document). Both modes of [shortcuts] toolbox_target_mode:
  *
- *   OnionHEN?Plugin=AKEN00001 -> parse_plugin_page_uri -> direct_plugin_takes_resource(Settings root)
- *   -> render_plugin_root: the plugin's root page, identical to the page the Toolbox link opens
+ *   link (default): the Toolbox root gets AKEN00001's settings link first, with the initial focus
+ *   -> the link opens the plugin's root page as a child page, exactly the page the Plugins page opens
  *   -> every page reachable from there renders; every control on every page routes to the plugin
- *   -> leaving the pages ends the dynamic stack (Settings closes, the game is shown again)
+ *   -> leaving the pages ends the dynamic stack (back on the Toolbox root)
+ *
+ *   root: OnionHEN?Plugin=AKEN00001 -> parse_plugin_page_uri -> direct_plugin_takes_resource(Settings root)
+ *   -> render_plugin_root: the plugin's root page with root setting_list id_debug_settings (the id of
+ *      every Settings root), otherwise identical to the linked page; a fresh page stack
+ *   -> the same walk; leaving the root ends the dynamic stack (Settings closes, the game is shown again)
+ *   -> a Settings root served afterwards finds no plugin page left open (clear_page_stack)
  *
  * Firmware 12.20's profile is used. Nothing here runs on, or talks to, a console.
  *
@@ -18,6 +24,7 @@
 
 #include "dynamic_ui_runtime.hpp"
 #include "dynamic_ui_xml.hpp"
+#include "ps5_settings_ui.hpp"
 #include "toolbox_route.hpp"
 
 #include <cstdio>
@@ -35,6 +42,7 @@ namespace dyn = onion::shellui::dynamic_ui;
 constexpr uint32_t kFirmware1220 = 0x12200000; /* the owner's console */
 constexpr const char *kPluginId = "AKEN00001";
 constexpr const char *kSettingsRoot = "debug_settings.xml";
+using dyn::kSettingsRootListId;
 
 int g_failures = 0;
 std::string g_pressed;
@@ -88,6 +96,8 @@ bool walk(const plugin_ui::Document &doc, const std::string &page, std::set<std:
         std::string xml;
         CHECK(dyn::render_resource(dyn::resource_name(doc, node.target_id), xml), "page %s (from %s) does not render",
               node.target_id.c_str(), page.c_str());
+        CHECK(dyn::page_depth() == static_cast<size_t>(depth) + 2, "page %s: depth %zu", node.target_id.c_str(),
+              dyn::page_depth());
         if (!walk(doc, node.target_id, seen, depth + 1)) return false;
         CHECK(dyn::leave_active_page(), "leaving %s did not return to %s", node.target_id.c_str(), page.c_str());
     }
@@ -114,20 +124,56 @@ bool check(const std::string &path) {
     CHECK(toolbox::direct_plugin_takes_resource(kSettingsRoot, kSettingsRoot, kPluginId), "root takeover");
     CHECK(dyn::plugin_root_title(kPluginId) == doc.title, "game-menu title '%s'", dyn::plugin_root_title(kPluginId).c_str());
 
-    /* The direct entry shows exactly the page the Toolbox link opens. */
-    std::string direct, linked;
+    const std::string root_resource = dyn::resource_name(doc, doc.root_page_id);
+    const std::string root_control = dyn::control_id(doc, doc.root_page_id);
+
+    /* Link mode: the Toolbox root lists the plugin first and selected; its link is the Plugins page's. */
+    ps5ui::Page toolbox_root(std::string(kSettingsRootListId), "Toolbox");
+    CHECK(dyn::add_root_shortcut_link(toolbox_root, kPluginId), "%s: no Toolbox root link", path.c_str());
+    const std::string toolbox_xml = toolbox_root.build();
+    CHECK(toolbox_xml.find("initial_focus_to=\"" + root_control + "\"") != std::string::npos, "%s: focus",
+          path.c_str());
+    CHECK(toolbox_xml.find("file=\"" + root_resource + "\"") != std::string::npos, "%s: link file", path.c_str());
+    std::string linked;
+    CHECK(dyn::render_resource(root_resource, linked), "%s: the link's page does not render", path.c_str());
+    CHECK(linked.find("<setting_list id=\"" + root_control + "\"") != std::string::npos, "%s: linked root id",
+          path.c_str());
+    CHECK(dyn::page_depth() == 1, "%s: link depth %zu", path.c_str(), dyn::page_depth());
+    std::set<std::string> seen_link;
+    if (!walk(doc, doc.root_page_id, seen_link, 0)) return false;
+    CHECK(!dyn::leave_active_page(), "%s: pages left on the stack after the linked root", path.c_str());
+
+    /* Root mode: the linked page with the Settings root's setting_list id, on a fresh stack. */
+    CHECK(dyn::render_resource(root_resource, linked), "%s: stale page", path.c_str()); /* left open */
+    std::string direct;
     CHECK(dyn::render_plugin_root(kPluginId, direct), "%s: no root page for the direct entry", path.c_str());
-    CHECK(dyn::render_resource(dyn::resource_name(doc, doc.root_page_id), linked) && linked == direct,
-          "%s: direct root differs from the linked root", path.c_str());
+    CHECK(dyn::page_depth() == 1, "%s: direct root on a stack of %zu", path.c_str(), dyn::page_depth());
+    std::string as_root = linked;
+    const std::string linked_id = "<setting_list id=\"" + root_control + "\"";
+    as_root.replace(as_root.find(linked_id), linked_id.size(),
+                    "<setting_list id=\"" + std::string(kSettingsRootListId) + "\"");
+    CHECK(as_root == direct, "%s: direct root differs from the linked root beyond the root list id", path.c_str());
+    CHECK(direct.find(linked_id) == std::string::npos, "%s: direct root keeps its own list id", path.c_str());
 
     std::set<std::string> seen;
     if (!walk(doc, doc.root_page_id, seen, 0)) return false;
+    CHECK(seen == seen_link, "%s: root mode reaches other pages than link mode", path.c_str());
     CHECK(!dyn::leave_active_page(), "%s: pages left on the stack after the root", path.c_str());
+
+    /* Settings closed on a subpage without a pop: the next Settings root starts without it. */
+    CHECK(dyn::render_plugin_root(kPluginId, direct), "%s: root again", path.c_str());
+    for (const plugin_ui::Node &node : doc.nodes)
+        if (node.kind == plugin_ui::NodeKind::Menu && page_of(doc, node) == doc.root_page_id) {
+            CHECK(dyn::render_resource(dyn::resource_name(doc, node.target_id), linked), "%s: subpage", path.c_str());
+            break;
+        }
+    dyn::clear_page_stack();
+    CHECK(dyn::page_depth() == 0, "%s: stale pages", path.c_str());
 
     size_t pages = 0;
     for (const plugin_ui::Node &node : doc.nodes) pages += node.kind == plugin_ui::NodeKind::Page;
-    std::printf("%s: %zu nodes, %zu pages, %zu reachable from the direct entry\n", path.c_str(), doc.nodes.size(), pages,
-                seen.size());
+    std::printf("%s: %zu nodes, %zu pages, %zu reachable from the Toolbox link and from the direct root\n", path.c_str(),
+                doc.nodes.size(), pages, seen.size());
     dyn::replace_snapshot({});
     return true;
 }
@@ -141,7 +187,8 @@ int main(int argc, char **argv) {
     }
     int checked = 0;
     for (int i = 1; i < argc; i++) checked += check(argv[i]);
-    std::printf("direct entry: %d of %d AKEN00001 documents open as the Settings root and route every press\n", checked,
-                argc - 1);
+    std::printf("direct entry: %d of %d AKEN00001 documents open from the Toolbox root link and as the Settings root "
+                "(id_debug_settings) and route every press\n",
+                checked, argc - 1);
     return g_failures == 0 && checked == argc - 1 ? 0 : 1;
 }
