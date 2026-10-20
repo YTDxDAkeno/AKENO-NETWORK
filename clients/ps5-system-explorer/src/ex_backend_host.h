@@ -21,6 +21,7 @@ typedef struct {
     int foreground;               /* this process is the running foreground app */
     int have_appinfo;
     int32_t appinfo_err;          /* appinfo_rc when not foreground (background payload) */
+    int appinfo_ok_zero;          /* background: appinfo succeeds (rc 0) with app id 0 (owner's 6.1 case) */
     int have_bigapp;
     int have_user;
     int32_t user_rc;

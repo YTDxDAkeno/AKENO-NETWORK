@@ -123,6 +123,8 @@ static void h_read_proc(void *u, ex_raw_proc *out) {
             out->appinfo_rc = 0;
             memcpy(out->appinfo_raw, &s->game_app, 4);        /* own app id = the game */
             memcpy(out->appinfo_raw + 20, "PPSA00001", 10);   /* title id at the samples/ps offset */
+        } else if (s->appinfo_ok_zero) {
+            out->appinfo_rc = 0; /* the call succeeds but the app id is 0: a background payload (owner's 6.1 case) */
         } else {
             out->appinfo_rc = s->appinfo_err ? s->appinfo_err : (int32_t)0x80020016;
         }
