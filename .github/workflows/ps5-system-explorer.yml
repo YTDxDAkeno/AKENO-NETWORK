@@ -1,0 +1,106 @@
+name: PS5 System Explorer (experimental)
+
+# AKENO System Explorer 6.0 (docs/PHASE6_AKENO_SYSTEM_EXPLORER_DE.md): a standalone, read-only PS5
+# diagnostic payload. This workflow runs the PC unit tests (ASan/UBSan) and builds the real PS5 ELF
+# with the pinned SDK, runs the import safety gate and produces the review/delivery package. Nothing
+# is sent to a console, and a PC run is never evidence of PS5 behaviour. The daemon, AKENO Native,
+# the party-voice service and the OnionHEN host are not built or changed here.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ps5-system-explorer-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PS5_SDK_COMMIT: f5d40f02770e9b0001dd9e18056eca70b3da8b40 # same SDK as the other PS5 builds
+
+jobs:
+  host:
+    name: Explorer logic tests (ASan/UBSan) and mock scenarios
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install build requirements
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake clang-18 python3
+
+      - name: Build and run the unit tests
+        shell: bash
+        run: |
+          cmake -S clients/ps5-system-explorer -B clients/ps5-system-explorer/build \
+            -DAKN_EX_SANITIZE=ON -DCMAKE_C_COMPILER=clang-18
+          cmake --build clients/ps5-system-explorer/build -j"$(nproc)"
+          ctest --test-dir clients/ps5-system-explorer/build --output-on-failure
+
+      - name: Smoke the simulated runs and validate the JSON reports
+        shell: bash
+        run: |
+          bin=clients/ps5-system-explorer/build/akeno-system-explorer
+          for mode in background foreground home-to-game refused; do
+            out="$RUNNER_TEMP/ex-$mode"; mkdir -p "$out"
+            AKN_EX_QUICK=1 AKN_EX_SIM="$mode" "$bin" "$out" >/dev/null
+            for f in report.json modules.json audio-diagnostics.json; do
+              python3 -Ic "import json,sys; json.load(open(sys.argv[1]))" "$out/$f"
+            done
+            python3 -Ic "import json,sys; [json.loads(l) for l in open(sys.argv[1]) if l.strip()]" "$out/events.jsonl"
+          done
+          echo "simulated runs produced valid JSON in every mode"
+
+  ps5:
+    name: Build the PS5 System Explorer ELF, import gate, delivery package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # the build id embeds the short commit
+
+      - name: Install SDK build requirements
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-18 lld-18 llvm-18-dev make cmake wget file binutils gcc python3
+
+      - name: Fetch and install the pinned SDK
+        shell: bash
+        run: |
+          git clone --filter=blob:none https://github.com/ps5-payload-dev/sdk.git "$RUNNER_TEMP/ps5-sdk-src"
+          git -C "$RUNNER_TEMP/ps5-sdk-src" checkout --detach "$PS5_SDK_COMMIT"
+          test "$(git -C "$RUNNER_TEMP/ps5-sdk-src" rev-parse HEAD)" = "$PS5_SDK_COMMIT"
+          mkdir -p "$RUNNER_TEMP/ps5-payload-sdk"
+          make -C "$RUNNER_TEMP/ps5-sdk-src" DESTDIR="$RUNNER_TEMP/ps5-payload-sdk" install
+
+      - name: Build twice (byte-identical), import gate, delivery package
+        shell: bash
+        run: |
+          export PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk"
+          id="$(git rev-parse --short=12 HEAD)-ps5"
+          make -C clients/ps5-system-explorer/console -j"$(nproc)" BUILD="$RUNNER_TEMP/ex-repro" BUILD_ID="$id"
+          make -C clients/ps5-system-explorer/console -j"$(nproc)" BUILD_ID="$id" delivery
+          cmp "$RUNNER_TEMP/ex-repro/akeno-system-explorer.elf" clients/ps5-system-explorer/build-ps5/akeno-system-explorer.elf
+          clients/ps5-system-explorer/console/check-explorer.sh clients/ps5-system-explorer/build-ps5 | tee "$RUNNER_TEMP/gate.txt"
+
+      - name: Show the ELF imports (for review)
+        shell: bash
+        run: |
+          nm="$RUNNER_TEMP/ps5-payload-sdk/bin/prospero-nm"
+          elf=clients/ps5-system-explorer/build-ps5/akeno-system-explorer.elf
+          echo "NEEDED:"; readelf -d "$elf" | awk '/NEEDED/ {gsub(/[\[\]]/,"",$5); print "  "$5}'
+          echo "system imports:"; "$nm" -D --undefined-only "$elf" | awk '{print $2}' | grep -E '^(sce|kernel_)' | sort | sed 's/^/  /'
+          if "$nm" -D --undefined-only "$elf" | grep -qE 'sceAudio(Out|In)'; then echo "ERROR: audio symbol present"; exit 1; fi
+
+      - name: Upload the delivery package
+        uses: actions/upload-artifact@v4
+        with:
+          name: AKENO-System-Explorer-6.0
+          path: clients/ps5-system-explorer/build-ps5/AKENO-System-Explorer-6.0
+          if-no-files-found: error
