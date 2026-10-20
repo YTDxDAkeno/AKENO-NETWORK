@@ -23,7 +23,7 @@ DEBUG_ELF   := $(BUILD)/akeno-audio-lab.debug.elf
 
 BUILD_ID    ?= $(shell git -C $(REPO_ROOT) rev-parse --short=12 HEAD 2>/dev/null || echo unknown)-ps5
 
-SRC         := $(addprefix $(ROOT)/src/,main.c al.c al_engine.c al_report.c al_control.c audio_lab_pcm.c \
+SRC         := $(addprefix $(ROOT)/src/,main.c al.c al_engine.c al_report.c audio_lab_pcm.c \
                audio_lab_state.c al_backend_ps5.c)
 OBJS        := $(patsubst $(ROOT)/src/%.c,$(OBJ)/%.o,$(SRC))
 
@@ -59,6 +59,7 @@ package: $(ELF)
 
 # The review/delivery package with the ELF, the German guides, SAFETY and SHA-256 checksums.
 DELIVERY := $(BUILD)/AKENO-Audio-Lab-3.1
+ZIP := $(BUILD)/AKENO-Audio-Lab-3.1.zip
 .PHONY: delivery
 delivery: package
 	rm -rf $(DELIVERY)
@@ -71,4 +72,5 @@ delivery: package
 	cp $(ROOT)/package/SAFETY.md $(DELIVERY)/SAFETY.md
 	cd $(DELIVERY) && sha256sum akeno-audio-lab.elf AKENOAudioLab/akeno-audio-lab.elf \
 	  AKENOAudioLab/homebrew.js README-DE.md HARDWARE-TEST-DE.md SAFETY.md > SHA256SUMS.txt
-	@echo "delivery package: $(DELIVERY)"
+	cd $(BUILD) && rm -f $(notdir $(ZIP)) && zip -qr $(notdir $(ZIP)) $(notdir $(DELIVERY))
+	@echo "delivery package: $(ZIP)"

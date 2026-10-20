@@ -26,6 +26,8 @@ static uint64_t h_now_us(void *u) {
 
 static void h_sleep_ms(void *u, unsigned ms) {
     al_sim *s = u;
+    s->sleep_calls++;
+    s->last_sleep_ms = ms;
     if (s->real_time) {
         struct timespec ts = { (time_t)(ms / 1000), (long)(ms % 1000) * 1000000L };
         nanosleep(&ts, NULL);
@@ -52,36 +54,12 @@ static int h_pid(void *u) {
     return s->pid ? s->pid : 4242;
 }
 
-/* Fills a port-state sample as the PS4 layout would (output=primary, volume, a reroute counter). */
-static void fake_ps4_sample(audio_lab_state_sample *s) {
-    memset(s, 0, sizeof(*s));
-    s->attempted = 1;
-    s->guards_intact = 1;
-    s->calls_agree = 1;
-    s->highest_written = 11;
-    s->written_count = 12;
-    for (int c = 0; c < 2; c++) {
-        s->call[c].called = 1;
-        s->call[c].rc = 0;
-        s->call[c].lead_intact = s->call[c].tail_intact = 1;
-    }
-    /* output=0x0001 primary, channel=2, volume=0x7fff, rerouteCounter=1, flag bytes 0 */
-    static const unsigned char layout[12] = { 0x01, 0x00, 0x02, 0x00, 0xff, 0x7f, 0x01, 0x00, 0, 0, 0, 0 };
-    for (int i = 0; i < 12; i++) {
-        s->written[i] = 1;
-        s->value[i] = layout[i];
-        s->call[0].bytes[i] = layout[i];
-        s->call[1].bytes[i] = layout[i];
-    }
-}
-
 static int h_audio_run(void *u, const al_audio_params *p, al_audio_result *r) {
     al_sim *s = u;
     s->audio_runs++;
     memset(r, 0, sizeof(*r));
     r->call_min_us = -1;
     r->buffer_aligned = 1;
-    r->port_state_opt_in = p->measure_port_state;
     if (s->audio_mode == 1) {
         r->library_loaded = 0;
         snprintf(r->error, sizeof(r->error), "libSceAudioOut.sprx not available (simulated)");
@@ -101,12 +79,6 @@ static int h_audio_run(void *u, const al_audio_params *p, al_audio_result *r) {
         return -1;
     }
     r->open_rc = 42; /* a handle */
-    r->port_state_exported = s->port_state_exported;
-
-    int want_ps = p->measure_port_state && s->port_state_exported;
-    if (want_ps && s->port_state_mode != 2) fake_ps4_sample(&r->port_state[AUDIO_LAB_STATE_BEFORE_PLAYBACK]);
-    else if (want_ps && s->port_state_mode == 2) { r->port_state[AUDIO_LAB_STATE_BEFORE_PLAYBACK].attempted = 1; r->port_state_stopped = 1; }
-
     unsigned long submitted = 0;
     unsigned calls = 0;
     for (unsigned long done = 0; done < p->frames; done += p->grain) {
@@ -141,10 +113,6 @@ static int h_audio_run(void *u, const al_audio_params *p, al_audio_result *r) {
     }
     r->frames_submitted = submitted;
     r->nonzero_frames = submitted; /* tone present */
-    if (want_ps && s->port_state_mode != 2) {
-        fake_ps4_sample(&r->port_state[AUDIO_LAB_STATE_DURING_PLAYBACK]);
-        fake_ps4_sample(&r->port_state[AUDIO_LAB_STATE_BEFORE_CLOSE]);
-    }
     r->wall_us = (long long)submitted * 1000000LL / (long long)AUDIO_LAB_RATE;
     r->close_called = 1;
     r->close_rc = 0;
@@ -152,39 +120,8 @@ static int h_audio_run(void *u, const al_audio_params *p, al_audio_result *r) {
     return 0;
 }
 
-static void h_control_begin(void *u) {
-    al_sim *s = u;
-    s->control_begun = 1; /* the in-memory control models the live feed appended after the boundary */
-}
-
-static int h_read_control(void *u, char *buf, size_t len, int *reset) {
-    al_sim *s = u;
-    *reset = 0;
-    s->read_calls++;
-    if (s->control2 && s->control_swap_at && s->read_calls >= s->control_swap_at && !s->control_reset_done) {
-        s->control = s->control2;
-        s->control_pos = 0;
-        s->control_reset_done = 1;
-        *reset = 1;
-    }
-    if (!s->control) return 0;
-    size_t remaining = strlen(s->control) - s->control_pos;
-    if (remaining == 0) return 0;
-    size_t want = s->control_chunk ? s->control_chunk : remaining;
-    if (want > remaining) want = remaining;
-    if (want > len) want = len;
-    memcpy(buf, s->control + s->control_pos, want);
-    s->control_pos += want;
-    return (int)want;
-}
-
-static int h_port_state_opt_in(void *u) {
-    al_sim *s = u;
-    return s->opt_in;
-}
-
 void al_backend_host(al_backend *be, void *sim) {
     al_backend b = { "PC simulation (not a PS5)", sim, h_now_unix, h_now_us, h_sleep_ms, h_notify, h_fw, h_pid,
-                     h_audio_run, h_control_begin, h_read_control, h_port_state_opt_in };
+                     h_audio_run };
     *be = b;
 }

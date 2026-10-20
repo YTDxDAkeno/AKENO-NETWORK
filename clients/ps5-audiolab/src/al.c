@@ -1,7 +1,6 @@
-/* AKENO Audio Lab 3.1 core: presets, command parsing, run bookkeeping (portable, unit-tested). */
+/* AKENO Audio Lab 3.1 core: presets and run bookkeeping (portable, unit-tested). */
 #include "al.h"
 
-#include <ctype.h>
 #include <string.h>
 
 /* The exact preset and level sets of Audio Lab v3 (clients/ps5/app/audio_lab.c, 05ad4f3). */
@@ -51,47 +50,6 @@ const char *al_outcome_name(al_outcome o) {
     case AL_OUT_ACCEPTED: return "accepted";
     }
     return "unknown";
-}
-
-/* ---- command parsing ----------------------------------------------------------------------- */
-
-static const char *skip_ws(const char *p) {
-    while (*p == ' ' || *p == '\t') p++;
-    return p;
-}
-
-/* Copies the next whitespace-delimited token (lower-cased) into dst. Returns the char after it. */
-static const char *token(const char *p, char *dst, size_t len) {
-    p = skip_ws(p);
-    size_t n = 0;
-    while (*p && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n') {
-        if (n + 1 < len) dst[n++] = (char)tolower((unsigned char)*p);
-        p++;
-    }
-    dst[n] = '\0';
-    return p;
-}
-
-al_cmd_kind al_parse_command(const char *line, al_cmd *out) {
-    memset(out, 0, sizeof(*out));
-    char verb[32];
-    const char *p = token(line, verb, sizeof(verb));
-    if (verb[0] == '\0' || verb[0] == '#') return AL_CMD_NONE;
-
-    if (strcmp(verb, "status") == 0) {
-        out->kind = AL_CMD_STATUS;
-    } else if (strcmp(verb, "stop") == 0) {
-        out->kind = AL_CMD_STOP;
-    } else if (strcmp(verb, "exit") == 0 || strcmp(verb, "quit") == 0) {
-        out->kind = AL_CMD_EXIT;
-    } else if (strcmp(verb, "tone") == 0) {
-        out->kind = AL_CMD_TONE;
-        p = token(p, out->preset, sizeof(out->preset)); /* may be empty -> default */
-        token(p, out->level, sizeof(out->level));       /* may be empty -> default */
-    } else {
-        out->kind = AL_CMD_NONE;
-    }
-    return out->kind;
 }
 
 al_run *al_run_by_id(al_state *st, int id) {

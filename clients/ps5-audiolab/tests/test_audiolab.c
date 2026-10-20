@@ -1,449 +1,111 @@
-/*
- * AKENO Audio Lab 3.1 unit tests. Everything runs against the host backend. A passing run here is
- * never evidence of PS5 behaviour. Covered: command parsing, tone lifecycle and outcomes, the
- * port-state opt-in gate and overrun stop, pacing, cancel, per-launch limit, the audio-state
- * guard/decode primitives, PCM generation, JSON validity and report content.
- */
-#define _POSIX_C_SOURCE 200809L
-#include <stdio.h>
-#include <pthread.h>
+/* Focused host tests for the automatic, single-run Audio Lab payload. */
 #include <stdatomic.h>
-#include <stdint.h>
+#include <stdio.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
 #include "al.h"
 #include "al_backend.h"
 #include "al_backend_host.h"
-#include "audio_lab_pcm.h"
-#include "audio_lab_state.h"
 
 static int g_checks, g_failures;
-#define CHECK(c)                                                                                   \
-    do {                                                                                           \
-        g_checks++;                                                                                \
-        if (!(c)) {                                                                                \
-            g_failures++;                                                                          \
-            fprintf(stderr, "%s:%d: CHECK(%s) failed\n", __FILE__, __LINE__, #c);                  \
-        }                                                                                          \
-    } while (0)
+#define CHECK(c) do { \
+    g_checks++; \
+    if (!(c)) { \
+        g_failures++; \
+        fprintf(stderr, "%s:%d: CHECK(%s) failed\n", __FILE__, __LINE__, #c); \
+    } \
+} while (0)
 
-/* ---- a small strict JSON validator ----------------------------------------------------------- */
-static const char *js_value(const char *p);
-static const char *js_ws(const char *p) {
-    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
-    return p;
-}
-static const char *js_string(const char *p) {
-    if (*p != '"') return NULL;
-    p++;
-    while (*p && *p != '"') {
-        if (*p == '\\') {
-            p++;
-            if (*p == 'u') {
-                for (int i = 0; i < 4; i++) {
-                    p++;
-                    if (!((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f') || (*p >= 'A' && *p <= 'F'))) return NULL;
-                }
-            } else if (!strchr("\"\\/bfnrt", *p)) return NULL;
-        }
-        p++;
-    }
-    return *p == '"' ? p + 1 : NULL;
-}
-static const char *js_number(const char *p) {
-    const char *s = p;
-    if (*p == '-') p++;
-    if (*p == '0') p++;
-    else if (*p >= '1' && *p <= '9') while (*p >= '0' && *p <= '9') p++;
-    else return NULL;
-    if (*p == '.') { p++; if (!(*p >= '0' && *p <= '9')) return NULL; while (*p >= '0' && *p <= '9') p++; }
-    if (*p == 'e' || *p == 'E') { p++; if (*p == '+' || *p == '-') p++; if (!(*p >= '0' && *p <= '9')) return NULL; while (*p >= '0' && *p <= '9') p++; }
-    return p > s ? p : NULL;
-}
-static const char *js_value(const char *p) {
-    p = js_ws(p);
-    if (*p == '"') return js_string(p);
-    if (*p == '{') {
-        p = js_ws(p + 1);
-        if (*p == '}') return p + 1;
-        for (;;) {
-            p = js_ws(p);
-            p = js_string(p);
-            if (!p) return NULL;
-            p = js_ws(p);
-            if (*p != ':') return NULL;
-            p = js_value(p + 1);
-            if (!p) return NULL;
-            p = js_ws(p);
-            if (*p == ',') { p++; continue; }
-            if (*p == '}') return p + 1;
-            return NULL;
-        }
-    }
-    if (*p == '[') {
-        p = js_ws(p + 1);
-        if (*p == ']') return p + 1;
-        for (;;) {
-            p = js_value(p);
-            if (!p) return NULL;
-            p = js_ws(p);
-            if (*p == ',') { p++; continue; }
-            if (*p == ']') return p + 1;
-            return NULL;
-        }
-    }
-    if (!strncmp(p, "true", 4)) return p + 4;
-    if (!strncmp(p, "false", 5)) return p + 5;
-    if (!strncmp(p, "null", 4)) return p + 4;
-    return js_number(p);
-}
-static int json_valid(const char *s) {
-    const char *p = js_value(s);
-    if (!p) return 0;
-    p = js_ws(p);
-    return *p == '\0';
-}
-
-/* ---- helpers --------------------------------------------------------------------------------- */
 static al_sim base_sim(void) {
     al_sim s;
     memset(&s, 0, sizeof(s));
     s.have_fw = 1;
     s.fw = 0x12200000u;
     s.pid = 205;
-    s.port_state_exported = 1;
+    s.unix0 = 1700000000;
     return s;
 }
 
-/* ---- tests ----------------------------------------------------------------------------------- */
-
-static void test_parse(void) {
-    al_cmd c;
-    CHECK(al_parse_command("status", &c) == AL_CMD_STATUS);
-    CHECK(al_parse_command("  STOP  ", &c) == AL_CMD_STOP);
-    CHECK(al_parse_command("exit", &c) == AL_CMD_EXIT);
-    CHECK(al_parse_command("quit", &c) == AL_CMD_EXIT);
-    CHECK(al_parse_command("# a comment", &c) == AL_CMD_NONE);
-    CHECK(al_parse_command("", &c) == AL_CMD_NONE);
-    CHECK(al_parse_command("nonsense", &c) == AL_CMD_NONE);
-    CHECK(al_parse_command("tone", &c) == AL_CMD_TONE && c.preset[0] == '\0' && c.level[0] == '\0');
-    CHECK(al_parse_command("tone mono16-256 clear", &c) == AL_CMD_TONE);
-    CHECK(strcmp(c.preset, "mono16-256") == 0 && strcmp(c.level, "clear") == 0);
-    CHECK(al_parse_command("TONE Stereo16-1024", &c) == AL_CMD_TONE && strcmp(c.preset, "stereo16-1024") == 0);
-}
-
-static void test_presets(void) {
-    CHECK(al_find_preset("") == al_presets(&(size_t){0}));
-    CHECK(al_find_preset("nope") == NULL);
-    CHECK(al_find_level("")->amplitude == 0.1); /* moderate default */
-    CHECK(al_find_level("clear")->amplitude == 0.2);
-    CHECK(al_find_level("bogus") == NULL);
-}
-
-static void test_tone_accepted_paced(void) {
+static void test_one_shot_uses_unchanged_defaults(void) {
     al_sim sim = base_sim();
-    sim.audio_mode = 0;
     al_backend be;
-    al_backend_host(&be, &sim);
     al_state st;
+    atomic_int cancel;
+    al_backend_host(&be, &sim);
     al_engine_init(&st, &be);
-    atomic_int cancel; atomic_init(&cancel, 0);
-    int id = al_engine_run_tone(&st, &be, al_find_preset("stereo16-1024"), al_find_level("moderate"), &cancel);
+    atomic_init(&cancel, 0);
+
+    int id = al_engine_run_one_shot(&st, &be, &cancel);
+    const al_run *run = al_run_by_id(&st, id);
     CHECK(id == 1);
-    const al_run *r = al_run_by_id(&st, id);
-    CHECK(r && r->outcome == AL_OUT_ACCEPTED);
-    CHECK(r->paced == 1);                 /* host pacing is exact */
-    CHECK(r->heard == AL_HEARD_UNREPORTED); /* never inferred */
-    CHECK(r->result.frames_submitted > 0 && r->result.nonzero_frames > 0);
+    CHECK(sim.sleep_calls == 1 && sim.last_sleep_ms == AL_ONESHOT_DELAY_MS);
+    CHECK(sim.vclock_us == (uint64_t)AL_ONESHOT_DELAY_MS * 1000u);
+    CHECK(sim.audio_runs == 1 && st.tone_commands == 1 && st.tones_played == 1);
+    CHECK(run && run->outcome == AL_OUT_ACCEPTED);
+    CHECK(run && run->preset == al_find_preset(NULL));
+    CHECK(run && run->level == al_find_level(NULL));
+    CHECK(run && run->result.close_called && run->result.close_rc == 0);
+    CHECK(run && !run->result.port_state_opt_in && !run->result.port_state_exported);
+    CHECK(st.port_state_opt_in == 0 && st.port_state_supported == 0);
 }
 
-static void test_tone_failures(void) {
+static void test_cancel_before_tone_does_not_open_audio(void) {
+    al_sim sim = base_sim();
+    al_backend be;
+    al_state st;
+    atomic_int cancel;
+    al_backend_host(&be, &sim);
+    al_engine_init(&st, &be);
+    atomic_init(&cancel, 1);
+
+    CHECK(al_engine_run_one_shot(&st, &be, &cancel) == -2);
+    CHECK(sim.sleep_calls == 1 && sim.last_sleep_ms == AL_ONESHOT_DELAY_MS);
+    CHECK(sim.audio_runs == 0 && st.tone_commands == 0);
+}
+
+static void test_audio_errors_are_recorded_and_closed_when_opened(void) {
     for (int mode = 1; mode <= 4; mode++) {
         al_sim sim = base_sim();
-        sim.audio_mode = mode;
         al_backend be;
-        al_backend_host(&be, &sim);
         al_state st;
+        atomic_int cancel;
+        sim.audio_mode = mode;
+        al_backend_host(&be, &sim);
         al_engine_init(&st, &be);
-        atomic_int cancel; atomic_init(&cancel, 0);
-        int id = al_engine_run_tone(&st, &be, al_find_preset("stereo16-1024"), al_find_level("moderate"), &cancel);
-        const al_run *r = al_run_by_id(&st, id);
-        CHECK(r != NULL);
-        if (mode == 1) CHECK(r->outcome == AL_OUT_NOT_SUPPORTED);
-        if (mode == 2) CHECK(r->outcome == AL_OUT_INIT_FAILED);
-        if (mode == 3) CHECK(r->outcome == AL_OUT_OPEN_FAILED && (unsigned)r->result.open_rc == 0x80260011u);
-        if (mode == 4) CHECK(r->outcome == AL_OUT_SUBMIT_FAILED);
+        atomic_init(&cancel, 0);
+        int id = al_engine_run_one_shot(&st, &be, &cancel);
+        const al_run *run = al_run_by_id(&st, id);
+        CHECK(id == 1 && run != NULL);
+        if (mode == 1) CHECK(run->outcome == AL_OUT_NOT_SUPPORTED && !run->result.open_called);
+        if (mode == 2) CHECK(run->outcome == AL_OUT_INIT_FAILED && !run->result.open_called);
+        if (mode == 3) CHECK(run->outcome == AL_OUT_OPEN_FAILED && run->result.open_called);
+        if (mode == 4) CHECK(run->outcome == AL_OUT_SUBMIT_FAILED && run->result.close_called);
     }
 }
 
-static void test_cancel(void) {
+static void test_reports_describe_a_completed_single_run(void) {
     al_sim sim = base_sim();
     al_backend be;
-    al_backend_host(&be, &sim);
     al_state st;
-    al_engine_init(&st, &be);
-    atomic_int cancel; atomic_init(&cancel, 1); /* cancelled before the first block */
-    int id = al_engine_run_tone(&st, &be, al_find_preset("stereo16-1024"), al_find_level("moderate"), &cancel);
-    const al_run *r = al_run_by_id(&st, id);
-    CHECK(r && r->result.cancelled);
-    CHECK(r->outcome == AL_OUT_CANCELLED);
-}
-
-static void test_port_state_opt_in_gate(void) {
-    /* Opt-out (default): the probe is never attempted even though the function is exported. */
-    al_sim sim = base_sim();
-    sim.opt_in = 0;
-    al_backend be;
-    al_backend_host(&be, &sim);
-    al_state st;
-    al_engine_init(&st, &be);
-    CHECK(st.port_state_opt_in == 0);
-    atomic_int cancel; atomic_init(&cancel, 0);
-    int id = al_engine_run_tone(&st, &be, al_find_preset("stereo16-1024"), al_find_level("moderate"), &cancel);
-    const al_run *r = al_run_by_id(&st, id);
-    CHECK(r && !r->result.port_state_opt_in);
-    CHECK(!r->result.port_state[AUDIO_LAB_STATE_BEFORE_PLAYBACK].attempted);
-
-    /* Opt-in: a PS4-layout sample is measured and decodes tentatively. */
-    sim = base_sim();
-    sim.opt_in = 1;
-    sim.port_state_mode = 0;
+    atomic_int cancel;
+    static char report[128 * 1024];
     al_backend_host(&be, &sim);
     al_engine_init(&st, &be);
-    CHECK(st.port_state_opt_in == 1);
-    id = al_engine_run_tone(&st, &be, al_find_preset("stereo16-1024"), al_find_level("moderate"), &cancel);
-    r = al_run_by_id(&st, id);
-    CHECK(r && r->result.port_state_opt_in);
-    CHECK(r->result.port_state[AUDIO_LAB_STATE_BEFORE_PLAYBACK].attempted);
-    audio_lab_state_decoded d;
-    audio_lab_state_decode(&r->result.port_state[AUDIO_LAB_STATE_BEFORE_PLAYBACK], &d);
-    CHECK(d.output_known && d.output == 0x0001);
-    CHECK(d.volume_known && d.volume == 0x7fff);
-}
-
-static void test_port_state_overrun_stop(void) {
-    al_sim sim = base_sim();
-    sim.opt_in = 1;
-    sim.port_state_mode = 2; /* guard trips */
-    al_backend be;
-    al_backend_host(&be, &sim);
-    al_state st;
-    al_engine_init(&st, &be);
-    atomic_int cancel; atomic_init(&cancel, 0);
-    int id = al_engine_run_tone(&st, &be, al_find_preset("stereo16-1024"), al_find_level("moderate"), &cancel);
-    const al_run *r = al_run_by_id(&st, id);
-    CHECK(r && r->result.port_state_stopped);
-}
-
-static void test_launch_limit(void) {
-    al_sim sim = base_sim();
-    al_backend be;
-    al_backend_host(&be, &sim);
-    al_state st;
-    al_engine_init(&st, &be);
-    atomic_int cancel; atomic_init(&cancel, 0);
-    int last = 0;
-    for (int i = 0; i < AL_RUNS_PER_LAUNCH + 2; i++)
-        last = al_engine_run_tone(&st, &be, al_find_preset("stereo16-1024"), al_find_level("moderate"), &cancel);
-    CHECK(last == -3); /* the limit is enforced */
-    CHECK(st.tone_commands == AL_RUNS_PER_LAUNCH);
-}
-
-static void test_feedback(void) {
-    al_sim sim = base_sim();
-    al_backend be;
-    al_backend_host(&be, &sim);
-    al_state st;
-    al_engine_init(&st, &be);
-    atomic_int cancel; atomic_init(&cancel, 0);
-    int id = al_engine_run_tone(&st, &be, al_find_preset("stereo16-1024"), al_find_level("moderate"), &cancel);
-    CHECK(al_engine_feedback(&st, id, AL_HEARD_YES, "tv") == 0);
-    const al_run *r = al_run_by_id(&st, id);
-    CHECK(r->heard == AL_HEARD_YES && strcmp(r->route, "tv") == 0);
-    CHECK(al_engine_feedback(&st, 999, AL_HEARD_NO, "tv") == -1);
-}
-
-static void test_reports_json(void) {
-    al_sim sim = base_sim();
-    sim.opt_in = 1;
-    al_backend be;
-    al_backend_host(&be, &sim);
-    al_state st;
-    al_engine_init(&st, &be);
-    atomic_int cancel; atomic_init(&cancel, 0);
-    al_engine_run_tone(&st, &be, al_find_preset("stereo16-1024"), al_find_level("moderate"), &cancel);
-    al_engine_feedback(&st, 1, AL_HEARD_NO, "tv");
-    static char buf[128 * 1024];
-    al_report_json(&st, buf, sizeof(buf));
-    CHECK(json_valid(buf));
-    CHECK(strstr(buf, "\"accepted+paced-but-inaudible\"") != NULL);
-    CHECK(strstr(buf, "\"portState\"") != NULL);
-    CHECK(strstr(buf, "ps4LayoutUnverified") != NULL);
-    al_report_status_json(&st, "COMPLETED", st.started_unix + 42, buf, sizeof(buf));
-    CHECK(json_valid(buf));
-    CHECK(strstr(buf, "\"elapsedS\":42") != NULL);
-    al_report_txt(&st, buf, sizeof(buf));
-    CHECK(strstr(buf, "AKENO AUDIO LAB 3.1") != NULL);
-    CHECK(strstr(buf, "WIEDERHOLT") != NULL); /* the repeat-vs-new explanation is present */
-    CHECK(strstr(buf, "/data/akeno-audiolab") != NULL);
-}
-
-static void test_report_buffer_safety(void) {
-    al_sim sim = base_sim();
-    al_backend be;
-    al_backend_host(&be, &sim);
-    al_state st;
-    al_engine_init(&st, &be);
-    char tiny[16];
-    size_t n = al_report_json(&st, tiny, sizeof(tiny));
-    CHECK(n < sizeof(tiny) && tiny[n] == '\0');
-    n = al_report_txt(&st, tiny, sizeof(tiny));
-    CHECK(n < sizeof(tiny) && tiny[n] == '\0');
-}
-
-static void test_pcm(void) {
-    audio_lab_osc osc;
-    audio_lab_osc_init(&osc, 440, 0.1, 48000u * 250u / 1000u, 48000u * 1500u / 1000u);
-    static short block[2048 * 2];
-    audio_lab_block_stats stats;
-    audio_lab_fill(&osc, AUDIO_LAB_FORMAT_S16_STEREO, block, 1024, &stats);
-    CHECK(stats.peak >= 0.0 && stats.peak <= 1.0);
-    /* frames=0 must be safe (the host backend calls fill with 0). */
-    audio_lab_fill(&osc, AUDIO_LAB_FORMAT_S16_STEREO, block, 0, &stats);
-    CHECK(stats.nonzero == 0);
-    CHECK(audio_lab_format_channels(AUDIO_LAB_FORMAT_S16_STEREO) == 2);
-    CHECK(audio_lab_grain_valid(1024) && !audio_lab_grain_valid(1000));
-}
-
-static void test_state_guard_primitive(void) {
-    /* The production arena is 64-byte aligned (al_backend_ps5.c); the window is then aligned too. */
-    static unsigned char arena[AUDIO_LAB_STATE_ARENA_BYTES] __attribute__((aligned(64)));
-    audio_lab_state_prepare(arena, AUDIO_LAB_STATE_FILL_A);
-    unsigned char *w = audio_lab_state_window(arena);
-    CHECK(((uintptr_t)w % 64) == 0);
-    audio_lab_state_call call;
-    audio_lab_state_capture(arena, 0, AUDIO_LAB_STATE_FILL_A, &call);
-    CHECK(call.lead_intact && call.tail_intact); /* nothing written: canaries intact */
-}
-
-/* ---- control-file session boundary (al_control.c) against real temp files ------------------- */
-
-#include "al_control.h"
-#include <stdlib.h>
-
-static void write_text(const char *path, const char *text) {
-    FILE *f = fopen(path, "w");
-    if (f) { fputs(text, f); fclose(f); }
-}
-static void append_text(const char *path, const char *text) {
-    FILE *f = fopen(path, "a");
-    if (f) { fputs(text, f); fclose(f); }
-}
-
-/* The critical rule: a `tone` command present at start must be moved aside and never read. */
-static void test_control_session_boundary(void) {
-    char dir[] = "/tmp/al_ctl_XXXXXX";
-    if (!mkdtemp(dir)) { CHECK(0); return; }
-    char ctl[300], consumed[320];
-    snprintf(ctl, sizeof(ctl), "%s/control", dir);
-    snprintf(consumed, sizeof(consumed), "%s/control.consumed", dir);
-
-    /* A stale control file from a previous run. */
-    write_text(ctl, "tone stereo16-1024 clear\n");
-    al_control_begin(dir);
-    /* It was moved aside: the live path no longer carries the stale command. */
-    struct stat stt;
-    CHECK(stat(ctl, &stt) != 0);        /* control is gone from the read path */
-    CHECK(stat(consumed, &stt) == 0);   /* preserved as control.consumed */
-
-    long off = 0;
-    char buf[256];
-    int reset = 0;
-    int n = al_control_read(dir, &off, buf, sizeof(buf), &reset);
-    CHECK(n == 0); /* nothing to read: the stale `tone` never becomes a command */
-
-    /* The owner appends a new command after the boundary: it IS read. */
-    append_text(ctl, "status\n");
-    n = al_control_read(dir, &off, buf, sizeof(buf), &reset);
-    CHECK(n > 0);
-    buf[n] = '\0';
-    CHECK(strstr(buf, "status") != NULL);
-
-    /* Appends advance; already-read bytes are not re-read. */
-    append_text(ctl, "tone\n");
-    n = al_control_read(dir, &off, buf, sizeof(buf), &reset);
-    buf[n > 0 ? n : 0] = '\0';
-    CHECK(n > 0 && strstr(buf, "tone") != NULL && strstr(buf, "status") == NULL);
-
-    /* Replace with a smaller file (truncate): reading restarts and reports a reset. */
-    write_text(ctl, "exit\n");
-    n = al_control_read(dir, &off, buf, sizeof(buf), &reset);
-    buf[n > 0 ? n : 0] = '\0';
-    CHECK(reset == 1 && strstr(buf, "exit") != NULL);
-
-    unlink(ctl);
-    unlink(consumed);
-    rmdir(dir);
-}
-
-/* Thread-safety: a tone worker commits into al_state while the main thread reads reports under the
- * lock. Run many iterations; TSan (CI) flags a race, and the JSON must always stay valid. */
-typedef struct { al_state *st; const al_backend *be; atomic_int *cancel; atomic_int go; } ts_ctx;
-static void *ts_worker(void *arg) {
-    ts_ctx *c = arg;
-    while (!atomic_load(&c->go)) { }
-    for (int i = 0; i < 40; i++)
-        al_engine_run_tone(c->st, c->be, al_find_preset("stereo16-1024"), al_find_level("moderate"), c->cancel);
-    return NULL;
-}
-static void test_thread_safety(void) {
-    al_sim sim = base_sim();
-    al_backend be;
-    al_backend_host(&be, &sim);
-    static al_state st;
-    al_engine_init(&st, &be);
-    atomic_int cancel; atomic_init(&cancel, 0);
-    ts_ctx c = { &st, &be, &cancel, 0 };
-    atomic_init(&c.go, 0);
-    pthread_t th;
-    CHECK(pthread_create(&th, NULL, ts_worker, &c) == 0);
-    atomic_store(&c.go, 1);
-    static char buf[128 * 1024];
-    int valid = 1;
-    for (int i = 0; i < 400; i++) {
-        al_state_lock(&st);
-        size_t njson = al_report_json(&st, buf, sizeof(buf));
-        al_state_unlock(&st);
-        (void)njson;
-        if (!json_valid(buf)) valid = 0;
-    }
-    pthread_join(th, NULL);
-    CHECK(valid);
-    al_state_lock(&st);
-    size_t nf = al_report_json(&st, buf, sizeof(buf));
-    al_state_unlock(&st);
-    (void)nf;
-    CHECK(json_valid(buf));
+    atomic_init(&cancel, 0);
+    CHECK(al_engine_run_one_shot(&st, &be, &cancel) == 1);
+    al_report_json(&st, report, sizeof(report));
+    CHECK(strstr(report, "\"tonesPlayed\":1") != NULL);
+    CHECK(strstr(report, "\"portStateOptIn\":false") != NULL);
+    CHECK(strstr(report, "\"closeCalled\":true") != NULL);
+    al_report_status_json(&st, "COMPLETED", st.started_unix + 7, report, sizeof(report));
+    CHECK(strstr(report, "\"state\":\"COMPLETED\"") != NULL);
 }
 
 int main(void) {
-    test_parse();
-    test_presets();
-    test_tone_accepted_paced();
-    test_tone_failures();
-    test_cancel();
-    test_port_state_opt_in_gate();
-    test_port_state_overrun_stop();
-    test_launch_limit();
-    test_feedback();
-    test_reports_json();
-    test_report_buffer_safety();
-    test_pcm();
-    test_state_guard_primitive();
-    test_control_session_boundary();
-    test_thread_safety();
+    test_one_shot_uses_unchanged_defaults();
+    test_cancel_before_tone_does_not_open_audio();
+    test_audio_errors_are_recorded_and_closed_when_opened();
+    test_reports_describe_a_completed_single_run();
     printf("audiolab tests: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

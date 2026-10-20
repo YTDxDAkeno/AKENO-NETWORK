@@ -31,8 +31,8 @@ void al_engine_init(al_state *st, const al_backend *be) {
     if (st->have_fw && raw)
         snprintf(st->firmware, sizeof(st->firmware), "%x.%02x", (raw >> 24) & 0xFF, (raw >> 16) & 0xFF);
     st->pid = be->pid(be->user);
-    /* A snapshot for the report header only; the real gate is re-read per tone (see run_tone). */
-    st->port_state_opt_in = be->port_state_opt_in(be->user);
+    /* Port-state inspection is deliberately disabled for this payload. */
+    st->port_state_opt_in = 0;
     st->next_run = 1;
     st->started_unix = be->now_unix(be->user);
     st->last_heartbeat_unix = st->started_unix;
@@ -74,9 +74,6 @@ int al_engine_run_tone(al_state *st, const al_backend *be, const al_preset *pres
     unsigned long total = (unsigned long)AUDIO_LAB_RATE * (AL_TONE_LEAD_MS + AL_TONE_MS + AL_TONE_TAIL_MS) / 1000u;
     unsigned long frames = (total + preset->grain - 1) / preset->grain * preset->grain;
     slot->frames_planned = frames;
-    /* Re-read the opt-in now, so creating the enable-portstate file before a `tone` command is a
-     * well-defined activation for THIS tone (not only at lab start). */
-    int opt_in = be->port_state_opt_in(be->user);
     al_state_unlock(st);
 
     /* Execute: the blocking audio call, with NO lock held. Results go into a local struct. */
@@ -96,7 +93,7 @@ int al_engine_run_tone(al_state *st, const al_backend *be, const al_preset *pres
     p.fill = fill_block;
     p.fill_user = &ctx;
     p.cancel = cancel;
-    p.measure_port_state = opt_in;
+    p.measure_port_state = 0;
     al_audio_result result;
     int rc = be->audio_run(be->user, &p, &result);
     int cancelled_early = cancel && atomic_load(cancel) && !result.open_called;
@@ -112,11 +109,28 @@ int al_engine_run_tone(al_state *st, const al_backend *be, const al_preset *pres
         run->outcome = outcome;
         run->paced = paced;
     }
-    if (opt_in) st->port_state_opt_in = 1;
     st->port_state_supported = result.port_state_exported;
     st->tones_played++;
     al_state_unlock(st);
     return id;
+}
+
+int al_engine_run_one_shot(al_state *st, const al_backend *be, atomic_int *cancel) {
+    const al_preset *preset;
+    const al_level *level;
+
+    if (!st || !be || !be->sleep_ms)
+        return -1;
+
+    be->sleep_ms(be->user, AL_ONESHOT_DELAY_MS);
+    if (cancel && atomic_load_explicit(cancel, memory_order_relaxed))
+        return -2;
+
+    preset = al_find_preset(NULL);
+    level = al_find_level(NULL);
+    if (!preset || !level)
+        return -1;
+    return al_engine_run_tone(st, be, preset, level, cancel);
 }
 
 int al_engine_feedback(al_state *st, int run_id, al_heard heard, const char *route) {

@@ -4,7 +4,7 @@
 #   - it links a library outside the reviewed NEEDED set;
 #   - any object references a system-changing or audio-focus/routing/volume/microphone function
 #     (the audio-output functions are resolved with dlopen at run time, so they must NOT be ELF
-#     imports; sceAudioOutGetPortState is also dlopen'd);
+#     imports; port-state inspection is excluded entirely);
 #   - any object other than al_backend_ps5.o calls a console function or dlopen/dlsym;
 #   - al_backend_ps5.o names a library to dlopen other than libSceAudioOut.sprx.
 #
@@ -67,6 +67,10 @@ done
 # libSceAudioIn must never appear anywhere (no microphone in this experiment).
 if strings -a "$build"/obj/*.o | grep -qiE 'libSceAudioIn\.sprx'; then
   fail "libSceAudioIn.sprx is referenced; this experiment never opens the microphone"
+fi
+# Port state is intentionally disabled. The symbol must not even be resolved dynamically.
+if strings -a "$build"/obj/*.o | grep -q 'sceAudioOutGetPortState'; then
+  fail "sceAudioOutGetPortState is referenced; port-state inspection must remain disabled"
 fi
 
 if (( status == 0 )); then

@@ -1,121 +1,47 @@
-# AKENO Audio Lab 3.1 — Installation und Nutzung (DEUTSCH)
+# AKENO Audio Lab 3.1 — Automatischer Einmaltest
 
-Ein **eigenständiges, isoliertes** PS5-Experiment, das genau eine Frage schärfer beantwortet als die
-bisherigen Tests: *Was meldet das System über den Audio-Port, den ein Hintergrund-Payload öffnet?*
+Dieses eigenständige PS5-Payload führt ohne FTP, Steuerdatei oder Netzwerk genau einen Audio-Test
+aus. Es ändert weder AKENO NETWORK noch OnionHEN, Spiele oder Einstellungen der Konsole.
 
-Es ist **nicht** die AKENO-NETWORK-Konsolen-App und nicht Audio Lab v3 darin. Es übernimmt den
-bereits geprüften PCM-, Ausgabe- und Port-State-Code unverändert und verpackt ihn in ein winziges,
-datei-gesteuertes Payload nach dem Muster des System Explorers.
+## Ablauf
 
-> **Wichtig vorab:** Ein Ton aus einem Hintergrund-Payload wurde in früheren Tests **akzeptiert und
-> getaktet, aber nicht gehört**. Dieses Lab wiederholt das nicht als Selbstzweck. Der **neue**
-> Erkenntnisgewinn kommt allein aus der **Port-State-Messung** (Opt-in, siehe unten). Ohne sie ist
-> der Tonlauf nur eine Bestätigung des bekannten Befunds in sauberer Isolation.
+1. `akeno-audio-lab.elf` mit dem PS5-Payload-Loader oder über den Homebrew-Launcher starten.
+2. Eine Benachrichtigung kündigt den Test an.
+3. Nach **5 Sekunden** gibt das Payload genau einen 440-Hz-Ton aus: S16 Stereo, 48 kHz,
+   1024 Frames, −20 dBFS, 250 ms Stille + 1,5 s Ton + 250 ms Stille.
+4. Der eigene Audioport wird geschlossen.
+5. `report.json`, `report.txt` und `status.json` werden unter `/data/akeno-audiolab/` gespeichert.
+6. Eine Abschlussbenachrichtigung zeigt `0x00000000` oder einen Fehlercode.
+7. Das Payload beendet sich selbst.
 
-## Isolation (fest eingebaut, per CI geprüft)
+Es gibt pro Ausführung keinen zweiten Ton und keine Eingabemöglichkeit zum Wiederholen.
 
-- Nutzt **ausschließlich** `/data/akeno-audiolab/`. Kein Zugriff auf `/data/akeno`.
-- **Keine** Netzwerkverbindung: kein VPS, kein LiveKit, keine Weboberfläche, Port 8642 wird nicht belegt.
-- **Kein** Mikrofon. Keine Fokus-/Attach-/Routing-/Lautstärke-/HDMI-Funktion.
-- Spielt einen Ton **nur** nach deinem ausdrücklichen `tone`-Befehl. Nichts startet von selbst.
-- Läuft nur **einmal gleichzeitig** (Dateisperre). Ein zweiter Start wird abgewiesen — es kann
-  keine zweite Audio-Sitzung parallel entstehen.
-- Ändert nichts am OnionHEN-Host, an AKENO NETWORK, an der Party-Voice oder an Spielen.
-
-## Voraussetzungen
-
-| Komponente | Status |
-| --- | --- |
-| PS5 mit FW 12.20, Jailbreak, ELF-Loader (Port 9021) oder Homebrew-Launcher | einer davon genügt |
-| AKENO-Daemon | **nicht nötig** — das Lab ist eigenständig und unabhängig |
-
-## Paketinhalt
+## Paketinhalt und Prüfsumme
 
 ```
 AKENO-Audio-Lab-3.1/
-  akeno-audio-lab.elf          # das Payload (für den ELF-Loader)
-  AKENOAudioLab/               # Launcher-Ordner (für den Homebrew-Launcher)
-    akeno-audio-lab.elf
-    homebrew.js
-  README-DE.md                 # dieses Dokument
-  HARDWARE-TEST-DE.md          # der Konsolentestplan
-  SAFETY.md                    # Sicherheit, Abbruch, Rückbau
-  SHA256SUMS.txt               # Prüfsummen
+  akeno-audio-lab.elf
+  AKENOAudioLab/
+  README-DE.md
+  HARDWARE-TEST-DE.md
+  SAFETY.md
+  SHA256SUMS.txt
 ```
 
-## Prüfsummen kontrollieren
+Vor dem Start optional prüfen:
 
 ```sh
 cd AKENO-Audio-Lab-3.1
 sha256sum -c SHA256SUMS.txt
 ```
 
-## Start — zwei Wege
-
-**A) ELF-Loader (Port 9021), wie beim Explorer.** `akeno-audio-lab.elf` an den Loader senden.
-**B) Homebrew-Launcher.** Den Ordner `AKENOAudioLab/` in den Homebrew-Ordner legen und starten.
-`daemon: true` sorgt dafür, dass **kein** laufendes Spiel geschlossen wird.
-
-Beim Start erscheint eine Benachrichtigung; das Lab wartet dann auf Befehle und beendet sich nach
-spätestens 30 Minuten von selbst (oder sofort auf `exit`).
-
-## Steuerung über die Datei `control`
-
-Hänge Befehle **zeilenweise** (jede Zeile mit Zeilenumbruch) an
-`/data/akeno-audiolab/control` an (per FTP oder Dateiansicht des Launchers):
-
-| Befehl | Wirkung |
-| --- | --- |
-| `status` | Schreibt die Berichte sofort neu. |
-| `tone` | Spielt **einen** Ton mit den Vorgaben (S16 Stereo, 1024, −20 dBFS, 440 Hz, ~1,5 s). |
-| `tone <preset> <level>` | Ton mit gewähltem Preset/Pegel (siehe unten). |
-| `stop` | Bricht einen laufenden oder wartenden Ton ab. |
-| `exit` | Beendet die Sitzung sauber. |
-
-**Presets:** `stereo16-1024` (Standard), `mono16-256`, `stereofloat-1024`, `stereo16-2048`.
-**Pegel:** `quiet` (−26 dBFS), `moderate` (−20 dBFS, Standard), `clear` (−14 dBFS).
-
-Es läuft immer nur ein Ton; zwischen Tönen gilt eine kurze Sperre, höchstens 30 Töne pro Start.
-
-### Die Port-State-Messung aktivieren (Opt-in — derzeit NICHT für Hardware freigegeben)
-
-Standardmäßig **deaktiviert**. Das Lab prüft die Opt-in-Datei **bei jedem einzelnen `tone`-Befehl**
-neu. Eine eindeutige, sichere Aktivierung lautet daher:
-
-1. Lege die leere Datei `/data/akeno-audiolab/enable-portstate` an.
-2. Schreibe **danach** den `tone`-Befehl in die `control`-Datei.
-
-Nur dieser Ton misst dann drei Mal **read-only** den Zustand des **eigenen** Ports
-(`sceAudioOutGetPortState`). Löschst du die Datei wieder, ist der nächste Ton wieder ohne Messung.
-Für den **ersten** Hardwaretest soll die Datei **nicht** angelegt werden (nicht freigegeben). Warum
-der Aufruf vertretbar, aber noch nicht hardware-freigegeben ist, steht in [SAFETY.md](SAFETY.md).
-
-### Sicherheit bei Neustart (keine alten Befehle)
-
-Beim Start legt das Lab eine evtl. vorhandene `control`-Datei beiseite (nach `control.consumed`).
-Ein `tone`-Befehl, der von einem früheren Lauf übrig ist, wird dadurch **nie** erneut ausgeführt;
-es werden nur Befehle gelesen, die du **nach** dem Start anhängst.
-
 ## Ergebnisse
-
-Nach jedem Befehl liegen unter `/data/akeno-audiolab/`:
 
 | Datei | Inhalt |
 | --- | --- |
-| `report.json` | alle Läufe maschinenlesbar, inkl. Port-State (roh + tentatives PS4-Layout) |
-| `report.txt` | deutsche Zusammenfassung, Ergebnismatrix und Details je Lauf |
-| `status.json` | Lebenszeichen (`RUNNING`/`COMPLETED`), Heartbeat |
+| `report.json` | Maschinenlesbare Rückgabecodes und Zähler des einen Laufs. |
+| `report.txt` | Deutsche Zusammenfassung einschließlich Open/Output/Close-Ergebnis. |
+| `status.json` | Zuerst `WAITING`, nach dem Lauf `COMPLETED`. |
 
-Nach jedem Ton **trägst du selbst ein**, ob du ihn gehört hast — das steht nirgends automatisch.
-Schick `report.json` und `report.txt` zurück. Die Berichte enthalten keine Tokens, Zugangsdaten,
-Nachrichten oder Audioaufnahmen (das Payload hat kein Netzwerk und nimmt nichts auf).
-
-## Ergebnisklassen (report)
-
-- `port-open-failed` — der Port ließ sich nicht öffnen.
-- `sample-output-failed` — Samples wurden abgelehnt.
-- `accepted-but-not-paced` — angenommen, aber nicht im Playback-Takt.
-- `accepted+paced-but-inaudible` — angenommen, getaktet, von dir **nicht gehört** (der bekannte Fall).
-- `AUDIBLE (owner-confirmed)` — von dir **gehört** (wäre neu und würde alles ändern).
-
-Ein erfolgreicher Aufruf ist **nie** ein Beweis für hörbaren Ton. „Gehört“ ist immer deine Angabe.
+Ein erfolgreiches API-Ergebnis beweist keine Hörbarkeit. Das Payload misst oder speichert kein
+Mikrofon und sendet keine Daten.

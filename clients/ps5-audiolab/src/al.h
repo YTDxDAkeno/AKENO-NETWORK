@@ -3,22 +3,17 @@
  *
  * It is NOT the AKENO NETWORK console app and NOT Audio Lab v3 inside it. It reuses the proven,
  * hardware-relevant code of Audio Lab v3 verbatim (audio_lab_pcm.*, audio_lab_state.*, commit
- * 05ad4f3) and wraps it in a tiny, file-controlled, network-free payload modelled on the System
- * Explorer: one instance (flock), a control file for commands, plain reports, clean shutdown.
+ * 05ad4f3) and wraps it in a tiny, automatic, network-free payload: one instance (flock), plain
+ * reports, clean shutdown.
  *
  * Isolation (enforced by console/check-audiolab.sh and by having no network code at all):
  *   - uses ONLY /data/akeno-audiolab/; never /data/akeno;
  *   - opens no socket, serves no page, uses port 8642 for nothing, never reaches a server/LiveKit;
- *   - plays a tone ONLY after the owner writes a `tone` command (no automatic playback);
+ *   - announces, waits five seconds, then plays exactly one default tone;
  *   - opens the microphone NEVER; calls no focus/attach/routing/volume/HDMI function;
- *   - sceAudioOutGetPortState is OFF unless the owner opts in with a file, and even then it is a
- *     read-only query on THIS test's own port only.
+ *   - sceAudioOutGetPortState is disabled and is not resolved or called.
  *
- * Why this is not just a repeat of v1/v2 (which were accepted-but-silent): the plain tone from a
- * background payload IS a known result and the report says so. The one NEW measurement is the
- * opt-in port-state read of the test's own port, which can tell apart "the system attached the
- * port to no output device" from "attached to a device at nonzero volume yet still silent" - IF
- * the unverified field layout holds. The report never claims more than the evidence supports.
+ * The report records only this payload's own API results. It never infers audibility.
  */
 #ifndef AKENO_AL_H
 #define AKENO_AL_H
@@ -44,13 +39,10 @@
 #define AL_TONE_LEAD_MS 250u
 #define AL_TONE_MS 1500u
 #define AL_TONE_TAIL_MS 250u
+#define AL_ONESHOT_DELAY_MS 5000u
 
 #define AL_RUNS_KEPT 16          /* reports keep the last N runs */
-#define AL_RUNS_PER_LAUNCH 30    /* hard cap on tone commands per process */
-#define AL_COOLDOWN_MS 3000      /* minimum gap between tone commands */
-#define AL_SESSION_MAX_S 1800u   /* the control loop exits by itself after this long */
-#define AL_CONTROL_POLL_MS 1000u /* how often the control file is read */
-#define AL_HEARTBEAT_S 10u       /* status.json heartbeat */
+#define AL_RUNS_PER_LAUNCH 1     /* defence in depth: the automatic payload may run only once */
 
 /* One tone preset / level: the exact set of Audio Lab v3. */
 typedef struct {
@@ -99,24 +91,6 @@ typedef struct {
     char route[24];              /* where it was heard, owner-reported */
 } al_run;
 
-/* Decision the control loop makes for one command line (unit-tested). */
-typedef enum {
-    AL_CMD_NONE = 0,             /* blank/comment/unknown: ignored, noted */
-    AL_CMD_STATUS,               /* rewrite the reports now */
-    AL_CMD_TONE,                 /* play one tone (args: preset, level) */
-    AL_CMD_STOP,                 /* cancel a playing/pending tone */
-    AL_CMD_EXIT                  /* end the session cleanly */
-} al_cmd_kind;
-
-typedef struct {
-    al_cmd_kind kind;
-    char preset[32];
-    char level[32];
-} al_cmd;
-
-/* Parses one control line into a command (unit-tested). Returns the kind. */
-al_cmd_kind al_parse_command(const char *line, al_cmd *out);
-
 /* Outcome classification and pacing verdict for a finished run (unit-tested). */
 al_outcome al_classify(int rc, const al_audio_result *r);
 int al_paced(const al_audio_result *r, unsigned grain);
@@ -130,24 +104,22 @@ typedef struct {
     uint32_t firmware_raw;
     int pid;
 
-    int port_state_opt_in;       /* the enable-portstate file exists: the opt-in probe may run */
-    int port_state_supported;    /* the function was resolved at run time */
+    int port_state_opt_in;       /* always 0: inspection remains disabled */
+    int port_state_supported;    /* always 0: the function is never resolved */
 
     al_run runs[AL_RUNS_KEPT];
     int next_run;                /* 1-based id of the next run */
-    int tone_commands;           /* how many tone commands accepted this launch */
-    unsigned commands_seen;      /* every non-blank control line */
+    int tone_commands;           /* how many audio runs started this launch */
     unsigned tones_played;
-    unsigned stops;
     long long started_unix;
     long long last_heartbeat_unix;
-    int exited;                  /* an exit command ended the loop */
-    char last_note[160];         /* the most recent human note (busy, cooldown, limit, ...) */
+    int exited;                  /* automatic one-shot processing finished */
+    char last_note[160];         /* completion or error note */
 
     /* Protects every field above that the tone worker and the main (report) thread both touch:
-     * runs[], next_run, tone_commands, tones_played, port_state_supported. The worker holds it only
-     * for the short prepare/commit sections, never during the blocking audio call; the report
-     * writers and the main loop's reads hold it while they read. Initialised by al_engine_init. */
+     * runs[], next_run, tone_commands, tones_played, port_state_supported. The engine holds it only
+     * for the short prepare/commit sections, never during the blocking audio call; report writers
+     * hold it while they read. Initialised by al_engine_init. */
     pthread_mutex_t lock;
     int lock_ready;
 } al_state;
@@ -161,6 +133,7 @@ void al_state_unlock(al_state *st);
 void al_engine_init(al_state *st, const al_backend *be);
 int al_engine_run_tone(al_state *st, const al_backend *be, const al_preset *preset, const al_level *level,
                        atomic_int *cancel);
+int al_engine_run_one_shot(al_state *st, const al_backend *be, atomic_int *cancel);
 int al_engine_feedback(al_state *st, int run_id, al_heard heard, const char *route);
 
 /* ---- reports ------------------------------------------------------------------------------- */

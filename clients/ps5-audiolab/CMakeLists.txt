@@ -19,7 +19,6 @@ add_library(akn_al STATIC
   src/al.c
   src/al_engine.c
   src/al_report.c
-  src/al_control.c
   src/audio_lab_pcm.c
   src/audio_lab_state.c
   src/al_backend_host.c)

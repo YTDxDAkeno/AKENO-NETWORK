@@ -87,41 +87,18 @@ static const char *matrix_class(const al_run *r) {
     return "unknown";
 }
 
-/* ---- port-state block (opt-in, raw + tentative PS4 decode) --------------------------------- */
+/* ---- port-state block (permanently disabled; retained as an explicit report field) ---------- */
 
 static void port_state_json(sink *k, const al_run *r) {
     static const char *const names[AUDIO_LAB_STATE_POINTS] = { "before", "during", "beforeClose" };
     lit(k, "\"portState\":{");
-    fmt(k, "\"optIn\":%s,\"exported\":%s,\"stopped\":%s,\"points\":[",
-        r->result.port_state_opt_in ? "true" : "false", r->result.port_state_exported ? "true" : "false",
-        r->result.port_state_stopped ? "true" : "false");
+    fmt(k, "\"enabled\":false,\"optIn\":false,\"exported\":false,\"stopped\":false,\"points\":[");
     for (int i = 0; i < AUDIO_LAB_STATE_POINTS; i++) {
         const audio_lab_state_sample *s = &r->result.port_state[i];
         if (i) lit(k, ",");
         lit(k, "{\"point\":\"");
         lit(k, names[i]);
         fmt(k, "\",\"attempted\":%s", s->attempted ? "true" : "false");
-        if (s->attempted) {
-            size_t shown = audio_lab_state_shown_bytes(s);
-            char hex[AUDIO_LAB_STATE_WINDOW_BYTES * 3 + 1];
-            audio_lab_state_values_hex(s, shown, hex, sizeof(hex));
-            fmt(k, ",\"rc\":\"0x%08x\",\"guardsIntact\":%s,\"callsAgree\":%s,\"writtenCount\":%d,\"highestWritten\":%d",
-                (unsigned)s->call[0].rc, s->guards_intact ? "true" : "false", s->calls_agree ? "true" : "false",
-                s->written_count, s->highest_written);
-            lit(k, ",\"rawValues\":\"");
-            jstr(k, hex);
-            lit(k, "\"");
-            audio_lab_state_decoded d;
-            audio_lab_state_decode(s, &d);
-            char outnames[48];
-            audio_lab_state_output_names(d.output, outnames, sizeof(outnames));
-            fmt(k, ",\"ps4LayoutUnverified\":{\"outputKnown\":%s,\"output\":\"0x%04x\",\"outputNames\":",
-                d.output_known ? "true" : "false", d.output);
-            lit(k, "\"");
-            jstr(k, outnames);
-            fmt(k, "\",\"volumeKnown\":%s,\"volume\":%d,\"rerouteKnown\":%s,\"reroute\":%u}",
-                d.volume_known ? "true" : "false", d.volume, d.reroute_known ? "true" : "false", d.reroute_counter);
-        }
         lit(k, "}");
     }
     lit(k, "]}");
@@ -139,7 +116,7 @@ size_t al_report_json(const al_state *st, char *out, size_t len) {
         st->pid, st->started_unix);
     fmt(&k, "\"portStateOptIn\":%s,\"portStateSupported\":%s,", st->port_state_opt_in ? "true" : "false",
         st->port_state_supported ? "true" : "false");
-    fmt(&k, "\"tonesPlayed\":%u,\"stops\":%u,\"commandsSeen\":%u,", st->tones_played, st->stops, st->commands_seen);
+    fmt(&k, "\"tonesPlayed\":%u,", st->tones_played);
     lit(&k, "\"runs\":[");
     int first = 1;
     for (int id = st->next_run - 1, shown = 0; id >= 1 && shown < AL_RUNS_KEPT; id--) {
@@ -157,8 +134,9 @@ size_t al_report_json(const al_state *st, char *out, size_t len) {
         lit(&k, "\",");
         fmt(&k, "\"calls\":%lu,\"callsOk\":%lu,\"framesSubmitted\":%lu,\"nonzeroFrames\":%lu,",
             r->result.calls, r->result.calls_ok, r->result.frames_submitted, r->result.nonzero_frames);
-        fmt(&k, "\"openRc\":\"0x%08x\",\"lastOutputRc\":\"0x%08x\",\"closeRc\":\"0x%08x\",",
-            (unsigned)r->result.open_rc, (unsigned)r->result.last_output_rc, (unsigned)r->result.close_rc);
+        fmt(&k, "\"openRc\":\"0x%08x\",\"lastOutputRc\":\"0x%08x\",\"closeCalled\":%s,\"closeRc\":\"0x%08x\",",
+            (unsigned)r->result.open_rc, (unsigned)r->result.last_output_rc,
+            r->result.close_called ? "true" : "false", (unsigned)r->result.close_rc);
         fmt(&k, "\"callMinUs\":%lld,\"callMaxUs\":%lld,\"wallUs\":%lld,\"bufferAligned\":%s,",
             r->result.call_min_us, r->result.call_max_us, r->result.wall_us, r->result.buffer_aligned ? "true" : "false");
         lit(&k, "\"error\":\"");
@@ -179,8 +157,8 @@ size_t al_report_status_json(const al_state *st, const char *state, long long no
     fmt(&k, "{\"report\":\"AKENO Audio Lab status\",\"version\":\"%s\",\"state\":\"%s\",", AL_VERSION, state);
     fmt(&k, "\"build\":\"%s\",\"pid\":%d,\"startedUnix\":%lld,\"heartbeatUnix\":%lld,", st->build_id, st->pid,
         st->started_unix, now_unix);
-    fmt(&k, "\"elapsedS\":%lld,\"tonesPlayed\":%u,\"commandsSeen\":%u,\"portStateOptIn\":%s}",
-        now_unix - st->started_unix, st->tones_played, st->commands_seen, st->port_state_opt_in ? "true" : "false");
+    fmt(&k, "\"elapsedS\":%lld,\"tonesPlayed\":%u,\"portStateOptIn\":false}",
+        now_unix - st->started_unix, st->tones_played);
     return k.used;
 }
 
@@ -195,26 +173,7 @@ static void run_line_txt(sink *k, const al_run *r) {
         r->result.calls, r->result.calls_ok, r->result.frames_submitted, r->result.nonzero_frames,
         (unsigned)r->result.open_rc, (unsigned)r->result.last_output_rc, (unsigned)r->result.close_rc);
     if (r->result.error[0]) fmt(k, "    Hinweis: %s\n", r->result.error);
-    if (r->result.port_state_opt_in) {
-        if (!r->result.port_state_exported)
-            lit(k, "    Port-State: Funktion auf dieser Firmware nicht exportiert\n");
-        else if (r->result.port_state_stopped)
-            lit(k, "    Port-State: Pruefbyte verletzt -> Abfrage dauerhaft gestoppt (keine Dekodierung)\n");
-        else {
-            const audio_lab_state_sample *s = &r->result.port_state[AUDIO_LAB_STATE_DURING_PLAYBACK];
-            if (!s->attempted) s = &r->result.port_state[AUDIO_LAB_STATE_BEFORE_PLAYBACK];
-            audio_lab_state_decoded d;
-            audio_lab_state_decode(s, &d);
-            char names[48];
-            audio_lab_state_output_names(d.output, names, sizeof(names));
-            fmt(k, "    Port-State (roh, Felder UNVERIFIZIERT/PS4-Layout): rc=0x%08x, geschriebene Bytes=%d, Guards=%s\n",
-                (unsigned)s->call[0].rc, s->written_count, s->guards_intact ? "intakt" : "VERLETZT");
-            fmt(k, "      tentativ: output=0x%04x (%s), volume=%d, reroute=%u — NICHT als Beweis fuer Hoerbarkeit nehmen\n",
-                d.output, names, d.volume, d.reroute_counter);
-        }
-    } else {
-        lit(k, "    Port-State: nicht aktiviert (Standard). Datei enable-portstate anlegen, um zu messen.\n");
-    }
+    lit(k, "    Port-State: dauerhaft deaktiviert; keine Abfrage und keine Dekodierung.\n");
 }
 
 size_t al_report_txt(const al_state *st, char *out, size_t len) {
@@ -226,19 +185,15 @@ size_t al_report_txt(const al_state *st, char *out, size_t len) {
     fmt(&k, "Firmware:   %s\n", st->firmware[0] ? st->firmware : "unbekannt");
     fmt(&k, "PID:        %d (eigenstaendiges Experiment-Payload, Hintergrundprozess)\n", st->pid);
     fmt(&k, "Verzeichnis: %s (ausschliesslich; kein /data/akeno, kein Netzwerk)\n", AL_OUT_DIR);
-    fmt(&k, "Toene gespielt: %u | Stop-Befehle: %u | Port-State: %s\n\n", st->tones_played, st->stops,
-        st->port_state_opt_in ? "aktiviert (Opt-in)" : "deaktiviert (Standard)");
+    fmt(&k, "Toene gespielt: %u | Port-State: dauerhaft deaktiviert\n\n", st->tones_played);
 
     lit(&k, "Was dieser Test zeigen kann und was nicht\n");
-    lit(&k, "  - Ein 'accepted+paced-but-inaudible'-Ergebnis WIEDERHOLT nur den bekannten Befund: ein\n");
-    lit(&k, "    Hintergrund-Payload darf den Port oeffnen und bespielen, wird aber nicht gehoert.\n");
-    lit(&k, "  - NEU ist allein die Port-State-Messung (Opt-in): sie kann andeuten, ob das System den\n");
-    lit(&k, "    Port an KEIN Ausgabegeraet gebunden hat (eher Routing/Session) oder an ein Geraet mit\n");
-    lit(&k, "    Lautstaerke > 0 und dennoch stumm (eher Mixer-Stummschaltung). Die Feldbedeutung ist\n");
-    lit(&k, "    auf 12.20 NICHT verifiziert; alle dekodierten Werte sind nur Indizien, kein Beweis.\n\n");
+    lit(&k, "  - Das Ergebnis zeigt nur, ob dieses Payload seinen eigenen Audioport oeffnen, Daten\n");
+    lit(&k, "    ausgeben und wieder schliessen konnte. Es ist kein Nachweis fuer Hoerbarkeit.\n");
+    lit(&k, "  - Der Port-State-Aufruf bleibt deaktiviert und erscheint in diesem Bericht nicht als Messung.\n\n");
 
     if (st->next_run <= 1) {
-        lit(&k, "Noch kein Ton gespielt. Schreibe 'tone' in die control-Datei (siehe Anleitung).\n");
+        lit(&k, "Noch kein Ton gespielt: der automatische Einmaltest wurde vor der Audioausgabe abgebrochen.\n");
     } else {
         lit(&k, "Laeufe (neueste zuerst)\n");
         for (int id = st->next_run - 1, shown = 0; id >= 1 && shown < AL_RUNS_KEPT; id--) {

@@ -20,24 +20,12 @@ typedef struct {
 
     /* audio_run behaviour */
     int audio_mode;              /* 0 accepted+paced; 1 not-supported; 2 init-fail; 3 open-fail; 4 submit-fail */
-    int port_state_exported;     /* the function resolves */
-    int port_state_mode;         /* 0 ps4-layout sample; 1 error rc; 2 overrun (guard trips) */
-    int opt_in;                  /* port_state_opt_in() answer */
-
-    /* control script */
-    const char *control;
-    size_t control_pos;
-    unsigned control_chunk;
-    const char *control2;
-    unsigned control_swap_at;
-    int control_reset_done;
-    unsigned read_calls;
-    int control_begun;
-
     /* capture */
     unsigned long notifications;
     char last_notification[256];
     unsigned audio_runs;
+    unsigned sleep_calls;
+    unsigned last_sleep_ms;
 } al_sim;
 
 #endif

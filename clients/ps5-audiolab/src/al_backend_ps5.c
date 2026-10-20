@@ -3,14 +3,11 @@
  * audio call and its parameters are taken unchanged from the proven Audio Lab v3
  * (clients/ps5/app/platform_ps5.c at commit 05ad4f3), which ran on firmware 12.20:
  *
- *   sceKernelSendNotificationRequest   samples/hello_world (12.20)        - start/tone/stop notices
+ *   sceKernelSendNotificationRequest   samples/hello_world (12.20)        - start/completion notices
  *   kernel_get_fw_version              include/ps5/kernel.h               - read-only firmware
  *   dlopen/dlsym/dlclose               samples/hello_dlfcn                - libSceAudioOut.sprx only
  *   sceAudioOutInit/Open/Output/Close  ps5-payload-dev/SDL src/audio/ps5  - the test's own port
- *   sceAudioOutGetPortState            OpenOrbis/shadPS4/fpPS4/SharpProspero/AnyPS5 - read-only, on
- *                                      the test's OWN handle, ONLY when the owner opted in; guarded
- *                                      arena (audio_lab_state.*), permanent stop on any overrun
- *   flock/open/read/stat/rename        POSIX - single instance, control file, reports
+ *   flock/open/rename                  POSIX - single instance and reports
  *
  * Not used, by rule (console/check-audiolab.sh): no microphone, no socket, no app launch/kill,
  * mount, ptrace, kernel memory helper, pad, registry; and no volume/routing/focus/attach/HDMI
@@ -18,7 +15,6 @@
  */
 #include "al_backend.h"
 #include "al.h"
-#include "al_control.h"
 
 #include <dlfcn.h>
 #include <fcntl.h>
@@ -27,7 +23,6 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -50,10 +45,7 @@ static audio_out_open_fn g_open;
 static audio_out_output_fn g_output;
 static audio_out_close_fn g_close;
 static int g_init_done, g_init_rc;
-static audio_lab_port_state_fn g_get_port_state; /* NULL when not exported */
-static int g_port_state_stopped;                 /* wrote outside its window once: never again */
 static unsigned char g_block[AUDIO_LAB_MAX_BLOCK_BYTES] __attribute__((aligned(64)));
-static unsigned char g_arena[AUDIO_LAB_STATE_ARENA_BYTES] __attribute__((aligned(64)));
 static pthread_mutex_t g_audio_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static long long p_now_unix(void *u) { (void)u; return (long long)time(NULL); }
@@ -107,7 +99,6 @@ static int audio_load(al_audio_result *r) {
             return -2;
         }
         g_audio_lib = lib;
-        g_get_port_state = (audio_lab_port_state_fn)dlsym(lib, "sceAudioOutGetPortState");
         r->init_called = 1;
         g_init_rc = init();
         g_init_done = g_init_rc == 0;
@@ -121,22 +112,13 @@ static int audio_load(al_audio_result *r) {
     return 0;
 }
 
-/* g_audio_lock held. One read-only, opt-in measurement of the test's own port (two guarded calls). */
-static void measure_port_state(int32_t handle, al_audio_result *r, int point, uint64_t first_start) {
-    if (!r->port_state_opt_in || !g_get_port_state || g_port_state_stopped) return;
-    audio_lab_state_sample *s = &r->port_state[point];
-    if (audio_lab_state_measure(g_get_port_state, handle, g_arena, s) != 0) g_port_state_stopped = 1;
-    s->at_us = first_start ? (long long)(p_now_us(NULL) - first_start) : 0;
-}
-
 static int p_audio_run(void *u, const al_audio_params *p, al_audio_result *r) {
     (void)u;
     memset(r, 0, sizeof(*r));
     r->call_min_us = -1;
-    r->port_state_opt_in = p->measure_port_state;
     unsigned frame_bytes = audio_lab_format_frame_bytes(p->format);
     if (!frame_bytes || !audio_lab_grain_valid(p->grain) || p->rate != AUDIO_LAB_RATE || p->user_id != 0xFF ||
-        p->port_type != 0) {
+        p->port_type != 0 || p->measure_port_state != 0) {
         snprintf(r->error, sizeof(r->error), "Parameters outside the verified SDL driver configuration");
         return -1;
     }
@@ -155,9 +137,7 @@ static int p_audio_run(void *u, const al_audio_params *p, al_audio_result *r) {
         pthread_mutex_unlock(&g_audio_lock);
         return -1;
     }
-    r->port_state_exported = g_get_port_state != NULL;
-    measure_port_state(handle, r, AUDIO_LAB_STATE_BEFORE_PLAYBACK, 0);
-    int result = 0, measured_mid = 0;
+    int result = 0;
     uint64_t first_start = 0, last_end = 0;
     for (unsigned long done = 0; done < p->frames; done += p->grain) {
         if (p->cancel && atomic_load(p->cancel)) {
@@ -190,14 +170,8 @@ static int p_audio_run(void *u, const al_audio_params *p, al_audio_result *r) {
             if (r->call_min_us < 0 || us < r->call_min_us) r->call_min_us = us;
             if (us > r->call_max_us) r->call_max_us = us;
         }
-        if (!measured_mid && done + p->grain >= p->frames / 2) {
-            measure_port_state(handle, r, AUDIO_LAB_STATE_DURING_PLAYBACK, first_start);
-            measured_mid = 1;
-        }
     }
     r->wall_us = first_start ? (long long)(last_end - first_start) : 0;
-    measure_port_state(handle, r, AUDIO_LAB_STATE_BEFORE_CLOSE, first_start);
-    r->port_state_stopped = g_port_state_stopped;
     r->close_called = 1;
     r->close_rc = g_close(handle);
     if (r->close_rc != 0 && result == 0) {
@@ -209,27 +183,8 @@ static int p_audio_run(void *u, const al_audio_params *p, al_audio_result *r) {
     return result;
 }
 
-static long g_control_offset; /* persists across reads; seeded by p_control_begin */
-
-static void p_control_begin(void *u) {
-    (void)u;
-    al_control_begin(AL_OUT_DIR); /* move any pre-existing control file aside; never read as commands */
-    g_control_offset = 0;
-}
-
-static int p_read_control(void *u, char *buf, size_t len, int *reset) {
-    (void)u;
-    return al_control_read(AL_OUT_DIR, &g_control_offset, buf, len, reset);
-}
-
-static int p_port_state_opt_in(void *u) {
-    (void)u;
-    struct stat st;
-    return stat(AL_OUT_DIR "/enable-portstate", &st) == 0;
-}
-
 void al_backend_ps5(al_backend *be) {
     al_backend b = { "PlayStation 5", NULL, p_now_unix, p_now_us, p_sleep_ms, p_notify, p_fw, p_pid,
-                     p_audio_run, p_control_begin, p_read_control, p_port_state_opt_in };
+                     p_audio_run };
     *be = b;
 }

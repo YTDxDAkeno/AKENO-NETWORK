@@ -5,9 +5,7 @@
  * The audio-output call sequence and parameters are taken unchanged from the proven Audio Lab v3
  * (clients/ps5/app/platform_ps5.c at commit 05ad4f3): sceAudioOutInit once, sceAudioOutOpen(0xFF,
  * type 0, index 0, grain, 48000, format), sceAudioOutOutput per block (blocks until taken),
- * sceAudioOutClose; every call resolved with dlopen/dlsym. sceAudioOutGetPortState is only
- * resolved and only called when the owner opted in, on the test's own handle, with the guarded
- * arena of audio_lab_state.*.
+ * sceAudioOutClose; every call resolved with dlopen/dlsym. Port-state inspection is excluded.
  */
 #ifndef AKENO_AL_BACKEND_H
 #define AKENO_AL_BACKEND_H
@@ -30,7 +28,7 @@ typedef struct {
     unsigned long (*fill)(void *user, void *block, unsigned frames, double *peak);
     void *fill_user;
     atomic_int *cancel;          /* set to 1 (from any thread) to stop between blocks; read with atomic_load */
-    int measure_port_state;      /* 1 to run the opt-in port-state probe at the three points */
+    int measure_port_state;      /* fixed to 0: retained for the shared result layout */
 } al_audio_params;
 
 /* Raw measurements of one tone run. Nothing here is a claim about audibility. */
@@ -55,9 +53,9 @@ typedef struct {
     long long call_total_us;     /* summed duration of calls 2..n */
     long long call_min_us, call_max_us;
 
-    int port_state_exported;     /* the function resolved */
-    int port_state_opt_in;       /* the owner enabled the probe */
-    int port_state_stopped;      /* a guard tripped: no more port-state calls this process */
+    int port_state_exported;     /* always 0: the function is not resolved */
+    int port_state_opt_in;       /* always 0: inspection is disabled */
+    int port_state_stopped;      /* retained in the report layout; always 0 */
     audio_lab_state_sample port_state[AUDIO_LAB_STATE_POINTS];
 
     char error[160];
@@ -75,17 +73,8 @@ typedef struct al_backend {
     int (*fw)(void *u, uint32_t *raw);           /* 1 and *raw set, or 0 */
     int (*pid)(void *u);
 
-    /* The output run: the whole open/submit/measure/close sequence (al_backend_ps5.c). */
+    /* The output run: the whole open/submit/close sequence (al_backend_ps5.c). */
     int (*audio_run)(void *u, const al_audio_params *p, al_audio_result *r);
-
-    /* Establishes the session boundary: any control file present now is moved aside and never read
-     * as commands. Called once, after init and after the instance lock is held. */
-    void (*control_begin)(void *u);
-    /* Reads bytes appended to the control file since the last call; *reset=1 if it shrank. */
-    int (*read_control)(void *u, char *buf, size_t len, int *reset);
-    /* 1 when /data/akeno-audiolab/enable-portstate exists. Re-read before every tone, so creating
-     * the file before a `tone` command is a well-defined activation. */
-    int (*port_state_opt_in)(void *u);
 } al_backend;
 
 void al_backend_host(al_backend *be, void *sim);

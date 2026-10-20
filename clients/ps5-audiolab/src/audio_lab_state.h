@@ -1,7 +1,6 @@
 /*
- * Audio lab v3 (AKENO_EXPERIMENTAL_AUDIO builds only): read-only measurement of AKENO's own audio
- * port with sceAudioOutGetPortState. Portable and unit-tested on Linux; the platform layer only
- * resolves the function and passes it in. See docs/PS5_AUDIO_RESEARCH.md for the evidence.
+ * Historical Audio Lab v3 port-state layout helpers. The current Audio Lab 3.1 automatic one-shot
+ * keeps port-state inspection disabled; these types remain only for a stable disabled report layout.
  *
  * What is known about the function, and how this module guards against what is not:
  *   - Name: exported by the PS5 libSceAudioOut (ps5-payload-sdk stub generated from firmware

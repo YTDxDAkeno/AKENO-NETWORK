@@ -8,6 +8,13 @@ Belegstufen durchgängig: **[HW]** auf der PS5 des Eigentümers (FW 12.20) gemes
 Quellcode/SDK belegt · **[SIM]** in der PC-Simulation reproduziert · **[HYP]** Hypothese ·
 **[UNBEKANNT]**.
 
+> **Aktualisierung Audio Lab 3.1:** Der frühere dateigesteuerte Ablauf und jede Port-State-Messung
+> sind ersetzt. Das aktuelle ELF kündigt den Test an, wartet fünf Sekunden, gibt genau einen
+> Standardton aus, schließt den Port, schreibt die drei Berichte und beendet sich. Es gibt keine
+> Steuerdatei, keine FTP-Befehle und keine Wiederholung. `sceAudioOutGetPortState` wird weder
+> aufgelöst noch aufgerufen. Die folgenden Abschnitte dokumentieren die vorherige Forschungsfrage;
+> für die aktuelle Bedienung gilt `clients/ps5-audiolab/package/README-DE.md`.
+
 ---
 
 ## 1. Audit von Audio Lab v3 (Commit `05ad4f3`) — war es sicher genug zur Wiederverwendung?
