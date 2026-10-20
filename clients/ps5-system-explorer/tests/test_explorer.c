@@ -847,6 +847,52 @@ static void test_memory_peak(void) {
     CHECK(p && strstr(p->value, "delta") != NULL);
 }
 
+/* 6.1 fix 1: status.json COMPLETED must carry the final elapsed time, not the previous heartbeat.
+ * The elapsedS of a status written at the end equals the session duration (regression test). */
+static void test_status_elapsed_final(void) {
+    ex_sim sim = base_sim();
+    ex_backend be;
+    ex_backend_host(&be, &sim);
+    ex_options o = quick_opts(3, 200);
+    static ex_run run;
+    ex_execute(&be, &o, &run);
+    /* last_heartbeat_us is set before each checkpoint, so at the end it equals ended_us. */
+    CHECK(run.last_heartbeat_us == run.ended_us);
+    long long now = run.started_unix + 3;
+    static char buf[4096];
+    ex_report_status_json(&run, "COMPLETED", now, buf, sizeof(buf));
+    unsigned long long dur = (run.ended_us - run.started_us) / 1000000u;
+    char needle[32];
+    snprintf(needle, sizeof(needle), "\"elapsedS\":%llu", dur);
+    CHECK(strstr(buf, needle) != NULL);
+    CHECK(strstr(buf, "\"state\":\"COMPLETED\"") != NULL);
+}
+
+/* 6.1 fix 2: the German summary separates Startzustand / Vordergrund-Sitzung / Endzustand, and
+ * never says "App-ID vorhanden" for a background payload whose own App ID is 0. */
+static void test_summary_startup_vs_history(void) {
+    ex_sim sim = base_sim();
+    sim.appinfo_ok_zero = 1;          /* own App ID 0x0 with rc 0: the owner's PID 205 case */
+    sim.game_after_samples = 2;       /* home at start, a game appears later: the owner's case */
+    sim.title_map = "0x60000123=PPSA26873";
+    ex_backend be;
+    ex_backend_host(&be, &sim);
+    ex_options o = quick_opts(4, 200);
+    o.session.title_query_enabled = 1;
+    static ex_run run;
+    ex_execute(&be, &o, &run);
+    static char buf[256 * 1024];
+    ex_report_summary_txt(&run, buf, sizeof(buf));
+    CHECK(strstr(buf, "Startzustand (beim Start des Explorers)") != NULL);
+    CHECK(strstr(buf, "Erkannte Vordergrund-Sitzung") != NULL);
+    CHECK(strstr(buf, "Endzustand (bei Sitzungsende)") != NULL);
+    /* background payload: own App ID 0 is explained, never called "vorhanden" */
+    CHECK(strstr(buf, "kein Anwendungsprozess (Hintergrund-Payload)") != NULL);
+    CHECK(strstr(buf, "App-ID vorhanden") == NULL);
+    /* startup had no running big app; the session still shows the detected game separately */
+    CHECK(strstr(buf, "keine (Home-Bildschirm oder keine Vordergrund-App beim Start)") != NULL);
+}
+
 int main(void) {
     test_redact();
     test_classify_context();
@@ -880,6 +926,8 @@ int main(void) {
     test_status_json_roundtrip();
     test_report_61_fields();
     test_memory_peak();
+    test_status_elapsed_final();
+    test_summary_startup_vs_history();
 
     printf("explorer tests: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

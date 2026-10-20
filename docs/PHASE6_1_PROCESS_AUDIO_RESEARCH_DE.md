@@ -55,6 +55,27 @@ Die in 6.0 ererbten Audio-Befunde (Vordergrund hörbar; Hintergrundausgabe akzep
 Mikrofon `0x809B0081`; Vordergrundbenutzer-Port `0x80260011`) bleiben unverändert und werden in
 Abschnitt D referenziert, **nicht** als neue 6.1-Messung.
 
+### A.1 Bestätigter 6.1-Hardwarelauf (vom Eigentümer berichtet) [HW]
+
+Explorer 6.1.0 (Build `be55a297f228-ps5`) lief erfolgreich auf der PS5 des Eigentümers (FW 12.20),
+während Monster Hunter Stories 3 lief:
+
+| Größe | Wert |
+| --- | --- |
+| PID | 205, Hintergrundprozess, eigene App-ID `0x00000000` |
+| Laufzeit / Polls / Ereignisse | 300 s / 300 / 24 |
+| Kontextänderungen / Scheduling-Lücken | 1 / 0 |
+| Runtime-App-ID | `0x0000a018` (Laufzeit-ID, keine Title-ID) |
+| **Title-ID (NEU in 6.1)** | **`PPSA26873`**, 1 Abfrage, 0 Fehler — `sceSystemServiceGetAppTitleId` lieferte erstmals eine verifizierte Title-ID |
+| Vordergrund erkannt bei / aktiv | 00:19 / ~04:41 |
+| Peak RSS | 5360 KiB (Start) → 6656 KiB (Ende) |
+| `process_record` | `LAYOUT_MISMATCH` — Kernel meldet 1096 Byte, SDK erwartet 1088 (Abschnitt C.1) |
+
+Damit sind die beiden Hauptziele von Stufe A/B live bestätigt: die Title-ID-Abfrage funktioniert auf
+12.20, und die bisher unerklärte Prozessabfrage ist jetzt präzise diagnostiziert (statt nur
+`NOT_AVAILABLE`). Die eigene App-ID `0x00000000` ist der Normalfall eines Hintergrund-Payloads und
+genau der Grund, warum es keine Audio-Session wie eine Vordergrund-App hat.
+
 ---
 
 ## B. In 6.1 umgesetzte Verbesserungen
@@ -93,9 +114,20 @@ SDK-Größe entspricht **und** `ki_pid` die eigene PID ist. Andernfalls nennt 6.
 Das SDK (`include/freebsd/machine/proc.h`) setzt `KINFO_PROC_SIZE 1088`. Das ps5-payload-dev-SDK
 und onionHEN iterieren die Prozessliste über das vom Kernel gelieferte `ki_structsize` statt über
 `sizeof` [QUELLE: `samples/ps/main.c`, onionHEN `util_platform.c`] — ein Hinweis, dass die
-Kernelgröße abweichen kann. 6.1 **misst** diese Differenz jetzt, statt sie zu vermuten. Welcher der
-oben genannten Fälle auf 12.20 zutrifft, zeigt erst der nächste Hardwarelauf; die Originaldateien
-der 6.0-Läufe würden ihn ebenfalls belegen.
+Kernelgröße abweichen kann. 6.1 **misst** diese Differenz jetzt, statt sie zu vermuten.
+
+**Bestätigter Hardwarebefund (6.1-Lauf, PID 205, FW 12.20) [HW]:** `sysctl(KERN_PROC_PID)` meldet
+einen Kernel-Datensatz von **1096 Byte**, während das gepinnte SDK **1088 Byte** erwartet. Der
+Explorer hat den Datensatz deshalb korrekt **nicht dekodiert** und `process_record` als
+`LAYOUT_MISMATCH` ausgewiesen. Die 8 Byte Differenz werden nicht geraten.
+
+**Sicherer Weg, das Roh-Layout zu untersuchen (Vorschlag, nicht in 6.1 umgesetzt):** die 1096 Byte
+des **eigenen** Datensatzes als reine Hex-Bytes protokollieren, ohne ein einziges Feld an einem
+geratenen Offset zu dekodieren, und die bekannten FreeBSD-Felder nur dort bestätigen, wo mehrere
+Firmwares/Quellen denselben Offset belegen. Felder wie `ki_pid`/`ki_comm`/`ki_start` können gegen
+unabhängig bekannte Werte (eigene PID, Startzeit) quergeprüft werden, um den Versatz der 8 Byte
+einzugrenzen. Das ist eine getrennte, nur lesende Explorer-Erweiterung mit eigener Freigabe; sie
+darf den Audio-Test nicht verzögern und dekodiert nichts auf Verdacht.
 
 > Peak-RSS-Unterschiede zwischen zwei Läufen gelten **nicht** als Speicherleck. 6.1 misst den
 > Peak-RSS deshalb **innerhalb** einer Sitzung (Start vs. Ende, Delta) statt zwei Läufe zu

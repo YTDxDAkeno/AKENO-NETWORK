@@ -160,12 +160,15 @@ static void stat_latency(ex_poll_stats *st, uint64_t dt_us) {
 
 static void heartbeat(const ex_backend *be, ex_run *run, uint64_t now, int final) {
     (void)be;
+    /* 6.1 fix: set last_heartbeat_us BEFORE the checkpoint, so status.json's elapsedS reflects the
+     * current time - the final COMPLETED write then carries the full session length, not the
+     * previous heartbeat's value. last_heartbeat_us only ever moves forward (monotonic). */
+    run->last_heartbeat_us = now;
     if (!run->opt.checkpoint) return;
     if (run->opt.checkpoint(run->opt.checkpoint_ctx, run, final) != 0) {
         run->superseded = 1;
         run->stopped_early = 1;
     }
-    run->last_heartbeat_us = now;
 }
 
 void ex_module_timeline(const ex_backend *be, ex_run *run) {

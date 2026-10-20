@@ -317,14 +317,6 @@ static const char *st_mark(ex_status s) {
     return "[?]    ";
 }
 
-/* Finds the value of a named Module A probe (for the German header). Returns "" if absent. */
-static const char *probe_value(const ex_run *run, char module, const char *name) {
-    for (size_t i = 0; i < run->probe_count && i < EX_PROBES_MAX; i++)
-        if (run->probe[i].module == module && strcmp(run->probe[i].name, name) == 0)
-            return run->probe[i].value;
-    return "";
-}
-
 /* ---- the German owner header (6.1) ----------------------------------------------------------- */
 
 static void summary_de_header(sink *k, const ex_run *run) {
@@ -337,15 +329,35 @@ static void summary_de_header(sink *k, const ex_run *run) {
     fmt(k, "Plattform:    %s\n", s->platform);
     fmt(k, "Firmware:     %s%s\n", s->firmware[0] ? s->firmware : "unbekannt",
         s->firmware_reviewed ? " (die Firmware der bisherigen Belege)" : "");
-    fmt(k, "Explorer:     %s (PID %d), eigene App-ID %s\n", ex_context_name(run->context), s->pid,
-        (s->have_appinfo && s->appinfo_rc == 0) ? "vorhanden" : "0 / keine (Hintergrund-Payload)");
+    fmt(k, "Explorer:     %s (PID %d)\n", ex_context_name(run->context), s->pid);
     fmt(k, "Sitzung:      %s (%s)\n\n", run->opt.session.id, ex_instance_action_name(run->opt.session.action));
 
-    lit(k, "Vordergrund-Anwendung\n");
-    /* The first observed foreground session (if any). */
+    /* 6.1 fix 2: the own App ID, explained. A background payload is not an application process, so
+     * the system reports App ID 0x00000000 - that is normal and is exactly why no audio/mic. */
+    lit(k, "Startzustand (beim Start des Explorers)\n");
+    if (!s->have_appinfo)
+        lit(k, "  Eigene App-ID:        nicht abfragbar (sceKernelGetAppInfo auf dieser Firmware nicht exportiert)\n");
+    else if (s->appinfo_rc != 0)
+        fmt(k, "  Eigene App-ID:        Abfrage-Fehler 0x%08x\n", (unsigned)s->appinfo_rc);
+    else if (s->own_app_id == 0)
+        lit(k, "  Eigene App-ID:        0x00000000 = kein Anwendungsprozess (Hintergrund-Payload). Das ist der\n"
+               "                        Normalfall fuer ein ELF-Loader-Payload und der Grund, warum es keine\n"
+               "                        Audio-Session und keinen Mikrofonzugriff wie eine Vordergrund-App hat.\n");
+    else
+        fmt(k, "  Eigene App-ID:        0x%08x (Anwendungsprozess - fuer ein Hintergrund-Payload untypisch)\n",
+            (unsigned)s->own_app_id);
+    if (!s->have_bigapp)
+        lit(k, "  Laufende Big-App:     nicht abfragbar\n");
+    else if (s->bigapp_app_id > 0)
+        fmt(k, "  Laufende Big-App:     0x%08x bereits beim Start aktiv\n", (unsigned)s->bigapp_app_id);
+    else
+        lit(k, "  Laufende Big-App:     keine (Home-Bildschirm oder keine Vordergrund-App beim Start)\n");
+
+    /* The first observed foreground session (if any), shown separately from the startup state. */
     const ex_fg_session *first = NULL;
     for (size_t i = 0; i < run->fg_count && i < EX_FG_MAX; i++)
         if (run->fg[i].app_id > 0) { first = &run->fg[i]; break; }
+    lit(k, "\nErkannte Vordergrund-Sitzung (waehrend des Laufs)\n");
     if (first) {
         char when[8], dur[8];
         ex_fmt_mmss(first->start_us, when, sizeof(when));
@@ -356,14 +368,24 @@ static void summary_de_header(sink *k, const ex_run *run) {
         else
             fmt(k, "  Title-ID:        nicht ermittelt (%s)\n", ex_title_status_name(first->title_status));
         fmt(k, "  Erkannt bei:     %s (mm:ss), Vordergrund aktiv ~%s\n", when, dur);
-        if (first->end == EX_FG_END_NOT_REPORTED)
-            fmt(k, "  Nach dem Ende:   %s\n",
-                first->after == EX_FG_AFTER_STILL_ANSWERS ? "App-ID antwortet weiter (eher in den Hintergrund/Home)"
-                : first->after == EX_FG_AFTER_GONE ? "App-ID antwortet nicht mehr (eher beendet)"
-                : "nicht geprueft");
     } else {
-        lit(k, "  keine Vordergrund-Anwendung beobachtet\n");
+        lit(k, "  keine Vordergrund-Anwendung waehrend des Laufs erkannt\n");
     }
+
+    /* The state at the end of the session, shown separately again. */
+    lit(k, "\nEndzustand (bei Sitzungsende)\n");
+    const ex_fg_session *last = run->fg_count ? &run->fg[(run->fg_count - 1) % EX_FG_MAX] : NULL;
+    if (last && last->app_id > 0 && last->end == EX_FG_END_OPEN)
+        fmt(k, "  Vordergrund-App 0x%08x war am Ende noch aktiv\n", (unsigned)last->app_id);
+    else if (last && last->app_id > 0 && last->end == EX_FG_END_NOT_REPORTED)
+        fmt(k, "  Keine laufende Big-App mehr; App 0x%08x %s\n", (unsigned)last->app_id,
+            last->after == EX_FG_AFTER_STILL_ANSWERS ? "antwortete weiter (eher in den Hintergrund/Home, nicht beendet)"
+            : last->after == EX_FG_AFTER_GONE ? "antwortete nicht mehr (eher beendet)"
+            : "- Nachzustand nicht geprueft");
+    else if (last && last->app_id > 0)
+        fmt(k, "  Vordergrund-App 0x%08x wurde durch eine andere ersetzt\n", (unsigned)last->app_id);
+    else
+        lit(k, "  kein Vordergrund (Home-Bildschirm oder Menue)\n");
 
     fmt(k, "\nSitzungsdauer:          %llu s%s\n", (unsigned long long)(total_us / 1000000u),
         run->stopped_early ? (run->superseded ? " (abgeloest)" : " (vom Nutzer beendet)") : " (Zeit abgelaufen)");
@@ -375,11 +397,9 @@ static void summary_de_header(sink *k, const ex_run *run) {
         run->sys.pq.decoded ? "dekodiert" : "nicht verfuegbar (siehe process_record)", run->poll.user_failures,
         run->poll.title_failures);
 
-    lit(k, "\nProzesskontext (entscheidend fuer Audio/Mikrofon)\n");
-    fmt(k, "  Eigene App-ID:        %s\n", (s->have_appinfo && s->appinfo_rc == 0) ? "vorhanden" : "0 / keine");
-    fmt(k, "  Vordergrund-App-ID:   %s\n", probe_value(run, 'A', "foreground_app"));
-    lit(k, "  Audio-Berechtigung:   UNBEKANNT (nur lesend; kein Port geoeffnet)\n");
-    lit(k, "  Mikrofon-Berechtigung: UNBEKANNT (nur lesend; kein Mikrofon geoeffnet)\n");
+    lit(k, "\nAudio/Mikrofon (nur lesend gemessen)\n");
+    lit(k, "  Audio-Berechtigung:   UNBEKANNT (kein Port geoeffnet)\n");
+    lit(k, "  Mikrofon-Berechtigung: UNBEKANNT (kein Mikrofon geoeffnet)\n");
 
     if (run->opt.session.recovery[0]) fmt(k, "\nWiederanlauf: %s\n", run->opt.session.recovery);
     if (run->opt.session.stale_control_bytes >= 0)
