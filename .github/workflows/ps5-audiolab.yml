@@ -1,0 +1,113 @@
+name: PS5 Audio Lab (experimental)
+
+# AKENO Audio Lab 3.1 (docs/PHASE7_AUDIO_ROUTING_LAB_DE.md): a standalone, isolated PS5 audio-output
+# automatic one-shot experiment. This workflow runs the PC unit tests (ASan/UBSan), builds the real PS5 ELF with the
+# pinned SDK, runs the import safety gate, prints the ELF SHA-256 and produces the delivery package.
+# Nothing is sent to a console, and a PC run is never evidence of PS5 behaviour. The OnionHEN host,
+# AKENO NETWORK, the party voice and the System Explorer are not built or changed here.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ps5-audiolab-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PS5_SDK_COMMIT: f5d40f02770e9b0001dd9e18056eca70b3da8b40
+
+jobs:
+  host:
+    name: Audio Lab logic tests (ASan/UBSan) and smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install build requirements
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake clang-18 python3
+      - name: Build and run the unit tests
+        shell: bash
+        run: |
+          cmake -S clients/ps5-audiolab -B clients/ps5-audiolab/build -DAL_SANITIZE=ON -DCMAKE_C_COMPILER=clang-18
+          cmake --build clients/ps5-audiolab/build -j"$(nproc)"
+          ctest --test-dir clients/ps5-audiolab/build --output-on-failure
+      - name: Smoke the automatic one-shot and validate the JSON reports
+        shell: bash
+        run: |
+          bin=clients/ps5-audiolab/build/akeno-audio-lab
+          out="$RUNNER_TEMP/al"; mkdir -p "$out"
+          "$bin" "$out" >/dev/null
+          for f in report.json report.txt status.json; do
+            test -s "$out/$f"
+          done
+          for f in report.json status.json; do
+            python3 -Ic "import json,sys; json.load(open(sys.argv[1]))" "$out/$f"
+          done
+          test ! -e "$out/audiolab.lock" # clean exit removes the lock
+          python3 - "$out" <<'PY'
+          import json
+          import pathlib
+          import sys
+          output = pathlib.Path(sys.argv[1])
+          report = json.loads((output / "report.json").read_text())
+          status = json.loads((output / "status.json").read_text())
+          assert report["tonesPlayed"] == 1 and len(report["runs"]) == 1
+          assert report["runs"][0]["preset"] == "stereo16-1024"
+          assert report["runs"][0]["level"] == "moderate"
+          assert report["runs"][0]["portState"]["enabled"] is False
+          assert report["runs"][0]["closeCalled"] is True
+          assert status["state"] == "COMPLETED"
+          PY
+          echo "automatic one-shot produced valid completed JSON and exited cleanly"
+
+  ps5:
+    name: Build the PS5 Audio Lab ELF, import gate, delivery package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Install SDK build requirements
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-18 lld-18 llvm-18-dev make cmake wget file binutils gcc python3
+      - name: Fetch and install the pinned SDK
+        shell: bash
+        run: |
+          git clone --filter=blob:none https://github.com/ps5-payload-dev/sdk.git "$RUNNER_TEMP/ps5-sdk-src"
+          git -C "$RUNNER_TEMP/ps5-sdk-src" checkout --detach "$PS5_SDK_COMMIT"
+          test "$(git -C "$RUNNER_TEMP/ps5-sdk-src" rev-parse HEAD)" = "$PS5_SDK_COMMIT"
+          mkdir -p "$RUNNER_TEMP/ps5-payload-sdk"
+          make -C "$RUNNER_TEMP/ps5-sdk-src" DESTDIR="$RUNNER_TEMP/ps5-payload-sdk" install
+      - name: Build twice (byte-identical), import gate, delivery package
+        shell: bash
+        run: |
+          export PS5_PAYLOAD_SDK="$RUNNER_TEMP/ps5-payload-sdk"
+          id="$(git rev-parse --short=12 HEAD)-ps5"
+          make -C clients/ps5-audiolab/console -j"$(nproc)" BUILD="$RUNNER_TEMP/al-repro" BUILD_ID="$id"
+          make -C clients/ps5-audiolab/console -j"$(nproc)" BUILD_ID="$id" delivery
+          cmp "$RUNNER_TEMP/al-repro/akeno-audio-lab.elf" clients/ps5-audiolab/build-ps5/akeno-audio-lab.elf
+          clients/ps5-audiolab/console/check-audiolab.sh clients/ps5-audiolab/build-ps5
+      - name: Show the ELF imports and SHA-256 (for review)
+        shell: bash
+        run: |
+          nm="$RUNNER_TEMP/ps5-payload-sdk/bin/prospero-nm"
+          elf=clients/ps5-audiolab/build-ps5/akeno-audio-lab.elf
+          echo "NEEDED:"; readelf -d "$elf" | awk '/NEEDED/ {gsub(/[\[\]]/,"",$5); print "  "$5}'
+          echo "system imports:"; "$nm" -D --undefined-only "$elf" | awk '{print $2}' | grep -E '^(sce|kernel_)' | sort | sed 's/^/  /'
+          if "$nm" -D --undefined-only "$elf" | grep -qE 'sceAudio(Out|In)'; then echo "ERROR: audio symbol statically imported"; exit 1; fi
+          echo "ELF-SHA256:"; sha256sum "$elf"
+      - name: Upload the delivery package
+        uses: actions/upload-artifact@v4
+        with:
+          name: AKENO-Audio-Lab-3.1
+          path: clients/ps5-audiolab/build-ps5/AKENO-Audio-Lab-3.1.zip
+          if-no-files-found: error

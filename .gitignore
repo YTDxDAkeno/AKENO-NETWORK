@@ -38,6 +38,7 @@ clients/ps5-native/build*/
 clients/ps5-native/third_party/
 clients/ps5-voicelab/build*/
 clients/ps5-system-explorer/build*/
+clients/ps5-audiolab/build*/
 clients/ps5/ps5-smoke/*.elf
 
 # Local media storage (development default MEDIA_DIR)
