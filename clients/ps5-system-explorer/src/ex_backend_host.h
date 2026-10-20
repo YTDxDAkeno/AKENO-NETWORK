@@ -17,7 +17,7 @@ typedef struct {
     /* process answers */
     int have_fw;
     uint32_t fw;                  /* e.g. 0x12200000 */
-    int have_proc;
+    int have_proc;                /* the per-process query is decoded (layout-compatible) */
     int foreground;               /* this process is the running foreground app */
     int have_appinfo;
     int32_t appinfo_err;          /* appinfo_rc when not foreground (background payload) */
@@ -25,6 +25,19 @@ typedef struct {
     int have_user;
     int32_t user_rc;
     int have_rlimit, have_rusage;
+
+    /* 6.1: how the per-process query behaves. Default (zeroed) models the FW 12.20 observation:
+     * NOT_AVAILABLE with no decoded record. Set pq_* to drive a specific failure or success. */
+    int pq_mode;                  /* 0 empty-read; 1 decoded; 2 size-denied; 3 unsupported; 4 ENOMEM; 5 layout-mismatch */
+    long long pq_maxrss_end;      /* peak rss reported by read_usage at the end (0 = same as start) */
+
+    /* 6.1: title-ID answers, keyed by running app id. */
+    int title_no_fn;              /* sceSystemServiceGetAppTitleId not exported */
+    const char *title_map;        /* "0x60000123=PPSA00001;0x4018=" lines; empty value = error rc */
+    int32_t title_err_rc;         /* rc for an app id mapped to an empty title or not found */
+    int title_overrun;            /* the call writes one byte past its window (guard must catch it) */
+    int title_malformed;          /* the call returns a non-title-shaped string */
+    unsigned title_calls;         /* counter (observability) */
 
     /* context scripting */
     int32_t game_app;             /* the game's app id, e.g. 0x60000123 */
@@ -40,6 +53,13 @@ typedef struct {
     const char *control;
     size_t control_pos;
     unsigned control_chunk;       /* bytes to hand out per call (0 = all remaining) */
+    const char *control2;         /* 6.1: a replacement control stream; swapped in at control_swap_at */
+    unsigned control_swap_at;     /* sample call number to swap control -> control2 (0 = never) */
+    int control_reset_pending;
+
+    /* 6.1: checkpoint takeover - return nonzero from the checkpoint at this heartbeat number. */
+    unsigned supersede_at_checkpoint;
+    unsigned checkpoint_calls;
 
     /* gap injection */
     unsigned gap_at_poll;         /* on sleep call number this, add gap_ms to the virtual clock */
