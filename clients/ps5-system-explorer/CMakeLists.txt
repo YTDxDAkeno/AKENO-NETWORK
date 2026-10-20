@@ -20,6 +20,7 @@ add_library(akn_ex STATIC
   src/ex_audio.c
   src/ex_shellui.c
   src/ex_timeline.c
+  src/ex_session.c
   src/ex_report.c
   src/ex_redact.c
   src/ex_backend_host.c)

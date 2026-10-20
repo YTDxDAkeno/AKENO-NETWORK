@@ -40,10 +40,11 @@ static const ex_lib_entry k_catalogue[] = {
       { 1, 1, 0 } },
 
     { "libSceSystemService.sprx", "foreground app id, app status",
-      "AKENO daemon and Native (12.20); etaHEN", 0, 1,
+      "AKENO daemon and Native (12.20); etaHEN; onionHEN; LiveShell", 0, 1,
       { "sceSystemServiceGetAppIdOfRunningBigApp", "sceSystemServiceGetAppTitleId",
         "sceSystemServiceGetStatus", "sceSystemServiceGetAppStatus" }, 4,
-      { "int(void)", "int(int app_id,char* title_id)", "int(void* status)", NULL },
+      { "int(void)", "int(int app_id,char* title_id) [onionHEN/etaHEN/LiveShell agree]",
+        "int(SystemServiceStatus*) [shadPS4/AnyPS5; struct size unverified on 12.20]", NULL },
       { 1, 0, 0, 0 } },
 
     { "libScePad.sprx", "controller state",

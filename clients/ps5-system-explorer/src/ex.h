@@ -1,5 +1,6 @@
 /*
- * AKENO System Explorer 6.0 (EXPERIMENTAL, docs/PHASE6_AKENO_SYSTEM_EXPLORER_DE.md).
+ * AKENO System Explorer 6.1 (EXPERIMENTAL, docs/PHASE6_AKENO_SYSTEM_EXPLORER_DE.md and
+ * docs/PHASE6_1_PROCESS_AUDIO_RESEARCH_DE.md).
  *
  * A standalone, read-only PS5 diagnostic payload. It collects evidence about the current process
  * and application environment from legitimate, available system interfaces, so the next
@@ -33,7 +34,7 @@
 
 #include "ex_backend.h"
 
-#define AKN_EX_VERSION "6.0.0"
+#define AKN_EX_VERSION "6.1.0"
 #ifndef AKN_EX_BUILD_ID
 #define AKN_EX_BUILD_ID "dev"
 #endif
@@ -104,7 +105,54 @@ typedef struct {
     int have_rusage;
     double cpu_user_s, cpu_sys_s; /* getrusage(RUSAGE_SELF) */
     long long maxrss_bytes;
+    ex_proc_query pq;             /* how the per-process sysctl went (6.1) */
+    int firmware_reviewed;        /* the firmware is 12.20, the one the evidence comes from */
 } ex_sysinfo;
+
+/* ---- 6.1: why the per-process query did (not) answer ---------------------------------------- */
+
+typedef enum {
+    EX_PQ_DECODED = 0,            /* layout-compatible record for this PID, decoded */
+    EX_PQ_NOT_ATTEMPTED,          /* the backend has no per-process query (PC build without it) */
+    EX_PQ_SIZE_QUERY_DENIED,      /* the size query failed with EPERM/EACCES */
+    EX_PQ_SIZE_QUERY_UNSUPPORTED, /* ENOENT/EOPNOTSUPP/EINVAL: node or invocation not supported */
+    EX_PQ_NO_SUCH_PROCESS,        /* ESRCH */
+    EX_PQ_SIZE_QUERY_FAILED,      /* another errno */
+    EX_PQ_RECORD_TOO_LARGE,       /* the kernel's record exceeds the backend's bound: not read */
+    EX_PQ_READ_FAILED,            /* the read failed (errno recorded) */
+    EX_PQ_EMPTY,                  /* the read returned no record */
+    EX_PQ_LAYOUT_MISMATCH,        /* ki_structsize differs from the SDK's kinfo_proc: not decoded */
+    EX_PQ_PID_MISMATCH            /* sizes agree but ki_pid is not this PID: not decoded */
+} ex_pq_verdict;
+
+const char *ex_pq_verdict_name(ex_pq_verdict v);
+/* Classifies a per-process query (unit-tested); writes a precise one-line explanation. */
+ex_pq_verdict ex_pq_classify(const ex_proc_query *q, int own_pid, char *why, size_t why_len);
+const char *ex_errno_kind_name(ex_errno_kind k);
+
+/* ---- 6.1: title ID of the observed running app -------------------------------------------- */
+
+typedef enum {
+    EX_TITLE_OK = 0,              /* a well-formed title ID ([A-Z]{4}[0-9]{5}, NUL-terminated) */
+    EX_TITLE_NO_FUNCTION,         /* sceSystemServiceGetAppTitleId is not exported */
+    EX_TITLE_DISABLED,            /* switched off by the owner (no-title-query file) */
+    EX_TITLE_BUDGET,              /* the per-session call budget is used up */
+    EX_TITLE_GUARD_STOP,          /* an earlier call wrote outside its window: never called again */
+    EX_TITLE_NO_APP,              /* no running big app id to ask about */
+    EX_TITLE_ERROR,               /* the call returned an error code */
+    EX_TITLE_EMPTY,               /* rc 0 but an empty string */
+    EX_TITLE_MALFORMED,           /* rc 0 but not a title-ID-shaped, NUL-terminated string */
+    EX_TITLE_OVERRUN              /* the call wrote outside its window (the query is then disabled) */
+} ex_title_status;
+
+const char *ex_title_status_name(ex_title_status s);
+/* Interprets one query answer (unit-tested). title receives the ID for EX_TITLE_OK, else "". */
+ex_title_status ex_title_classify(const ex_title_query *q, char *title, size_t title_len);
+/* A title ID's naming-convention class: "PS5 title", "PS4 title", "system app", "other". */
+const char *ex_title_class(const char *title);
+
+#define EX_TITLE_BUDGET_MAX 32u   /* sceSystemServiceGetAppTitleId calls per session, at most */
+#define EX_TITLE_RECHECK_POLLS 15u/* re-ask about a vanished app every 15 polls (~15 s), within budget */
 
 /* The process context, decided from raw system answers (unit-tested). */
 typedef enum {
@@ -156,7 +204,10 @@ typedef enum {
     EX_EVT_SCHED_GAP,             /* a scheduling gap larger than expected (observation only) */
     EX_EVT_MARKER,                /* a user-entered marker */
     EX_EVT_EXTEND,
-    EX_EVT_STOP
+    EX_EVT_STOP,
+    EX_EVT_TITLE,                 /* 6.1: a title-ID lookup for the running app (result in text) */
+    EX_EVT_APP_STATE,             /* 6.1: after the app vanished: still answers / no longer answers */
+    EX_EVT_CONTROL                /* 6.1: control-file housekeeping (replaced file, partial line) */
 } ex_event_kind;
 
 const char *ex_event_kind_name(ex_event_kind k);
@@ -168,17 +219,120 @@ typedef struct {
     int32_t bigapp_app_id;        /* context at the time */
     ex_context_kind context;
     int gap_ms;                   /* for EX_EVT_SCHED_GAP */
+    int32_t from_app_id;          /* for EX_EVT_CONTEXT_CHANGE */
+    char title_id[16];            /* the running app's verified title ID at the time, if any */
+    char source[16];              /* for EX_EVT_MARKER: "control" or "relaunch" */
     char text[120];               /* marker text (redacted) or a short note */
 } ex_event;
+
+/* ---- 6.1: foreground application sessions ------------------------------------------------- */
+
+typedef enum {
+    EX_FG_END_OPEN = 0,           /* still the running big app when the Explorer ended */
+    EX_FG_END_CHANGED,            /* another app id was reported instead */
+    EX_FG_END_NOT_REPORTED        /* no running big app was reported any more */
+} ex_fg_end;
+
+typedef enum {
+    EX_FG_AFTER_UNKNOWN = 0,      /* not checked, or the check could not decide */
+    EX_FG_AFTER_STILL_ANSWERS,    /* the title query for its id still returns the same title ID */
+    EX_FG_AFTER_GONE              /* the title query for its id no longer returns that title ID */
+} ex_fg_after;
+
+typedef struct {
+    int32_t app_id;               /* the runtime id (NOT a permanent title ID) */
+    uint64_t start_us, end_us;    /* relative to the session start */
+    ex_fg_end end;
+    ex_title_status title_status;
+    int32_t title_rc;             /* when title_status == EX_TITLE_ERROR */
+    char title_id[16];
+    ex_fg_after after;            /* only for EX_FG_END_NOT_REPORTED */
+    uint64_t after_us;            /* when the after-state was decided */
+    int open;                     /* 1 while it is the running app (end_us not final) */
+} ex_fg_session;
+
+#define EX_FG_MAX 32
+
+/* Poll statistics (6.1). */
+typedef struct {
+    unsigned polls;
+    uint64_t interval_min_us, interval_max_us, interval_sum_us; /* between consecutive polls */
+    unsigned intervals;
+    uint64_t latency_min_us, latency_max_us, latency_sum_us;    /* time inside sample_context */
+    unsigned bigapp_none;         /* samples with no running big app (not a failure) */
+    unsigned bigapp_unavailable;  /* samples without the function */
+    int32_t bigapp_last_none_raw; /* the raw answer of the last "none" sample */
+    unsigned user_failures;       /* samples where the foreground-user query failed */
+    int32_t user_last_rc;
+    unsigned title_calls;         /* sceSystemServiceGetAppTitleId calls made */
+    unsigned title_failures;      /* calls that did not give a well-formed title ID */
+} ex_poll_stats;
+
+/* ---- 6.1: instance / crash recovery (decided in main, recorded here) ---------------------- */
+
+typedef enum {
+    EX_LOCK_ACQUIRED = 0,         /* an advisory lock (flock) was taken: no live holder */
+    EX_LOCK_HELD,                 /* another live process holds the advisory lock */
+    EX_LOCK_UNSUPPORTED,          /* flock is not supported here: heartbeat decides alone */
+    EX_LOCK_ERROR                 /* the lock file could not be opened */
+} ex_lock_result;
+
+const char *ex_lock_result_name(ex_lock_result r);
+
+/* What a starting Explorer found (filled by main from the files in the output directory). */
+typedef struct {
+    int lock_file_existed;
+    ex_lock_result lock;
+    int status_present;           /* status.json exists and parsed */
+    int status_running;           /* its state is RUNNING */
+    long long heartbeat_unix;     /* its last heartbeat */
+    long long now_unix;
+    char status_session[48];      /* its session id */
+    char lock_session[48];        /* the session id written in explorer.lock */
+} ex_instance_probe;
+
+typedef enum {
+    EX_INST_START = 0,            /* nothing running: a new session */
+    EX_INST_START_RECOVERED,      /* a previous session was interrupted (or a lock was left): new session */
+    EX_INST_MARKER,               /* a live session runs: hand it a marker, start no session */
+    EX_INST_REFUSE                /* a live holder that does not answer: start nothing */
+} ex_instance_action;
+
+#define EX_HEARTBEAT_S 10u        /* status.json is rewritten at least this often */
+#define EX_HEARTBEAT_STALE_S 45   /* older (or in the future by more) = not alive */
+
+const char *ex_instance_action_name(ex_instance_action a);
+/* The single decision rule for a starting Explorer (unit-tested, docs/PHASE6_1 G). */
+ex_instance_action ex_instance_decide(const ex_instance_probe *p, char *why, size_t why_len);
+
+/* Parses the few fields of a status.json the decision needs (unit-tested). Returns 0 on success. */
+int ex_status_parse(const char *text, int *running, long long *heartbeat_unix, char *session, size_t session_len);
+
+typedef struct {
+    char id[48];                  /* "<start unix>-<pid>" */
+    ex_instance_action action;    /* START or START_RECOVERED for a running session */
+    ex_lock_result lock;
+    char recovery[200];           /* what was found and done (interrupted session, stale lock, ...) */
+    long long stale_control_bytes;/* -1 none; else bytes of a leftover control file moved aside, not applied */
+    int previous_reports_moved;   /* report files of the previous session moved to previous/ */
+    int title_query_enabled;      /* 0 when /data/akeno-system-explorer/no-title-query exists */
+} ex_session_info;
 
 #define EX_EVENTS_MAX 2048
 
 /* ---- The run ---------------------------------------------------------------------------------- */
 
+struct ex_run_s;
+
 typedef struct {
     int quick;                    /* PC tests / a quick run: short session */
     unsigned session_s;           /* default session length (default 300, hard max EX_SESSION_MAX_S) */
     unsigned poll_ms;             /* context poll interval (default 1000) */
+    ex_session_info session;      /* 6.1: set by main before ex_execute */
+    /* 6.1: called at the start, every EX_HEARTBEAT_S and at the end (status.json). Returns
+     * nonzero when the session must end at once because another session took over the lock. */
+    int (*checkpoint)(void *ctx, const struct ex_run_s *run, int final);
+    void *checkpoint_ctx;
 } ex_options;
 
 #define EX_SESSION_DEFAULT_S 300u
@@ -186,7 +340,7 @@ typedef struct {
 #define EX_POLL_DEFAULT_MS 1000u
 #define EX_GAP_FACTOR 3           /* a gap > poll_ms * EX_GAP_FACTOR is recorded as a scheduling gap */
 
-typedef struct {
+typedef struct ex_run_s {
     ex_options opt;
     char build_id[32];
 
@@ -212,6 +366,21 @@ typedef struct {
     int gap_max_ms;
     unsigned requested_session_s; /* after any extend */
     int stopped_early;
+
+    /* 6.1 */
+    ex_fg_session fg[EX_FG_MAX];
+    size_t fg_count;
+    int fg_truncated;
+    ex_poll_stats poll;
+    ex_usage usage_end;           /* getrusage at the end of the session */
+    long long maxrss_seen;        /* the highest peak RSS read during the session */
+    unsigned markers_relaunch;    /* markers handed over by a relaunched ELF */
+    unsigned control_resets;      /* the control file was replaced/truncated mid-session */
+    unsigned control_partial;     /* a last line without newline was applied after it settled */
+    int superseded;               /* another session took over the lock: ended early */
+    int title_guard_stop;         /* the title query wrote outside its window: disabled */
+    uint64_t last_heartbeat_us;
+    int checkpoint_failures;      /* status.json writes that failed */
 } ex_run;
 
 /* Record one probe into run (truncates silently past EX_PROBES_MAX; the count still grows). */
@@ -245,7 +414,12 @@ size_t ex_report_modules_json(const ex_run *run, char *out, size_t len);
 size_t ex_report_audio_json(const ex_run *run, char *out, size_t len);
 /* events.jsonl: one JSON object per line, in order. */
 size_t ex_report_events_jsonl(const ex_run *run, char *out, size_t len);
-/* system-summary.txt: a human-readable summary (screenshot-friendly). */
+/* system-summary.txt: a German summary (6.1) followed by the full probe list (screenshot-friendly). */
 size_t ex_report_summary_txt(const ex_run *run, char *out, size_t len);
+/* status.json (6.1): the live heartbeat; state RUNNING, COMPLETED or SUPERSEDED. */
+size_t ex_report_status_json(const ex_run *run, const char *state, long long now_unix, char *out, size_t len);
+
+/* "mm:ss" for a session-relative time (unit-tested). */
+void ex_fmt_mmss(uint64_t t_us, char *out, size_t len);
 
 #endif

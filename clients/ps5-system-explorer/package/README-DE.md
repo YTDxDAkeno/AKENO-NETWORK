@@ -1,4 +1,4 @@
-# AKENO System Explorer 6.0 — Installation und Nutzung (DEUTSCH)
+# AKENO System Explorer 6.1 — Installation und Nutzung (DEUTSCH)
 
 Der AKENO System Explorer ist ein eigenständiges, **nur lesendes** PS5-Diagnose-Payload. Es sammelt
 Belege über die aktuelle Prozess- und Anwendungsumgebung aus legitimen, verfügbaren
@@ -24,7 +24,7 @@ keiner dieser Komponenten etwas.
 ## Paketinhalt
 
 ```
-AKENO-System-Explorer-6.0/
+AKENO-System-Explorer-6.1/
   akeno-system-explorer.elf      # das Payload (für den ELF-Loader)
   AKENOSystemExplorer/           # Launcher-Ordner (für den Homebrew-Launcher)
     akeno-system-explorer.elf
@@ -38,7 +38,7 @@ AKENO-System-Explorer-6.0/
 ## Prüfsummen kontrollieren
 
 ```sh
-cd AKENO-System-Explorer-6.0
+cd AKENO-System-Explorer-6.1
 sha256sum -c SHA256SUMS.txt
 ```
 
@@ -87,6 +87,22 @@ mark AKENO-Overlay geoeffnet
 stop
 ```
 
+### Marker ohne FTP — durch erneutes Starten (neu in 6.1)
+
+Falls das Beschreiben der `control`-Datei unterwegs umständlich ist, kannst du den Explorer einfach
+**erneut starten und dabei einen Markertext übergeben**. Läuft bereits eine Sitzung, startet der
+erneute Start **keine** zweite Diagnose: Er hängt deinen Text als Marker an die laufende Sitzung an
+und beendet sich sofort wieder. Eine Benachrichtigung bestätigt das. (Über den ELF-Loader wird der
+Text als zweites Argument übergeben; über den Launcher als Eintrag, der denselben ELF mit festem
+Markertext startet.) Zwei Diagnosesitzungen gleichzeitig sind damit ausgeschlossen.
+
+### Title-ID-Abfrage abschalten (optional)
+
+6.1 fragt für die **laufende** Anwendung zusätzlich die dauerhafte Title-ID ab
+(`sceSystemServiceGetAppTitleId`, nur lesend, nur für die vom System gemeldete laufende App). Wer
+das nicht möchte, legt vor dem Start eine leere Datei `/data/akeno-system-explorer/no-title-query`
+an; dann wird kein einziger Title-Aufruf gemacht und der entsprechende Wert erscheint als `SKIPPED`.
+
 ## Ergebnisse
 
 Nach dem Lauf liegen unter `/data/akeno-system-explorer/`:
@@ -97,10 +113,27 @@ Nach dem Lauf liegen unter `/data/akeno-system-explorer/`:
 | `modules.json` | die Proben je Modul A–E |
 | `audio-diagnostics.json` | Modul C im Detail (kontextabhängige Audio-Lage, frühere Hardware-Belege) |
 | `events.jsonl` | die Timeline, ein JSON-Objekt pro Zeile |
-| `system-summary.txt` | eine lesbare Zusammenfassung (gut zum Abfotografieren) |
+| `system-summary.txt` | **6.1:** oben eine deutsche Zusammenfassung (Runtime-App-ID, Title-ID, Vordergrunddauer, nächster Schritt), darunter die vollständige Probenliste (gut zum Abfotografieren) |
 
-Hole diese Dateien per FTP oder Dateiansicht ab und schicke sie zurück. Die Reporte enthalten keine
-Passwörter, Tokens, Schlüssel, Nachrichten oder Mikrofon-Audio (automatische Redaktion).
+Zusätzlich (nicht Teil der fünf Berichtdateien, aber hilfreich):
+
+| Datei | Inhalt |
+| --- | --- |
+| `status.json` | **6.1:** ein Lebenszeichen, das während des Laufs mindestens alle 10 s neu geschrieben wird (`RUNNING`), am Ende `COMPLETED`. Erlaubt zu erkennen, ob eine frühere Sitzung sauber endete oder abstürzte |
+| `previous/` | **6.1:** wurde eine frühere Sitzung unterbrochen, liegen ihre Berichte hier (sie werden nicht überschrieben) |
+| `control.stale` | **6.1:** eine beim Start vorgefundene alte `control`-Datei wird hierher verschoben und **nicht** ausgeführt |
+
+Hole die fünf Berichtdateien per FTP oder Dateiansicht ab und schicke sie zurück. Die Reporte
+enthalten keine Passwörter, Tokens, Schlüssel, Nachrichten oder Mikrofon-Audio (automatische
+Redaktion).
+
+### Absturz-Sicherheit (neu in 6.1)
+
+Eine abgestürzte oder unterbrochene Sitzung kann die nächste nicht mehr verfälschen: Beim Start
+erkennt der Explorer über eine Dateisperre (`flock`) **und** das Lebenszeichen in `status.json`, ob
+noch eine Sitzung lebt. Lebt keine, werden die alte `control`-Datei beiseitegelegt (nie ausgeführt)
+und die alten Berichte nach `previous/` verschoben, bevor neu gemessen wird. Eine hängengebliebene
+Sperrdatei allein blockiert nichts mehr.
 
 ## Wie die Statusangaben zu lesen sind
 

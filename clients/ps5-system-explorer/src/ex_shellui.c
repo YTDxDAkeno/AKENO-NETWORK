@@ -101,6 +101,20 @@ static const ex_shellui_finding k_findings[] = {
       "no source distinguishes a local party-audio facility from Sony's network signaling in a way a "
       "payload could use; party sessions appear bound to PSN session identity",
       "No open interface, no signaling/mixer evidence, and no 12.20 support were found." },
+
+    { "audio_session_ownership", EX_EV_HYPOTHESIS,
+      "every source with audible sound during a game owns a system audio session: LiveShell plays through "
+      "SceShellUI's own Mono VideoPlayer (SetVolume/SetIsMuted/SetBGMSuppressionDisabled), and the audible "
+      "foreground homebrew is the launched application process; the background ELF payload has neither",
+      "A consistent pattern across sources, not a measured mechanism; it does not name the component that "
+      "grants the session, and it is not a route AKENO's background payload can take without ShellUI injection." },
+
+    { "background_execution_status_flag", EX_EV_SOURCE_VERIFIED,
+      "AnyPS5 and shadPS4 model sceSystemServiceGetStatus -> {event_num, is_system_ui_overlaid, "
+      "is_in_background_execution, ...}; is_in_background_execution could, if the struct layout holds on "
+      "12.20, be a read-only cross-check of the Explorer's own context classification",
+      "The struct size/layout is unverified on 12.20 and the Explorer does not call GetStatus; a candidate "
+      "future read-only probe, listed in the decision tree, not a result." },
 };
 
 void ex_module_shellui(ex_run *run) {

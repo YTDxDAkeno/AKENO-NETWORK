@@ -48,6 +48,9 @@ const char *ex_event_kind_name(ex_event_kind k) {
     case EX_EVT_MARKER: return "marker";
     case EX_EVT_EXTEND: return "extend";
     case EX_EVT_STOP: return "stop";
+    case EX_EVT_TITLE: return "title_lookup";
+    case EX_EVT_APP_STATE: return "app_state";
+    case EX_EVT_CONTROL: return "control";
     }
     return "unknown";
 }
@@ -113,6 +116,163 @@ void ex_fill_sysinfo(const ex_raw_proc *raw, const char *platform, ex_sysinfo *s
     s->cpu_user_s = raw->cpu_user_s;
     s->cpu_sys_s = raw->cpu_sys_s;
     s->maxrss_bytes = raw->maxrss_bytes;
+    s->pq = raw->pq;
+    s->firmware_reviewed = raw->have_fw && ((raw->firmware_raw >> 16) & 0xFFFFu) == 0x1220u;
+}
+
+/* ---- 6.1: the per-process query ------------------------------------------------------------- */
+
+const char *ex_errno_kind_name(ex_errno_kind k) {
+    switch (k) {
+    case EX_ERRNO_NONE: return "none";
+    case EX_ERRNO_NOMEM: return "ENOMEM";
+    case EX_ERRNO_PERM: return "EPERM";
+    case EX_ERRNO_ACCES: return "EACCES";
+    case EX_ERRNO_SRCH: return "ESRCH";
+    case EX_ERRNO_INVAL: return "EINVAL";
+    case EX_ERRNO_NOENT: return "ENOENT";
+    case EX_ERRNO_OPNOTSUPP: return "EOPNOTSUPP";
+    case EX_ERRNO_FAULT: return "EFAULT";
+    case EX_ERRNO_OTHER: break;
+    }
+    return "other";
+}
+
+const char *ex_pq_verdict_name(ex_pq_verdict v) {
+    switch (v) {
+    case EX_PQ_DECODED: return "DECODED";
+    case EX_PQ_NOT_ATTEMPTED: return "NOT_ATTEMPTED";
+    case EX_PQ_SIZE_QUERY_DENIED: return "SIZE_QUERY_DENIED";
+    case EX_PQ_SIZE_QUERY_UNSUPPORTED: return "SIZE_QUERY_UNSUPPORTED";
+    case EX_PQ_NO_SUCH_PROCESS: return "NO_SUCH_PROCESS";
+    case EX_PQ_SIZE_QUERY_FAILED: return "SIZE_QUERY_FAILED";
+    case EX_PQ_RECORD_TOO_LARGE: return "RECORD_TOO_LARGE";
+    case EX_PQ_READ_FAILED: return "READ_FAILED";
+    case EX_PQ_EMPTY: return "EMPTY";
+    case EX_PQ_LAYOUT_MISMATCH: return "LAYOUT_MISMATCH";
+    case EX_PQ_PID_MISMATCH: return "PID_MISMATCH";
+    }
+    return "UNKNOWN";
+}
+
+/*
+ * The decision follows the order of the calls. A record is decoded only when the kernel's own
+ * ki_structsize equals the SDK's sizeof(struct kinfo_proc), the read returned exactly one record of
+ * that size, and ki_pid is this PID. Anything else is reported with its numbers and never decoded:
+ * a different firmware structure is not guessed.
+ */
+ex_pq_verdict ex_pq_classify(const ex_proc_query *q, int own_pid, char *why, size_t why_len) {
+    char tmp[1];
+    if (!why || !why_len) {
+        why = tmp;
+        why_len = sizeof(tmp);
+    }
+    why[0] = '\0';
+    if (!q->attempted) {
+        snprintf(why, why_len, "no per-process query in this build");
+        return EX_PQ_NOT_ATTEMPTED;
+    }
+    if (q->size_rc != 0) {
+        const char *e = ex_errno_kind_name(q->size_errno_kind);
+        switch (q->size_errno_kind) {
+        case EX_ERRNO_PERM:
+        case EX_ERRNO_ACCES:
+            snprintf(why, why_len, "size query refused (rc %d, errno %d %s): access to the own process record is denied",
+                     q->size_rc, q->size_errno, e);
+            return EX_PQ_SIZE_QUERY_DENIED;
+        case EX_ERRNO_NOENT:
+        case EX_ERRNO_OPNOTSUPP:
+        case EX_ERRNO_INVAL:
+            snprintf(why, why_len, "size query rejected (rc %d, errno %d %s): node or invocation not supported here",
+                     q->size_rc, q->size_errno, e);
+            return EX_PQ_SIZE_QUERY_UNSUPPORTED;
+        case EX_ERRNO_SRCH:
+            snprintf(why, why_len, "size query: no such process (rc %d, errno %d)", q->size_rc, q->size_errno);
+            return EX_PQ_NO_SUCH_PROCESS;
+        default:
+            snprintf(why, why_len, "size query failed (rc %d, errno %d %s)", q->size_rc, q->size_errno, e);
+            return EX_PQ_SIZE_QUERY_FAILED;
+        }
+    }
+    if (q->size_reported > q->buffer_bound) {
+        snprintf(why, why_len, "the kernel reports %llu bytes, more than the %llu-byte bound: not read",
+                 q->size_reported, q->buffer_bound);
+        return EX_PQ_RECORD_TOO_LARGE;
+    }
+    if (q->read_rc != 0) {
+        if (q->read_errno_kind == EX_ERRNO_NOMEM)
+            snprintf(why, why_len, "read failed with ENOMEM (errno %d): the %llu-byte buffer is smaller than the "
+                                   "kernel's record (reported %llu, SDK kinfo_proc %llu)",
+                     q->read_errno, q->requested, q->size_reported, q->sdk_size);
+        else
+            snprintf(why, why_len, "read failed (rc %d, errno %d %s), requested %llu bytes", q->read_rc,
+                     q->read_errno, ex_errno_kind_name(q->read_errno_kind), q->requested);
+        return EX_PQ_READ_FAILED;
+    }
+    if (q->returned == 0 || !q->have_structsize) {
+        snprintf(why, why_len, "the read returned %llu bytes (size query said %llu): no record for this PID",
+                 q->returned, q->size_reported);
+        return EX_PQ_EMPTY;
+    }
+    if ((unsigned long long)q->structsize != q->sdk_size || q->returned != q->sdk_size) {
+        snprintf(why, why_len, "layout mismatch: ki_structsize %d, returned %llu, SDK kinfo_proc %llu%s; not decoded",
+                 q->structsize, q->returned, q->sdk_size,
+                 q->have_pid_at_sdk_offset && q->pid_at_sdk_offset == own_pid ? " (ki_pid at the SDK offset matches)" : "");
+        return EX_PQ_LAYOUT_MISMATCH;
+    }
+    if (!q->have_pid_at_sdk_offset || q->pid_at_sdk_offset != own_pid) {
+        snprintf(why, why_len, "sizes agree (%llu) but ki_pid is %d, not %d: not decoded", q->sdk_size,
+                 q->pid_at_sdk_offset, own_pid);
+        return EX_PQ_PID_MISMATCH;
+    }
+    snprintf(why, why_len, "one %llu-byte record, ki_structsize = SDK kinfo_proc, ki_pid = %d", q->sdk_size, own_pid);
+    return EX_PQ_DECODED;
+}
+
+/* ---- 6.1: the title ID ---------------------------------------------------------------------- */
+
+const char *ex_title_status_name(ex_title_status st) {
+    switch (st) {
+    case EX_TITLE_OK: return "OK";
+    case EX_TITLE_NO_FUNCTION: return "NO_FUNCTION";
+    case EX_TITLE_DISABLED: return "DISABLED";
+    case EX_TITLE_BUDGET: return "BUDGET_USED";
+    case EX_TITLE_GUARD_STOP: return "GUARD_STOP";
+    case EX_TITLE_NO_APP: return "NO_APP";
+    case EX_TITLE_ERROR: return "ERROR";
+    case EX_TITLE_EMPTY: return "EMPTY";
+    case EX_TITLE_MALFORMED: return "MALFORMED";
+    case EX_TITLE_OVERRUN: return "OVERRUN";
+    }
+    return "UNKNOWN";
+}
+
+ex_title_status ex_title_classify(const ex_title_query *q, char *title, size_t title_len) {
+    if (title && title_len) title[0] = '\0';
+    if (!q->have_fn) return EX_TITLE_NO_FUNCTION;
+    if (!q->called) return EX_TITLE_DISABLED;
+    if (!q->guard_ok) return EX_TITLE_OVERRUN;
+    if (q->rc != 0) return EX_TITLE_ERROR;
+    if (q->nul_at == 0) return EX_TITLE_EMPTY;
+    /* Exactly the title-ID shape, terminated right after it: nothing else is accepted. */
+    if (q->nul_at != 9 || !looks_like_title_id(q->raw)) return EX_TITLE_MALFORMED;
+    if (title && title_len) snprintf(title, title_len, "%.9s", (const char *)q->raw);
+    return EX_TITLE_OK;
+}
+
+/* The naming convention of the prefix only (AKENO game_detect; LiveShell skips NPXS ids). It says
+ * nothing about the app's privileges. */
+const char *ex_title_class(const char *title) {
+    if (!title || !title[0]) return "unknown";
+    if (strncmp(title, "PPSA", 4) == 0) return "PS5 title (PPSA)";
+    if (strncmp(title, "CUSA", 4) == 0) return "PS4 title (CUSA)";
+    if (strncmp(title, "NPXS", 4) == 0) return "system app (NPXS)";
+    return "other prefix";
+}
+
+void ex_fmt_mmss(uint64_t t_us, char *out, size_t len) {
+    unsigned long long s = (unsigned long long)(t_us / 1000000u);
+    snprintf(out, len, "%02llu:%02llu", s / 60u, s % 60u);
 }
 
 ex_context_kind ex_classify_context(const ex_sysinfo *s) {
@@ -142,10 +302,19 @@ void ex_probe_value(ex_probe *p, const char *fmt, ...) {
     char tmp[EX_VALUE_MAX];
     va_list ap;
     va_start(ap, fmt);
+#ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wformat-nonliteral"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+#endif
     vsnprintf(tmp, sizeof(tmp), fmt, ap);
+#ifdef __clang__
 #pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
     va_end(ap);
     ex_redact(p->value, sizeof(p->value), tmp);
 }
@@ -160,10 +329,19 @@ void ex_probe_limit(ex_probe *p, const char *fmt, ...) {
     if (!p) return;
     va_list ap;
     va_start(ap, fmt);
+#ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wformat-nonliteral"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+#endif
     vsnprintf(p->limitation, sizeof(p->limitation), fmt, ap);
+#ifdef __clang__
 #pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
     va_end(ap);
 }
 

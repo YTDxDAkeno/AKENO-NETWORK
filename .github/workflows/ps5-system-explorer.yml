@@ -49,7 +49,7 @@ jobs:
           for mode in background foreground home-to-game refused; do
             out="$RUNNER_TEMP/ex-$mode"; mkdir -p "$out"
             AKN_EX_QUICK=1 AKN_EX_SIM="$mode" "$bin" "$out" >/dev/null
-            for f in report.json modules.json audio-diagnostics.json; do
+            for f in report.json modules.json audio-diagnostics.json status.json; do
               python3 -Ic "import json,sys; json.load(open(sys.argv[1]))" "$out/$f"
             done
             python3 -Ic "import json,sys; [json.loads(l) for l in open(sys.argv[1]) if l.strip()]" "$out/events.jsonl"
@@ -97,10 +97,11 @@ jobs:
           echo "NEEDED:"; readelf -d "$elf" | awk '/NEEDED/ {gsub(/[\[\]]/,"",$5); print "  "$5}'
           echo "system imports:"; "$nm" -D --undefined-only "$elf" | awk '{print $2}' | grep -E '^(sce|kernel_)' | sort | sed 's/^/  /'
           if "$nm" -D --undefined-only "$elf" | grep -qE 'sceAudio(Out|In)'; then echo "ERROR: audio symbol present"; exit 1; fi
+          echo "ELF-SHA256:"; sha256sum "$elf"
 
       - name: Upload the delivery package
         uses: actions/upload-artifact@v4
         with:
-          name: AKENO-System-Explorer-6.0
-          path: clients/ps5-system-explorer/build-ps5/AKENO-System-Explorer-6.0
+          name: AKENO-System-Explorer-6.1
+          path: clients/ps5-system-explorer/build-ps5/AKENO-System-Explorer-6.1
           if-no-files-found: error
