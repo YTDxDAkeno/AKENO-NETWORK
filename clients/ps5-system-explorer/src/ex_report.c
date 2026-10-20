@@ -33,10 +33,19 @@ static void fmt(sink *k, const char *f, ...) {
     char tmp[512];
     va_list ap;
     va_start(ap, f);
+#ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wformat-nonliteral"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+#endif
     int n = vsnprintf(tmp, sizeof(tmp), f, ap);
+#ifdef __clang__
 #pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
     va_end(ap);
     if (n < 0) return;
     raw(k, tmp, (size_t)n < sizeof(tmp) ? (size_t)n : sizeof(tmp) - 1);
@@ -146,6 +155,48 @@ size_t ex_report_json(const ex_run *run, char *out, size_t len) {
             "\"requestedSessionS\":%u,\"stoppedEarly\":%s},",
         run->event_count, run->events_truncated ? "true" : "false", run->context_changes, run->markers,
         run->sched_gaps, run->gap_max_ms, run->requested_session_s, run->stopped_early ? "true" : "false");
+    /* 6.1: session / recovery, foreground sessions and poll statistics. */
+    const ex_session_info *si = &run->opt.session;
+    lit(&k, "\"session\":{");
+    jkv_s(&k, "id", si->id);
+    lit(&k, ",");
+    jkv_s(&k, "action", ex_instance_action_name(si->action));
+    lit(&k, ",");
+    jkv_s(&k, "lock", ex_lock_result_name(si->lock));
+    lit(&k, ",");
+    fmt(&k, "\"titleQueryEnabled\":%s,", si->title_query_enabled ? "true" : "false");
+    fmt(&k, "\"staleControlBytes\":%lld,", si->stale_control_bytes);
+    fmt(&k, "\"previousReportsMoved\":%s,", si->previous_reports_moved ? "true" : "false");
+    fmt(&k, "\"superseded\":%s,", run->superseded ? "true" : "false");
+    jkv_s(&k, "recovery", si->recovery);
+    lit(&k, "},");
+    lit(&k, "\"foregroundSessions\":[");
+    for (size_t i = 0; i < run->fg_count && i < EX_FG_MAX; i++) {
+        const ex_fg_session *f = &run->fg[i];
+        if (i) lit(&k, ",");
+        lit(&k, "{");
+        fmt(&k, "\"appId\":\"0x%08x\",", (unsigned)f->app_id);
+        fmt(&k, "\"startMs\":%llu,\"endMs\":%llu,", (unsigned long long)(f->start_us / 1000u),
+            (unsigned long long)((f->open ? run->ended_us - run->started_us : f->end_us) / 1000u));
+        jkv_s(&k, "titleStatus", ex_title_status_name(f->title_status));
+        lit(&k, ",");
+        if (f->title_id[0]) { jkv_s(&k, "titleId", f->title_id); lit(&k, ","); }
+        jkv_s(&k, "endState", f->end == EX_FG_END_OPEN ? "still_running"
+                              : f->end == EX_FG_END_CHANGED ? "replaced" : "not_reported");
+        if (f->end == EX_FG_END_NOT_REPORTED) {
+            lit(&k, ",");
+            jkv_s(&k, "afterState", f->after == EX_FG_AFTER_STILL_ANSWERS ? "still_answers"
+                                   : f->after == EX_FG_AFTER_GONE ? "gone" : "unknown");
+        }
+        lit(&k, "}");
+    }
+    lit(&k, "],");
+    lit(&k, "\"poll\":{");
+    fmt(&k, "\"polls\":%u,\"intervalMinMs\":%llu,\"intervalMaxMs\":%llu,\"latencyMaxUs\":%llu,"
+            "\"homeSamples\":%u,\"userQueryFailures\":%u,\"titleCalls\":%u,\"titleFailures\":%u},",
+        run->poll.polls, (unsigned long long)(run->poll.intervals ? run->poll.interval_min_us / 1000u : 0),
+        (unsigned long long)(run->poll.interval_max_us / 1000u), (unsigned long long)run->poll.latency_max_us,
+        run->poll.bigapp_none, run->poll.user_failures, run->poll.title_calls, run->poll.title_failures);
     lit(&k, "\"moduleSummary\":{");
     const char mods[] = { 'A', 'B', 'C', 'D', 'E' };
     for (size_t m = 0; m < sizeof(mods); m++) {
@@ -243,6 +294,9 @@ size_t ex_report_events_jsonl(const ex_run *run, char *out, size_t len) {
         jkv_s(&k, "context", ex_context_name(e->context));
         lit(&k, ",");
         fmt(&k, "\"bigAppId\":\"0x%08x\",", (unsigned)e->bigapp_app_id);
+        if (e->kind == EX_EVT_CONTEXT_CHANGE) fmt(&k, "\"fromAppId\":\"0x%08x\",", (unsigned)e->from_app_id);
+        if (e->title_id[0]) { jkv_s(&k, "titleId", e->title_id); lit(&k, ","); }
+        if (e->source[0]) { jkv_s(&k, "markerSource", e->source); lit(&k, ","); }
         if (e->gap_ms >= 0) fmt(&k, "\"gapMs\":%d,", e->gap_ms);
         jkv_s(&k, "text", e->text);
         lit(&k, "}\n");
@@ -263,10 +317,91 @@ static const char *st_mark(ex_status s) {
     return "[?]    ";
 }
 
+/* Finds the value of a named Module A probe (for the German header). Returns "" if absent. */
+static const char *probe_value(const ex_run *run, char module, const char *name) {
+    for (size_t i = 0; i < run->probe_count && i < EX_PROBES_MAX; i++)
+        if (run->probe[i].module == module && strcmp(run->probe[i].name, name) == 0)
+            return run->probe[i].value;
+    return "";
+}
+
+/* ---- the German owner header (6.1) ----------------------------------------------------------- */
+
+static void summary_de_header(sink *k, const ex_run *run) {
+    const ex_sysinfo *s = &run->sys;
+    uint64_t total_us = run->ended_us - run->started_us;
+
+    lit(k, "AKENO SYSTEM EXPLORER 6.1 - Zusammenfassung (Deutsch)\n");
+    lit(k, "=====================================================\n\n");
+    fmt(k, "Build:        %s\n", run->build_id);
+    fmt(k, "Plattform:    %s\n", s->platform);
+    fmt(k, "Firmware:     %s%s\n", s->firmware[0] ? s->firmware : "unbekannt",
+        s->firmware_reviewed ? " (die Firmware der bisherigen Belege)" : "");
+    fmt(k, "Explorer:     %s (PID %d), eigene App-ID %s\n", ex_context_name(run->context), s->pid,
+        (s->have_appinfo && s->appinfo_rc == 0) ? "vorhanden" : "0 / keine (Hintergrund-Payload)");
+    fmt(k, "Sitzung:      %s (%s)\n\n", run->opt.session.id, ex_instance_action_name(run->opt.session.action));
+
+    lit(k, "Vordergrund-Anwendung\n");
+    /* The first observed foreground session (if any). */
+    const ex_fg_session *first = NULL;
+    for (size_t i = 0; i < run->fg_count && i < EX_FG_MAX; i++)
+        if (run->fg[i].app_id > 0) { first = &run->fg[i]; break; }
+    if (first) {
+        char when[8], dur[8];
+        ex_fmt_mmss(first->start_us, when, sizeof(when));
+        ex_fmt_mmss((first->open ? total_us : first->end_us) - first->start_us, dur, sizeof(dur));
+        fmt(k, "  Runtime-App-ID:  0x%08x  (Laufzeit-ID, KEINE dauerhafte Title-ID)\n", (unsigned)first->app_id);
+        if (first->title_status == EX_TITLE_OK)
+            fmt(k, "  Title-ID:        %s (%s)\n", first->title_id, ex_title_class(first->title_id));
+        else
+            fmt(k, "  Title-ID:        nicht ermittelt (%s)\n", ex_title_status_name(first->title_status));
+        fmt(k, "  Erkannt bei:     %s (mm:ss), Vordergrund aktiv ~%s\n", when, dur);
+        if (first->end == EX_FG_END_NOT_REPORTED)
+            fmt(k, "  Nach dem Ende:   %s\n",
+                first->after == EX_FG_AFTER_STILL_ANSWERS ? "App-ID antwortet weiter (eher in den Hintergrund/Home)"
+                : first->after == EX_FG_AFTER_GONE ? "App-ID antwortet nicht mehr (eher beendet)"
+                : "nicht geprueft");
+    } else {
+        lit(k, "  keine Vordergrund-Anwendung beobachtet\n");
+    }
+
+    fmt(k, "\nSitzungsdauer:          %llu s%s\n", (unsigned long long)(total_us / 1000000u),
+        run->stopped_early ? (run->superseded ? " (abgeloest)" : " (vom Nutzer beendet)") : " (Zeit abgelaufen)");
+    fmt(k, "Ereignisse:             %zu  | Kontextwechsel: %u | Marker: %u (davon %u per Neustart)\n",
+        run->event_count, run->context_changes, run->markers, run->markers_relaunch);
+    fmt(k, "Scheduling-Luecken:     %u (max %d ms) - nur gemessen, NICHT als Suspendierung gewertet\n",
+        run->sched_gaps, run->gap_max_ms);
+    fmt(k, "Fehlende/fehlerhafte Abfragen: Prozesssatz=%s, Benutzerabfrage-Fehler=%u, Title-Fehler=%u\n",
+        run->sys.pq.decoded ? "dekodiert" : "nicht verfuegbar (siehe process_record)", run->poll.user_failures,
+        run->poll.title_failures);
+
+    lit(k, "\nProzesskontext (entscheidend fuer Audio/Mikrofon)\n");
+    fmt(k, "  Eigene App-ID:        %s\n", (s->have_appinfo && s->appinfo_rc == 0) ? "vorhanden" : "0 / keine");
+    fmt(k, "  Vordergrund-App-ID:   %s\n", probe_value(run, 'A', "foreground_app"));
+    lit(k, "  Audio-Berechtigung:   UNBEKANNT (nur lesend; kein Port geoeffnet)\n");
+    lit(k, "  Mikrofon-Berechtigung: UNBEKANNT (nur lesend; kein Mikrofon geoeffnet)\n");
+
+    if (run->opt.session.recovery[0]) fmt(k, "\nWiederanlauf: %s\n", run->opt.session.recovery);
+    if (run->opt.session.stale_control_bytes >= 0)
+        fmt(k, "Alte control-Datei (%lld Byte) wurde beiseitegelegt und NICHT ausgefuehrt.\n",
+            run->opt.session.stale_control_bytes);
+
+    lit(k, "\nRelevante Audio-Hypothese (unveraendert, quell-/hardwarebelegt)\n");
+    lit(k, "  Bei byte-identischen Aufrufen entscheidet der Prozesstyp: ein Vordergrund-App-Prozess wird\n");
+    lit(k, "  gehoert und bekommt das Mikrofon, ein Hintergrund-Payload nicht (fruehere AKENO-Hardware).\n");
+    lit(k, "\nEmpfohlenes naechstes Experiment\n");
+    lit(k, "  Audio Lab v3 (separater, bereits gebauter ELF): liest den Zustand des EIGENEN Audio-Ports\n");
+    lit(k, "  read-only. Getrennte Freigabe/Hardwareplan noetig; vom Explorer NICHT automatisch gestartet.\n");
+    lit(k, "  Details und Entscheidungsbaum: docs/PHASE6_1_PROCESS_AUDIO_RESEARCH_DE.md.\n");
+    lit(k, "\n-----------------------------------------------------------------\n");
+    lit(k, "Vollstaendige Probenliste (jede Messung mit Belegstufe und Grenze):\n\n");
+}
+
 size_t ex_report_summary_txt(const ex_run *run, char *out, size_t len) {
     sink k = { out, len, 0 };
     if (len) out[0] = '\0';
     const ex_sysinfo *s = &run->sys;
+    summary_de_header(&k, run);
     fmt(&k, "AKENO System Explorer %s (build %s)\n", AKN_EX_VERSION, run->build_id);
     fmt(&k, "Platform: %s   Firmware: %s   Context: %s\n", s->platform,
         s->firmware[0] ? s->firmware : "unknown", ex_context_name(run->context));
@@ -296,5 +431,32 @@ size_t ex_report_summary_txt(const ex_run *run, char *out, size_t len) {
     }
     lit(&k, "Legend: [ok] measured  [n/a] not available  [unsup] not on FW 12.20  [skip] not run  [err] error code\n");
     lit(&k, "A successful call or a resolved symbol is never proof of working sound, voice or Game Base access.\n");
+    return k.used;
+}
+
+/* ---- status.json (6.1 heartbeat / crash recovery) -------------------------------------------- */
+
+size_t ex_report_status_json(const ex_run *run, const char *state, long long now_unix, char *out, size_t len) {
+    sink k = { out, len, 0 };
+    if (len) out[0] = '\0';
+    lit(&k, "{");
+    jkv_s(&k, "report", "AKENO System Explorer status");
+    lit(&k, ",");
+    jkv_s(&k, "version", AKN_EX_VERSION);
+    lit(&k, ",");
+    jkv_s(&k, "state", state);
+    lit(&k, ",");
+    jkv_s(&k, "sessionId", run->opt.session.id);
+    lit(&k, ",");
+    jkv_s(&k, "build", run->build_id);
+    lit(&k, ",");
+    fmt(&k, "\"pid\":%d,", run->sys.pid);
+    fmt(&k, "\"startedUnix\":%lld,", run->started_unix);
+    fmt(&k, "\"heartbeatUnix\":%lld,", now_unix);
+    fmt(&k, "\"elapsedS\":%llu,", (unsigned long long)((run->last_heartbeat_us - run->started_us) / 1000000u));
+    fmt(&k, "\"requestedSessionS\":%u,", run->requested_session_s);
+    fmt(&k, "\"events\":%zu,\"contextChanges\":%u,\"markers\":%u", run->event_count, run->context_changes,
+        run->markers);
+    lit(&k, "}");
     return k.used;
 }
