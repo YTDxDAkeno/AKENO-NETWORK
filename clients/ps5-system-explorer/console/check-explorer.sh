@@ -25,10 +25,11 @@ reviewed_sce='
 sceKernelSendNotificationRequest
 sceKernelGetAppInfo
 sceSystemServiceGetAppIdOfRunningBigApp
+sceSystemServiceGetAppTitleId
 sceUserServiceGetForegroundUser sceUserServiceInitialize
 kernel_get_fw_version
 '
-weak_required='sceKernelGetAppInfo sceSystemServiceGetAppIdOfRunningBigApp sceUserServiceGetForegroundUser'
+weak_required='sceKernelGetAppInfo sceSystemServiceGetAppIdOfRunningBigApp sceSystemServiceGetAppTitleId sceUserServiceGetForegroundUser'
 reviewed_needed='libSceSystemService.sprx libSceUserService.sprx libkernel_web.sprx
 libSceLibcInternal.sprx libSceNet.sprx libkernel.sprx libkernel_sys.sprx'
 

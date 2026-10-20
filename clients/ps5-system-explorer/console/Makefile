@@ -26,7 +26,7 @@ DEBUG_ELF   := $(BUILD)/akeno-system-explorer.debug.elf
 BUILD_ID    ?= $(shell git -C $(REPO_ROOT) rev-parse --short=12 HEAD 2>/dev/null || echo unknown)-ps5
 
 SRC         := $(addprefix $(ROOT)/src/,main.c ex.c ex_process.c ex_libraries.c ex_audio.c ex_shellui.c \
-               ex_timeline.c ex_report.c ex_redact.c ex_backend_ps5.c)
+               ex_timeline.c ex_session.c ex_report.c ex_redact.c ex_backend_ps5.c)
 OBJS        := $(patsubst $(ROOT)/src/%.c,$(OBJ)/%.o,$(SRC))
 
 CFLAGS      := -O2 -g -std=c11 -DAKN_EX_PS5 -DAKN_EX_BUILD_ID='"$(BUILD_ID)"' \
@@ -60,10 +60,10 @@ package: $(ELF)
 	cp $(ROOT)/package/homebrew.js $(PACKAGE)/homebrew.js
 	if [ -n "$(ICON)" ]; then mkdir -p $(PACKAGE)/sce_sys && cp $(ICON) $(PACKAGE)/sce_sys/icon0.png; fi
 
-# The review/delivery package AKENO-System-Explorer-6.0/ with the ELF, the German guides, the
+# The review/delivery package AKENO-System-Explorer-6.1/ with the ELF, the German guides, the
 # safety note and SHA-256 checksums. The ELF is suitable for review before loading; nothing is
 # sent to a console by this target.
-DELIVERY := $(BUILD)/AKENO-System-Explorer-6.0
+DELIVERY := $(BUILD)/AKENO-System-Explorer-6.1
 .PHONY: delivery
 delivery: package
 	rm -rf $(DELIVERY)
