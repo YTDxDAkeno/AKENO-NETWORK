@@ -1,4 +1,4 @@
-# AKENO System Explorer 6.0 — Sicherheit (SAFETY)
+# AKENO System Explorer 6.1 — Sicherheit (SAFETY)
 
 Dieses Payload ist bewusst **nur lesend** und ändert nichts an der Konsole. Was es nicht tut, ist
 im Code durch das Import-Gate `console/check-explorer.sh` erzwungen (bei jedem Build geprüft).
@@ -10,6 +10,13 @@ im Code durch das Import-Gate `console/check-explorer.sh` erzwungen (bei jedem B
 - Liest **nur den eigenen Prozess** (PID, PPID, Prozesssatz per `sysctl KERN_PROC_PID` genau für
   diese PID, App-Info, Ressourcengrenzen) und einige **schreibgeschützte** Systemabfragen
   (Firmware, Vordergrund-App-ID, Vordergrundbenutzer).
+- **6.1:** fragt zusätzlich die **Title-ID der laufenden Anwendung** ab
+  (`sceSystemServiceGetAppTitleId`, nur lesend) — nur für die vom System selbst gemeldete laufende
+  Big-App, nie für beliebige Apps, mit begrenztem Aufruf-Budget und einem geschützten Zielpuffer.
+  Abschaltbar über die Datei `no-title-query`.
+- **6.1:** hält eine **Dateisperre** (`flock` auf `explorer.lock`) und schreibt ein Lebenszeichen
+  (`status.json`), damit ein erneuter Start keine zweite Diagnosesitzung erzeugt und ein Absturz
+  die nächste Sitzung nicht verfälscht. Beides ist dateibasiert und ändert nichts am System.
 - **Sucht** Systembibliotheken und Symbole nur nach (`dlopen` + `dlsym`); gefundene Adressen werden
   mit NULL verglichen und **nie aufgerufen**.
 - Schreibt eine zeitlich begrenzte Diagnose-Sitzung (Standard 5 Minuten, hartes Maximum 30 Minuten)

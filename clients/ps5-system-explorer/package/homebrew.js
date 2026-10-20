@@ -6,7 +6,7 @@
 async function main() {
   return {
     mainText: 'AKENO System Explorer',
-    secondaryText: 'Read-only PS5 diagnostics (experimental)',
+    secondaryText: 'Read-only PS5 diagnostics 6.1 (experimental)',
     onclick: async () => {
       return { path: window.workingDir + '/akeno-system-explorer.elf', daemon: true };
     },
