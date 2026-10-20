@@ -3,16 +3,23 @@
 **Firmware:** 12.20 · **Umgebung:** Jailbreak, ELF-Loader oder Launcher · **Dauer:** ca. 5 Minuten.
 
 Dieser erste Lauf wird **vom Home-Bildschirm aus** gemacht, **ohne laufendes Spiel**, **ohne
-Mikrofon**. Es gibt keinen automatischen Ton: Jeder Ton kommt nur auf deinen `tone`-Befehl.
+Mikrofon** und **ohne** `sceAudioOutGetPortState` (nicht freigegeben). Es gibt keinen automatischen
+Ton: Jeder Ton kommt nur auf deinen `tone`-Befehl.
+
+> **Erwartung vorab (wichtig):** Dieser erste Tonlauf wird **sehr wahrscheinlich nur den bereits
+> bekannten Befund wiederholen** — der Hintergrund-Port nimmt die Samples an und taktet sie, du
+> hörst aber **nichts**. Das ist KEIN Fehler des Labs. Ziel dieses Laufs ist allein, den neuen,
+> **isolierten** Prozess auf deiner Konsole zu überprüfen (sauberer Start, Steuerung, Berichte,
+> sauberes Ende) — nicht, hörbares Hintergrund-Audio zu erzeugen. Neue Information käme erst aus der
+> Port-State-Messung, die hier bewusst **aus** bleibt.
 
 ## Vorbereitung
 
 1. Prüfsummen kontrollieren (`sha256sum -c SHA256SUMS.txt`).
 2. Eine Möglichkeit bereitlegen, `/data/akeno-audiolab/control` zu beschreiben und
    `/data/akeno-audiolab/` auszulesen (FTP oder Dateiansicht).
-3. **Entscheiden, ob die Port-State-Messung mitlaufen soll** (der eigentliche neue Nutzen). Wenn ja:
-   die Datei `/data/akeno-audiolab/enable-portstate` anlegen (leer genügt). Risiko und Nutzen:
-   [SAFETY.md](SAFETY.md).
+3. Die Datei `/data/akeno-audiolab/enable-portstate` **NICHT** anlegen (Port-State bleibt aus,
+   für diesen ersten Test nicht freigegeben).
 
 ## Testablauf (minimal und kontrolliert)
 

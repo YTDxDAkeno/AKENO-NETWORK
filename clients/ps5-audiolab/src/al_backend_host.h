@@ -32,6 +32,7 @@ typedef struct {
     unsigned control_swap_at;
     int control_reset_done;
     unsigned read_calls;
+    int control_begun;
 
     /* capture */
     unsigned long notifications;

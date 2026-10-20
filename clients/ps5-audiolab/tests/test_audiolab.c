@@ -4,9 +4,14 @@
  * port-state opt-in gate and overrun stop, pacing, cancel, per-launch limit, the audio-state
  * guard/decode primitives, PCM generation, JSON validity and report content.
  */
+#define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "al.h"
 #include "al_backend.h"
@@ -144,7 +149,7 @@ static void test_tone_accepted_paced(void) {
     al_backend_host(&be, &sim);
     al_state st;
     al_engine_init(&st, &be);
-    volatile int cancel = 0;
+    atomic_int cancel; atomic_init(&cancel, 0);
     int id = al_engine_run_tone(&st, &be, al_find_preset("stereo16-1024"), al_find_level("moderate"), &cancel);
     CHECK(id == 1);
     const al_run *r = al_run_by_id(&st, id);
@@ -162,7 +167,7 @@ static void test_tone_failures(void) {
         al_backend_host(&be, &sim);
         al_state st;
         al_engine_init(&st, &be);
-        volatile int cancel = 0;
+        atomic_int cancel; atomic_init(&cancel, 0);
         int id = al_engine_run_tone(&st, &be, al_find_preset("stereo16-1024"), al_find_level("moderate"), &cancel);
         const al_run *r = al_run_by_id(&st, id);
         CHECK(r != NULL);
@@ -179,7 +184,7 @@ static void test_cancel(void) {
     al_backend_host(&be, &sim);
     al_state st;
     al_engine_init(&st, &be);
-    volatile int cancel = 1; /* cancelled before the first block */
+    atomic_int cancel; atomic_init(&cancel, 1); /* cancelled before the first block */
     int id = al_engine_run_tone(&st, &be, al_find_preset("stereo16-1024"), al_find_level("moderate"), &cancel);
     const al_run *r = al_run_by_id(&st, id);
     CHECK(r && r->result.cancelled);
@@ -195,7 +200,7 @@ static void test_port_state_opt_in_gate(void) {
     al_state st;
     al_engine_init(&st, &be);
     CHECK(st.port_state_opt_in == 0);
-    volatile int cancel = 0;
+    atomic_int cancel; atomic_init(&cancel, 0);
     int id = al_engine_run_tone(&st, &be, al_find_preset("stereo16-1024"), al_find_level("moderate"), &cancel);
     const al_run *r = al_run_by_id(&st, id);
     CHECK(r && !r->result.port_state_opt_in);
@@ -226,7 +231,7 @@ static void test_port_state_overrun_stop(void) {
     al_backend_host(&be, &sim);
     al_state st;
     al_engine_init(&st, &be);
-    volatile int cancel = 0;
+    atomic_int cancel; atomic_init(&cancel, 0);
     int id = al_engine_run_tone(&st, &be, al_find_preset("stereo16-1024"), al_find_level("moderate"), &cancel);
     const al_run *r = al_run_by_id(&st, id);
     CHECK(r && r->result.port_state_stopped);
@@ -238,7 +243,7 @@ static void test_launch_limit(void) {
     al_backend_host(&be, &sim);
     al_state st;
     al_engine_init(&st, &be);
-    volatile int cancel = 0;
+    atomic_int cancel; atomic_init(&cancel, 0);
     int last = 0;
     for (int i = 0; i < AL_RUNS_PER_LAUNCH + 2; i++)
         last = al_engine_run_tone(&st, &be, al_find_preset("stereo16-1024"), al_find_level("moderate"), &cancel);
@@ -252,7 +257,7 @@ static void test_feedback(void) {
     al_backend_host(&be, &sim);
     al_state st;
     al_engine_init(&st, &be);
-    volatile int cancel = 0;
+    atomic_int cancel; atomic_init(&cancel, 0);
     int id = al_engine_run_tone(&st, &be, al_find_preset("stereo16-1024"), al_find_level("moderate"), &cancel);
     CHECK(al_engine_feedback(&st, id, AL_HEARD_YES, "tv") == 0);
     const al_run *r = al_run_by_id(&st, id);
@@ -267,7 +272,7 @@ static void test_reports_json(void) {
     al_backend_host(&be, &sim);
     al_state st;
     al_engine_init(&st, &be);
-    volatile int cancel = 0;
+    atomic_int cancel; atomic_init(&cancel, 0);
     al_engine_run_tone(&st, &be, al_find_preset("stereo16-1024"), al_find_level("moderate"), &cancel);
     al_engine_feedback(&st, 1, AL_HEARD_NO, "tv");
     static char buf[128 * 1024];
@@ -323,6 +328,106 @@ static void test_state_guard_primitive(void) {
     CHECK(call.lead_intact && call.tail_intact); /* nothing written: canaries intact */
 }
 
+/* ---- control-file session boundary (al_control.c) against real temp files ------------------- */
+
+#include "al_control.h"
+#include <stdlib.h>
+
+static void write_text(const char *path, const char *text) {
+    FILE *f = fopen(path, "w");
+    if (f) { fputs(text, f); fclose(f); }
+}
+static void append_text(const char *path, const char *text) {
+    FILE *f = fopen(path, "a");
+    if (f) { fputs(text, f); fclose(f); }
+}
+
+/* The critical rule: a `tone` command present at start must be moved aside and never read. */
+static void test_control_session_boundary(void) {
+    char dir[] = "/tmp/al_ctl_XXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0); return; }
+    char ctl[300], consumed[320];
+    snprintf(ctl, sizeof(ctl), "%s/control", dir);
+    snprintf(consumed, sizeof(consumed), "%s/control.consumed", dir);
+
+    /* A stale control file from a previous run. */
+    write_text(ctl, "tone stereo16-1024 clear\n");
+    al_control_begin(dir);
+    /* It was moved aside: the live path no longer carries the stale command. */
+    struct stat stt;
+    CHECK(stat(ctl, &stt) != 0);        /* control is gone from the read path */
+    CHECK(stat(consumed, &stt) == 0);   /* preserved as control.consumed */
+
+    long off = 0;
+    char buf[256];
+    int reset = 0;
+    int n = al_control_read(dir, &off, buf, sizeof(buf), &reset);
+    CHECK(n == 0); /* nothing to read: the stale `tone` never becomes a command */
+
+    /* The owner appends a new command after the boundary: it IS read. */
+    append_text(ctl, "status\n");
+    n = al_control_read(dir, &off, buf, sizeof(buf), &reset);
+    CHECK(n > 0);
+    buf[n] = '\0';
+    CHECK(strstr(buf, "status") != NULL);
+
+    /* Appends advance; already-read bytes are not re-read. */
+    append_text(ctl, "tone\n");
+    n = al_control_read(dir, &off, buf, sizeof(buf), &reset);
+    buf[n > 0 ? n : 0] = '\0';
+    CHECK(n > 0 && strstr(buf, "tone") != NULL && strstr(buf, "status") == NULL);
+
+    /* Replace with a smaller file (truncate): reading restarts and reports a reset. */
+    write_text(ctl, "exit\n");
+    n = al_control_read(dir, &off, buf, sizeof(buf), &reset);
+    buf[n > 0 ? n : 0] = '\0';
+    CHECK(reset == 1 && strstr(buf, "exit") != NULL);
+
+    unlink(ctl);
+    unlink(consumed);
+    rmdir(dir);
+}
+
+/* Thread-safety: a tone worker commits into al_state while the main thread reads reports under the
+ * lock. Run many iterations; TSan (CI) flags a race, and the JSON must always stay valid. */
+typedef struct { al_state *st; const al_backend *be; atomic_int *cancel; atomic_int go; } ts_ctx;
+static void *ts_worker(void *arg) {
+    ts_ctx *c = arg;
+    while (!atomic_load(&c->go)) { }
+    for (int i = 0; i < 40; i++)
+        al_engine_run_tone(c->st, c->be, al_find_preset("stereo16-1024"), al_find_level("moderate"), c->cancel);
+    return NULL;
+}
+static void test_thread_safety(void) {
+    al_sim sim = base_sim();
+    al_backend be;
+    al_backend_host(&be, &sim);
+    static al_state st;
+    al_engine_init(&st, &be);
+    atomic_int cancel; atomic_init(&cancel, 0);
+    ts_ctx c = { &st, &be, &cancel, 0 };
+    atomic_init(&c.go, 0);
+    pthread_t th;
+    CHECK(pthread_create(&th, NULL, ts_worker, &c) == 0);
+    atomic_store(&c.go, 1);
+    static char buf[128 * 1024];
+    int valid = 1;
+    for (int i = 0; i < 400; i++) {
+        al_state_lock(&st);
+        size_t njson = al_report_json(&st, buf, sizeof(buf));
+        al_state_unlock(&st);
+        (void)njson;
+        if (!json_valid(buf)) valid = 0;
+    }
+    pthread_join(th, NULL);
+    CHECK(valid);
+    al_state_lock(&st);
+    size_t nf = al_report_json(&st, buf, sizeof(buf));
+    al_state_unlock(&st);
+    (void)nf;
+    CHECK(json_valid(buf));
+}
+
 int main(void) {
     test_parse();
     test_presets();
@@ -337,6 +442,8 @@ int main(void) {
     test_report_buffer_safety();
     test_pcm();
     test_state_guard_primitive();
+    test_control_session_boundary();
+    test_thread_safety();
     printf("audiolab tests: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

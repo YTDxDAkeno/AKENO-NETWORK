@@ -76,6 +76,24 @@ Vordergrund-App-Prozess** oder **in einem Systemprozess (ShellUI)** [HW/QUELLE].
 LiveKit-Party führt Mikrofon und Lautsprecher, während das PS5-Payload nur Signalisierung/Benach-
 richtigungen übernimmt. Das umgeht die Hintergrund-Audio-Grenze, statt gegen sie zu testen.
 
+## 3a. Code-Review-Korrekturen vor dem ersten Hardwaretest
+
+Nach einer zusätzlichen Code-Prüfung wurden vor dem ersten Hardwaretest umgesetzt:
+
+- **Sichere Session-Grenze (kritisch):** Beim Start legt das Lab eine vorhandene `control`-Datei
+  beiseite (`control.consumed`) und liest nur noch danach angehängte Befehle. Ein `tone` aus einem
+  früheren Lauf kann so nach einem Neustart **nie** erneut einen Ton auslösen. Portables Modul
+  `al_control.c`, gegen echte Dateien unit-getestet (`test_control_session_boundary`).
+- **Einzelinstanz-Sperre:** Schlägt schon das Öffnen der Sperrdatei fehl, startet das Lab **nicht**
+  (vorher lief es ungeschützt weiter). `flock`-Fehler (belegt vs. nicht unterstützt) werden
+  unterschieden.
+- **Thread-Sicherheit:** Der Tonthread schreibt sein Ergebnis nur unter einer `al_state`-Sperre
+  zurück (nie während des blockierenden Audioaufrufs); die Berichtschreiber lesen unter derselben
+  Sperre. Stop-Flag und Worker-Flags sind `atomic_int`. Geprüft mit **ThreadSanitizer** und einem
+  Nebenläufigkeitstest (`test_thread_safety`).
+- **Opt-in eindeutig:** `enable-portstate` wird **bei jedem `tone`-Befehl** neu geprüft (nicht nur
+  beim Start), sodass „Datei vor dem Ton anlegen“ eine wohldefinierte Aktivierung ist.
+
 ## 4. Entscheidungsbaum: nächster Schritt zu hörbarem Hintergrund-Audio
 
 ```

@@ -23,6 +23,8 @@
 #ifndef AKENO_AL_H
 #define AKENO_AL_H
 
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -141,15 +143,24 @@ typedef struct {
     long long last_heartbeat_unix;
     int exited;                  /* an exit command ended the loop */
     char last_note[160];         /* the most recent human note (busy, cooldown, limit, ...) */
+
+    /* Protects every field above that the tone worker and the main (report) thread both touch:
+     * runs[], next_run, tone_commands, tones_played, port_state_supported. The worker holds it only
+     * for the short prepare/commit sections, never during the blocking audio call; the report
+     * writers and the main loop's reads hold it while they read. Initialised by al_engine_init. */
+    pthread_mutex_t lock;
+    int lock_ready;
 } al_state;
 
 al_run *al_run_by_id(al_state *st, int id);
+void al_state_lock(al_state *st);
+void al_state_unlock(al_state *st);
 
 /* ---- engine (al_engine.c) ------------------------------------------------------------------ */
 
 void al_engine_init(al_state *st, const al_backend *be);
 int al_engine_run_tone(al_state *st, const al_backend *be, const al_preset *preset, const al_level *level,
-                       volatile int *cancel);
+                       atomic_int *cancel);
 int al_engine_feedback(al_state *st, int run_id, al_heard heard, const char *route);
 
 /* ---- reports ------------------------------------------------------------------------------- */

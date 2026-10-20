@@ -12,6 +12,7 @@
 #ifndef AKENO_AL_BACKEND_H
 #define AKENO_AL_BACKEND_H
 
+#include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -28,7 +29,7 @@ typedef struct {
     /* fills `block` with `frames` frames in the run's format; returns nonzero-frame count and peak */
     unsigned long (*fill)(void *user, void *block, unsigned frames, double *peak);
     void *fill_user;
-    volatile int *cancel;        /* set to 1 to stop between blocks */
+    atomic_int *cancel;          /* set to 1 (from any thread) to stop between blocks; read with atomic_load */
     int measure_port_state;      /* 1 to run the opt-in port-state probe at the three points */
 } al_audio_params;
 
@@ -77,9 +78,13 @@ typedef struct al_backend {
     /* The output run: the whole open/submit/measure/close sequence (al_backend_ps5.c). */
     int (*audio_run)(void *u, const al_audio_params *p, al_audio_result *r);
 
+    /* Establishes the session boundary: any control file present now is moved aside and never read
+     * as commands. Called once, after init and after the instance lock is held. */
+    void (*control_begin)(void *u);
     /* Reads bytes appended to the control file since the last call; *reset=1 if it shrank. */
     int (*read_control)(void *u, char *buf, size_t len, int *reset);
-    /* 1 when /data/akeno-audiolab/enable-portstate exists. */
+    /* 1 when /data/akeno-audiolab/enable-portstate exists. Re-read before every tone, so creating
+     * the file before a `tone` command is a well-defined activation. */
     int (*port_state_opt_in)(void *u);
 } al_backend;
 

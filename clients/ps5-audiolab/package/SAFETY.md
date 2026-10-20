@@ -25,11 +25,16 @@ durch das Import-Gate `console/check-audiolab.sh` erzwungen (bei jedem Build gep
 - Die Audio-Ausgabefunktionen sind **keine** statischen Importe: Sie werden erst zur Laufzeit per
   `dlopen`/`dlsym` aufgelöst (geprüft: die ELF importiert kein `sceAudio*`-Symbol).
 - Es läuft nur **eine** Instanz (Dateisperre `flock`). Ein zweiter Start wird abgewiesen — zwei
-  Audio-Sitzungen können nicht parallel entstehen.
+  Audio-Sitzungen können nicht parallel entstehen. Kann die Sperrdatei nicht einmal geöffnet
+  werden, startet das Lab gar nicht (lieber kein Lauf als ein ungeschützter).
+- Beim Start wird eine evtl. vorhandene `control`-Datei beiseitegelegt (`control.consumed`); ein
+  `tone`-Befehl aus einem früheren Lauf wird nach einem Neustart **nie** erneut ausgeführt.
 
 ## Der optionale Port-State-Aufruf (`sceAudioOutGetPortState`)
 
-**Standardmäßig deaktiviert.** Er läuft nur, wenn du die Datei `enable-portstate` anlegst.
+**Standardmäßig deaktiviert.** Die Opt-in-Datei `enable-portstate` wird **bei jedem `tone`-Befehl
+neu geprüft**: lege sie an, bevor du den `tone`-Befehl schreibst, dann misst genau dieser Ton;
+entfernst du sie, misst der nächste Ton wieder nicht. Für den ersten Hardwaretest bleibt sie aus.
 
 - Er wird **nur auf dem eigenen Handle** dieses Tests aufgerufen, nie auf dem eines Spiels.
 - Die Signatur `(int32 handle, void* state)` ist in fünf unabhängigen Quellen gleich (OpenOrbis,

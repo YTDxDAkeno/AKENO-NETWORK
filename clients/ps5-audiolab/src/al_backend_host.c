@@ -4,6 +4,7 @@
 #include "al_backend_host.h"
 #include "al.h"
 
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -109,7 +110,7 @@ static int h_audio_run(void *u, const al_audio_params *p, al_audio_result *r) {
     unsigned long submitted = 0;
     unsigned calls = 0;
     for (unsigned long done = 0; done < p->frames; done += p->grain) {
-        if (p->cancel && *p->cancel) {
+        if (p->cancel && atomic_load(p->cancel)) {
             r->cancelled = 1;
             break;
         }
@@ -151,6 +152,11 @@ static int h_audio_run(void *u, const al_audio_params *p, al_audio_result *r) {
     return 0;
 }
 
+static void h_control_begin(void *u) {
+    al_sim *s = u;
+    s->control_begun = 1; /* the in-memory control models the live feed appended after the boundary */
+}
+
 static int h_read_control(void *u, char *buf, size_t len, int *reset) {
     al_sim *s = u;
     *reset = 0;
@@ -179,6 +185,6 @@ static int h_port_state_opt_in(void *u) {
 
 void al_backend_host(al_backend *be, void *sim) {
     al_backend b = { "PC simulation (not a PS5)", sim, h_now_unix, h_now_us, h_sleep_ms, h_notify, h_fw, h_pid,
-                     h_audio_run, h_read_control, h_port_state_opt_in };
+                     h_audio_run, h_control_begin, h_read_control, h_port_state_opt_in };
     *be = b;
 }

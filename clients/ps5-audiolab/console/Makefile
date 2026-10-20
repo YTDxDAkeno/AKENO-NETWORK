@@ -23,7 +23,7 @@ DEBUG_ELF   := $(BUILD)/akeno-audio-lab.debug.elf
 
 BUILD_ID    ?= $(shell git -C $(REPO_ROOT) rev-parse --short=12 HEAD 2>/dev/null || echo unknown)-ps5
 
-SRC         := $(addprefix $(ROOT)/src/,main.c al.c al_engine.c al_report.c audio_lab_pcm.c \
+SRC         := $(addprefix $(ROOT)/src/,main.c al.c al_engine.c al_report.c al_control.c audio_lab_pcm.c \
                audio_lab_state.c al_backend_ps5.c)
 OBJS        := $(patsubst $(ROOT)/src/%.c,$(OBJ)/%.o,$(SRC))
 

@@ -77,18 +77,24 @@ Hänge Befehle **zeilenweise** (jede Zeile mit Zeilenumbruch) an
 
 Es läuft immer nur ein Ton; zwischen Tönen gilt eine kurze Sperre, höchstens 30 Töne pro Start.
 
-### Die Port-State-Messung aktivieren (Opt-in — der eigentliche Nutzen)
+### Die Port-State-Messung aktivieren (Opt-in — derzeit NICHT für Hardware freigegeben)
 
-Standardmäßig **deaktiviert**. Zum Aktivieren **vor** dem `tone`-Befehl eine leere Datei anlegen:
+Standardmäßig **deaktiviert**. Das Lab prüft die Opt-in-Datei **bei jedem einzelnen `tone`-Befehl**
+neu. Eine eindeutige, sichere Aktivierung lautet daher:
 
-```
-/data/akeno-audiolab/enable-portstate
-```
+1. Lege die leere Datei `/data/akeno-audiolab/enable-portstate` an.
+2. Schreibe **danach** den `tone`-Befehl in die `control`-Datei.
 
-Dann liest das Lab bei jedem Ton drei Mal **read-only** den Zustand des **eigenen** Ports
-(`sceAudioOutGetPortState`). Warum das vertretbar ist und was es messen kann, steht in
-[SAFETY.md](SAFETY.md) und [HARDWARE-TEST-DE.md](HARDWARE-TEST-DE.md). Wenn du das Risiko nicht
-eingehen willst, lass die Datei weg — der Tonlauf funktioniert auch ohne.
+Nur dieser Ton misst dann drei Mal **read-only** den Zustand des **eigenen** Ports
+(`sceAudioOutGetPortState`). Löschst du die Datei wieder, ist der nächste Ton wieder ohne Messung.
+Für den **ersten** Hardwaretest soll die Datei **nicht** angelegt werden (nicht freigegeben). Warum
+der Aufruf vertretbar, aber noch nicht hardware-freigegeben ist, steht in [SAFETY.md](SAFETY.md).
+
+### Sicherheit bei Neustart (keine alten Befehle)
+
+Beim Start legt das Lab eine evtl. vorhandene `control`-Datei beiseite (nach `control.consumed`).
+Ein `tone`-Befehl, der von einem früheren Lauf übrig ist, wird dadurch **nie** erneut ausgeführt;
+es werden nur Befehle gelesen, die du **nach** dem Start anhängst.
 
 ## Ergebnisse
 

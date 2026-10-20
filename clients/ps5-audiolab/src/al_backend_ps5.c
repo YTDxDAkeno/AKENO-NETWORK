@@ -18,10 +18,12 @@
  */
 #include "al_backend.h"
 #include "al.h"
+#include "al_control.h"
 
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -158,7 +160,7 @@ static int p_audio_run(void *u, const al_audio_params *p, al_audio_result *r) {
     int result = 0, measured_mid = 0;
     uint64_t first_start = 0, last_end = 0;
     for (unsigned long done = 0; done < p->frames; done += p->grain) {
-        if (p->cancel && *p->cancel) {
+        if (p->cancel && atomic_load(p->cancel)) {
             r->cancelled = 1;
             break;
         }
@@ -207,25 +209,17 @@ static int p_audio_run(void *u, const al_audio_params *p, al_audio_result *r) {
     return result;
 }
 
+static long g_control_offset; /* persists across reads; seeded by p_control_begin */
+
+static void p_control_begin(void *u) {
+    (void)u;
+    al_control_begin(AL_OUT_DIR); /* move any pre-existing control file aside; never read as commands */
+    g_control_offset = 0;
+}
+
 static int p_read_control(void *u, char *buf, size_t len, int *reset) {
     (void)u;
-    static off_t offset = 0;
-    *reset = 0;
-    int fd = open(AL_OUT_DIR "/control", O_RDONLY);
-    if (fd < 0) return 0;
-    struct stat st;
-    if (fstat(fd, &st) == 0 && st.st_size < offset) {
-        offset = 0;
-        *reset = 1;
-    }
-    if (lseek(fd, offset, SEEK_SET) == (off_t)-1) {
-        close(fd);
-        return 0;
-    }
-    ssize_t n = read(fd, buf, len);
-    if (n > 0) offset += n;
-    close(fd);
-    return n > 0 ? (int)n : 0;
+    return al_control_read(AL_OUT_DIR, &g_control_offset, buf, len, reset);
 }
 
 static int p_port_state_opt_in(void *u) {
@@ -236,6 +230,6 @@ static int p_port_state_opt_in(void *u) {
 
 void al_backend_ps5(al_backend *be) {
     al_backend b = { "PlayStation 5", NULL, p_now_unix, p_now_us, p_sleep_ms, p_notify, p_fw, p_pid,
-                     p_audio_run, p_read_control, p_port_state_opt_in };
+                     p_audio_run, p_control_begin, p_read_control, p_port_state_opt_in };
     *be = b;
 }
