@@ -109,6 +109,23 @@ void ex_module_audio(const ex_backend *be, ex_run *run) {
                       "identical call; whether output is lost at routing or at the mixer");
     ex_probe_limit(p, "These need the optional active probe (separate build) or AKENO Native, not this baseline.");
 
+    /* 6.1: the state of the prior audio research builds, checked against their commits and the
+     * repository's own hardware-result documents, so no inherited result is misread as fresh. */
+    p = ex_add_probe(run, 'C', "prior_build_status", EX_ST_OK, EX_EV_SOURCE_VERIFIED);
+    ex_probe_value(p, "HW-run: Voice Alpha 0.1.0 (ce06ba04c048-ps5) on 12.20 - background output accepted but "
+                      "not heard, mic 0x809B0081. NOT yet run on hardware: audio lab v3 (port state), the Voice "
+                      "Lab (A-E), Voice Alpha 0.2.0 - all built and PC-tested only");
+    ex_probe_limit(p, "0.1.0's figures are the owner's relayed report; the raw logs are not in the repository. "
+                      "Nothing here is a Phase 6.0/6.1 Explorer measurement.");
+
+    /* 6.1: sceAudioInGetSilentState - a read-only name the Explorer resolved; what it could answer. */
+    p = ex_add_probe(run, 'C', "mic_silent_state_interface", EX_ST_SKIPPED, EX_EV_SOURCE_VERIFIED);
+    ex_probe_value(p, "sceAudioInGetSilentState name %s; int(int handle) in shadPS4/SharpProspero/KytyPS5/AnyPS5; "
+                      "needs an OPEN microphone handle, which the background payload is refused (0x809B0081)",
+                   in && in->symbol_found[3] ? "present" : (in ? "absent" : "library not loaded"));
+    ex_probe_limit(p, "A query on an input handle; with no handle in the background it cannot be used, and the "
+                      "baseline opens no microphone.");
+
     /* Library availability summary for the audio path. */
     p = ex_add_probe(run, 'C', "audio_libraries", (out && out->load_ok) ? EX_ST_OK : EX_ST_NOT_AVAILABLE,
                      EX_EV_HARDWARE_VERIFIED);
