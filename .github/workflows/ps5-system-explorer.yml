@@ -97,6 +97,7 @@ jobs:
           echo "NEEDED:"; readelf -d "$elf" | awk '/NEEDED/ {gsub(/[\[\]]/,"",$5); print "  "$5}'
           echo "system imports:"; "$nm" -D --undefined-only "$elf" | awk '{print $2}' | grep -E '^(sce|kernel_)' | sort | sed 's/^/  /'
           if "$nm" -D --undefined-only "$elf" | grep -qE 'sceAudio(Out|In)'; then echo "ERROR: audio symbol present"; exit 1; fi
+          echo "ELF-SHA256:"; sha256sum "$elf"
 
       - name: Upload the delivery package
         uses: actions/upload-artifact@v4
